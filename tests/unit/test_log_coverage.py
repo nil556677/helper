@@ -104,9 +104,9 @@ def coverage_run(tmp_path: Path) -> dict[str, str]:
     )
     assert completed.returncode == 0, f"子进程失败：{completed.stdout}\n{completed.stderr}"
 
-    from app.core.logging import console_file
+    from app.core.logging import console_file, daily_log_file
 
-    main_log = ROOT / "logs" / "helper.log"
+    main_log = daily_log_file()  # 主日志按天：logs/helper-<日期>.log
     return {
         "main": main_log.read_text(encoding="utf-8", errors="replace") if main_log.exists() else "",
         "console": (
@@ -212,5 +212,7 @@ def test_console_less_startup_survives(tmp_path: Path) -> None:
     console = console_file().read_text(encoding="utf-8", errors="replace")
     assert f"{MARK} console-less-print" in console, "print 没能落进原生输出文件"
 
-    main_log = (ROOT / "logs" / "helper.log").read_text(encoding="utf-8", errors="replace")
+    from app.core.logging import daily_log_file
+
+    main_log = daily_log_file().read_text(encoding="utf-8", errors="replace")
     assert f"{MARK} console-less-logged" in main_log

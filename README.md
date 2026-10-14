@@ -135,8 +135,8 @@ print('维度', v.shape, '行范数', float(numpy.linalg.norm(v, axis=-1)[0]))
 | `host` | `127.0.0.1` | 界面服务的监听地址。**默认只对本机开放**；填 `0.0.0.0` 或局域网 IP 会让同网络的人都能打开界面（界面没有认证），启动时会告警 |
 | `data_dir` | `null` | 数据目录改道（`null` = 安装目录下的 `data/`）。环境变量 `HELPER_DATA_DIR` 优先级更高 |
 
-日志在 `logs/`：`helper.log`（程序自己的记录）+ `console-<日期>.log`（Qt/Chromium 等原生输出，
-白板这类问题的现场都在这里），**按天存、只留最近 7 天**。
+日志在 `logs/`：`helper-<日期>.log`（程序自己的记录）+ `console-<日期>.log`（Qt/Chromium 等原生输出，
+白板这类问题的现场都在这里），**都是按天一个文件、只留最近 7 天**。
 
 ### 跑测试
 

@@ -16,7 +16,7 @@ from loguru import logger
 from app.core import paths
 from app.core.db import schema
 from app.core.db.connection import get_connection
-from app.core.logging import LOG_FILENAME
+from app.core.logging import daily_log_file
 
 
 def data_overview() -> dict[str, Any]:
@@ -33,7 +33,7 @@ def data_overview() -> dict[str, Any]:
             "安装目录": str(paths.project_root()),
             "数据目录": str(paths.data_dir()),
             "数据库": str(paths.db_file()),
-            "日志文件": str(paths.logs_dir() / LOG_FILENAME),
+            "日志文件": str(daily_log_file()),
             "资料副本": str(paths.files_dir()),
         },
         "schema_version": schema.schema_version(get_connection()),

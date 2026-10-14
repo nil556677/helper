@@ -51,7 +51,10 @@ from loguru import logger
 
 from app.core import paths
 
-#: 日志文件名（位于 :func:`app.core.paths.logs_dir`）。
+#: 主日志的文件名前缀：实际是 ``helper-YYYY-MM-DD.log``（与 ``console-YYYY-MM-DD.log`` 同一套规则）。
+LOG_FILENAME_PREFIX = "helper-"
+
+#: 兼容旧名：只用于"当前日志在哪"的描述与清理保护，不是实际写入路径。
 LOG_FILENAME = "helper.log"
 
 #: 原生输出（fd 1+2）的当天文件名前缀，实际是 ``console-YYYY-MM-DD.log``。
@@ -170,6 +173,108 @@ def _needs_rotation(message: str, file: object) -> bool:
     return stat.st_size >= ROTATION_SIZE_MB * 1024 * 1024
 
 
+def daily_log_file(day: str | None = None) -> Path:
+    """当天的主日志文件路径（``logs/helper-YYYY-MM-DD.log``）。"""
+    stamp = day or time.strftime("%Y-%m-%d")
+    return paths.logs_dir() / f"{LOG_FILENAME_PREFIX}{stamp}.log"
+
+
+class DailyFileSink:
+    """按天写的文件 sink：文件名里带日期，跨天自动换文件，单文件超限就续编（``-2``、``-3``…）。
+
+    为什么不用 loguru 自带的 ``rotation`` / ``retention``：
+
+    - ``rotation`` 只能"改名 + 重开"，**改不了文件名** —— 跨天之后文件还叫前一天的名字，
+      长开的窗口会把两天的记录写进同一个文件；
+    - ``retention`` 只认它自己轮转出来的那些文件。
+
+    我们要的是"一天一个文件、名字里就是日期"，与 ``console-<日期>.log`` 保持同一套规则；
+    过期清理统一交给 :func:`purge_old_logs`（按修改时间，两类文件都扫得到）。
+
+    ``clock`` 可注入，测试里用来模拟跨天（否则只能等到半夜）。
+    """
+
+    def __init__(
+        self,
+        directory: Path,
+        *,
+        prefix: str = LOG_FILENAME_PREFIX,
+        max_bytes: int = ROTATION_SIZE_MB * 1024 * 1024,
+        encoding: str = "utf-8",
+        clock: Callable[[], str] | None = None,
+    ) -> None:
+        self._dir = Path(directory)
+        self._prefix = prefix
+        self._max_bytes = max_bytes
+        self._encoding = encoding
+        self._clock = clock or (lambda: time.strftime("%Y-%m-%d"))
+        self._handle: object | None = None
+        self._path: Path | None = None
+        self._size = 0
+        self._serial = 1
+
+    # -- 对外：loguru 需要的三个方法 -------------------------------------------------
+    @property
+    def path(self) -> Path | None:
+        """当前正在写的文件（还没写过时为 None）。"""
+        return self._path
+
+    def write(self, message: str) -> None:
+        """loguru 每条日志调一次（``message`` 自带换行）。"""
+        self._open_for_today()
+        assert self._handle is not None
+        data = message.encode(self._encoding, "replace")
+        self._handle.write(data)  # type: ignore[attr-defined]
+        self._handle.flush()  # type: ignore[attr-defined]
+        self._size += len(data)
+        if self._size >= self._max_bytes:
+            self._roll_within_day()
+
+    def stop(self) -> None:
+        """loguru 移除 sink 时调用。"""
+        self._close()
+
+    def complete(self) -> None:
+        """异步队列模式才用得上；同步模式下刷一下即可。"""
+        if self._handle is not None:
+            self._handle.flush()  # type: ignore[attr-defined]
+
+    # -- 内部 -----------------------------------------------------------------------
+    def _target(self) -> Path:
+        stamp = self._clock()
+        name = f"{self._prefix}{stamp}.log"
+        if self._serial > 1:
+            name = f"{self._prefix}{stamp}-{self._serial}.log"
+        return self._dir / name
+
+    def _open_for_today(self) -> None:
+        target = self._target()
+        if self._handle is not None and self._path == target:
+            return
+        self._close()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        self._handle = open(target, "ab", buffering=0)  # noqa: SIM115 - 生命周期随 sink
+        self._path = target
+        try:
+            self._size = target.stat().st_size
+        except OSError:
+            self._size = 0
+
+    def _roll_within_day(self) -> None:
+        """同一天里超过上限：换个序号继续（不覆盖，也不丢内容）。"""
+        self._close()
+        self._serial += 1
+        self._open_for_today()
+
+    def _close(self) -> None:
+        if self._handle is not None:
+            try:
+                self._handle.close()  # type: ignore[attr-defined]
+            except OSError:
+                pass
+        self._handle = None
+
+
 def console_file(day: str | None = None) -> Path:
     """当天的原生输出文件路径（``logs/console-YYYY-MM-DD.log``）。"""
     stamp = day or time.strftime("%Y-%m-%d")
@@ -202,27 +307,45 @@ def init_logging(
     logger.remove()
     logger.configure(patcher=_patch)
 
-    target = log_file or (paths.logs_dir() / LOG_FILENAME)
     _log_file = None
+    explicit_target = log_file
+    daily: DailyFileSink | None = None
+    # paths_seen 必须在 try **之前**定下来：目录建不出来时 except 分支还要用它报错
+    if explicit_target is not None:
+        paths_seen = explicit_target
+    else:
+        daily = DailyFileSink(paths.logs_dir())
+        paths_seen = daily_log_file()
+    # 公共参数（两类 sink 都收）
+    common = dict(
+        level=level.upper(),
+        format=LOG_FORMAT,
+        enqueue=False,  # 受限令牌下建不了命名管道，异步队列会被拒；同步写足够快
+        backtrace=False,
+        diagnose=False,  # 见模块说明第 1 条：异常栈不许带局部变量
+        catch=True,  # 日志自身出错不该把业务代码带崩
+    )
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        logger.add(
-            str(target),
-            level=level.upper(),
-            format=LOG_FORMAT,
-            encoding="utf-8",
-            rotation=rotation or _needs_rotation,
-            retention=retention,
-            enqueue=False,  # 受限令牌下建不了命名管道，异步队列会被拒；同步写足够快
-            backtrace=False,
-            diagnose=False,  # 见模块说明第 1 条：异常栈不许带局部变量
-            catch=True,  # 日志自身出错不该把业务代码带崩
-        )
-        _log_file = target
+        paths_seen.parent.mkdir(parents=True, exist_ok=True)
+        if daily is not None:
+            # 正常启动：一天一个文件、名字里带日期（与 console-<日期>.log 同一套规则）。
+            # 跨天换文件与单文件大小上限都由 DailyFileSink 自己处理，所以这里不传那些文件专用参数。
+            logger.add(daily, **common)
+        else:
+            # 明确给了路径（测试、脚本）：按单文件写。**encoding/rotation/retention 只能给文件路径**，
+            # 给别的类型 loguru 会直接拒绝——所以两类 sink 的参数是分开传的。
+            logger.add(
+                str(paths_seen),
+                encoding="utf-8",
+                rotation=rotation if rotation is not None else _needs_rotation,
+                retention=retention,
+                **common,
+            )
+        _log_file = paths_seen
     except OSError as exc:  # noqa: BLE001 - 允许失败：日志目录不可写也要能启动
         # 退回控制台：装到只读位置时至少还能看到告警，而不是直接起不来。
         logger.add(sys.stderr, level=console_level.upper(), backtrace=False, diagnose=False)
-        logger.warning("日志文件不可用（{}），本次只输出到控制台：{}", target, exc)
+        logger.warning("日志文件不可用（{}），本次只输出到控制台：{}", paths_seen, exc)
         _initialized = True
         return None
 
@@ -235,8 +358,8 @@ def init_logging(
         catch=True,
     )
     _initialized = True
-    logger.debug("日志已初始化：{}（级别 {}）", target, level.upper())
-    return target
+    logger.debug("日志已初始化：{}（级别 {}）", paths_seen, level.upper())
+    return paths_seen
 
 
 def install_exception_hooks() -> None:

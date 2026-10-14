@@ -335,7 +335,9 @@ def main() -> int:
     _server = threading.Thread(target=serve, name='nicegui-server', daemon=True)
     _server.start()
 
-    log_path = paths.logs_dir() / 'helper.log'
+    from app.core.logging import daily_log_file
+
+    log_path = daily_log_file()
     if _wait_http(url):
         logger.info('界面服务就绪：{}', url)
         time.sleep(SETTLE_S)

@@ -290,3 +290,65 @@ def test_purge_never_deletes_the_active_log(tmp_path: Path, fake_root: Path) -> 
     purge_old_logs(days=7, total_limit_mb=0)  # 两道闸门都想删它
 
     assert active.exists(), "当前正在写的日志不能被删"
+
+
+def test_daily_sink_writes_into_a_date_named_file(tmp_path: Path) -> None:
+    """按天 sink：文件名里就是日期（和 console-<日期>.log 同一套规则）。"""
+    from app.core.logging.setup import DailyFileSink
+
+    sink = DailyFileSink(tmp_path, clock=lambda: "2026-10-14")
+    sink.write("第一行\n")
+
+    assert (tmp_path / "helper-2026-10-14.log").read_text(encoding="utf-8") == "第一行\n"
+    assert sink.path == tmp_path / "helper-2026-10-14.log"
+    sink.stop()
+
+
+def test_daily_sink_switches_file_when_the_day_changes(tmp_path: Path) -> None:
+    """跨天自动换文件（loguru 自带的 rotation 做不到改文件名）。"""
+    from app.core.logging.setup import DailyFileSink
+
+    today = {"value": "2026-10-14"}
+    sink = DailyFileSink(tmp_path, clock=lambda: today["value"])
+    sink.write("今天\n")
+    today["value"] = "2026-10-15"
+    sink.write("明天\n")
+
+    assert (tmp_path / "helper-2026-10-14.log").read_text(encoding="utf-8") == "今天\n"
+    assert (tmp_path / "helper-2026-10-15.log").read_text(encoding="utf-8") == "明天\n"
+    sink.stop()
+
+
+def test_daily_sink_rolls_within_the_day_on_size(tmp_path: Path) -> None:
+    """同一天超过单文件上限：换个序号继续写，不覆盖也不丢。"""
+    from app.core.logging.setup import DailyFileSink
+
+    sink = DailyFileSink(tmp_path, max_bytes=10, clock=lambda: "2026-10-14")
+    sink.write("0123456789")   # 正好到上限 → 下一次写入前轮转
+    sink.write("abcdefghij")
+
+    assert (tmp_path / "helper-2026-10-14.log").read_text(encoding="utf-8") == "0123456789"
+    assert (tmp_path / "helper-2026-10-14-2.log").read_text(encoding="utf-8") == "abcdefghij"
+    sink.stop()
+
+
+def test_purge_removes_old_daily_logs_and_keeps_todays(fake_root: Path) -> None:
+    """按天文件同样受 7 天保留约束（两类日志一套规则）。"""
+    import os
+    import time
+
+    from app.core import paths
+    from app.core.logging import purge_old_logs
+
+    logs = paths.logs_dir()
+    logs.mkdir(parents=True, exist_ok=True)
+    old_day = logs / "helper-2026-10-01.log"
+    today = logs / "helper-2026-10-14.log"
+    old_day.write_text("旧", encoding="utf-8")
+    today.write_text("新", encoding="utf-8")
+    stale = time.time() - 8 * 86400
+    os.utime(old_day, (stale, stale))
+
+    assert purge_old_logs() == 1
+    assert not old_day.exists()
+    assert today.exists()
