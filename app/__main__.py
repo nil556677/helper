@@ -47,8 +47,8 @@ os.environ.setdefault(
 )
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
-#: 界面服务只监听回环（技术方案 §5.1 红线 4）。NiceGUI 默认是 0.0.0.0，所以这一行不能省。
-HOST = "127.0.0.1"
+# 监听地址来自引导配置（``config.json`` 的 ``host``），默认回环 —— 见 :func:`_listen_host`。
+# 历史：这里曾经硬编码 ``HOST = "127.0.0.1"``；配置文件用起来之后挪进了配置。
 
 #: 等界面服务就绪的上限（秒）；超时也照样把窗口开出来，但会弹提示告诉用户去看日志。
 SERVER_WAIT_S = 20.0
@@ -62,6 +62,27 @@ RELOAD_DELAY_MS = 800
 
 #: 启动失败的记录文件名（先写 logs/，写不进去再写安装目录）。
 STARTUP_ERROR_FILE = "startup-error.log"
+
+
+def _listen_host() -> str:
+    """界面服务的监听地址（来自 ``config.json``）。
+
+    默认回环；配置里改成非回环地址时**打一条 WARNING**：界面没有任何认证，绑到局域网
+    等于谁都能打开它看资料。不拒绝（用户可能确实要这么干），但要留下痕迹。
+    """
+    from loguru import logger
+
+    from app.core.config import access
+    from app.core.config.schema import is_loopback
+
+    host = access.load().host
+    if not is_loopback(host):
+        logger.warning(
+            "监听地址不是回环（{}）：界面没有认证，同一网络里任何人都能打开它。"
+            "如果不是本意，把 config.json 的 host 改回 127.0.0.1",
+            host,
+        )
+    return host
 
 
 def _free_port() -> int:
@@ -168,13 +189,14 @@ def main() -> int:
         build_shell()
 
     port = _free_port()
-    url = f'http://{HOST}:{port}/'
+    host = _listen_host()
+    url = f'http://{host}:{port}/'
     warnings: list[str] = []
 
     # 界面服务跑在后台线程：主线程必须留给 Qt 的事件循环（窗口只能由主线程创建）。
     _server = threading.Thread(
         target=lambda: ui.run(
-            host=HOST,
+            host=host,
             port=port,
             title='helper',
             favicon='🧩',

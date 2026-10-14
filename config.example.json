@@ -1,9 +1,9 @@
 {
   "_note": "引导配置模板：首次启动会复制成 config.json。这里只放『打开数据库之前就必须知道』的项。其余配置（大模型四槽位、api key、检索参数、界面偏好）都存在 SQLite 里、由界面修改；api key 用 Windows DPAPI 加密后存库，绝不写进本文件。",
-
-  "_log_level_note": "可选 DEBUG / INFO / WARNING / ERROR。文件日志按这个级别记，控制台固定只放 WARNING 以上。",
+  "_log_level_note": "可选 DEBUG / INFO / WARNING / ERROR。文件日志按这个级别记，控制台固定只放 WARNING 以上。界面上不提供这一项（改坏了自己不知道，且出问题时无法确定当时的级别）。",
   "log_level": "INFO",
-
+  "_host_note": "界面服务的监听地址，默认只对本机开放（127.0.0.1）。填 0.0.0.0 或局域网 IP 会让同网络的任何人都能打开界面——界面没有认证，谨慎改。只填地址，不要带 http:// 或路径。",
+  "host": "127.0.0.1",
   "_data_dir_note": "留空（null）= 用安装目录下的 data/；也可填绝对路径；环境变量 HELPER_DATA_DIR 优先级最高（测试隔离与多实例用）。",
   "data_dir": null
 }
