@@ -63,6 +63,11 @@ RETENTION_DAYS = 7
 #: 单文件上限（MB）：同一天里超过就轮转，防止某个死循环把磁盘刷满。
 ROTATION_SIZE_MB = 20
 
+#: ``logs/`` 的**总量上限**（MB）：只保留 7 天不足以防"一天里堆出几个 G"
+#: （错误风暴、死循环打日志），所以再加一道总量闸门：超过就从最旧的开始删。
+#: **当前正在写的两个文件（主日志与当天原生输出）永不动。**
+LOGS_TOTAL_LIMIT_MB = 200
+
 #: 文件 sink 的格式。loguru 对 ``colorize=False`` 的 sink 会自动去掉颜色标签。
 #: ``{extra[run]}`` 是本次运行的 run id（由 :func:`new_run_id` 生成，patcher 保证一定有值）。
 LOG_FORMAT = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {extra[run]} | {name}:{line} | {message}"
@@ -106,6 +111,10 @@ _log_file: Path | None = None
 _console_file: Path | None = None
 
 _initialized = False
+
+#: 替身流的引用（**必须留住**：否则它们被回收时会 close 掉自己的 fd）。
+_stdout_keepalive: object | None = None
+_stderr_keepalive: object | None = None
 
 #: 这些东西只该做一次（``init_logging`` 会被重复调用，见模块说明第 7 条）。
 _bridge_installed = False
@@ -355,6 +364,51 @@ def install_asyncio_handler() -> None:
     _asyncio_installed = True
 
 
+def _broken_standard_fds() -> set[int]:
+    """**在 dup2 之前**判断 1/2 号 fd 是否可用。
+
+    为什么要赶在 dup2 之前：dup2 会把它们接好，之后再 fstat 永远成功——而 Python 启动时
+    创建的标准流对象内部缓存的是**启动那一刻的句柄**，句柄坏过的对象即使 fd 后来被接好，
+    写起来照样报 ``OSError: 句柄无效``（实测踩过：判断晚了就修不好 print）。
+    """
+    broken: set[int] = set()
+    for index in (1, 2):
+        try:
+            os.fstat(index)
+        except OSError:
+            broken.add(index)
+    return broken
+
+
+def _ensure_valid_streams(broken: set[int]) -> None:
+    """保证 ``sys.stdout`` / ``sys.stderr`` 可用且是 UTF-8。
+
+    - **本来就好用的**：原地 ``reconfigure`` 成 UTF-8 就够。不能换对象——loguru 的控制台 sink
+      在初始化时就抓住了这个对象，换掉它就会用旧编码（GBK）写 → console 文件里中文全乱码。
+    - **本来就坏的**（双击启动、没有控制台）：只能换替身流，而且替身流必须**自己 dup 一个 fd**。
+      实测过直接 ``os.fdopen(1, ...)`` 包 fd 1 的后果：原对象被回收时 ``close()`` 把 fd 1 关掉，
+      fd 立刻被 loguru 的文件 sink 拿走 → ``print`` 的输出跑进 ``helper.log``，退出码还会变成 120。
+    """
+    global _stdout_keepalive, _stderr_keepalive
+
+    for index, current in ((1, sys.stdout), (2, sys.stderr)):
+        if index not in broken and current is not None:
+            try:
+                current.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+                continue
+            except (AttributeError, OSError, ValueError):
+                pass
+        replacement = os.fdopen(
+            os.dup(index), "w", encoding="utf-8", errors="replace", buffering=1
+        )
+        if index == 1:
+            _stdout_keepalive = replacement
+            sys.stdout = replacement
+        else:
+            _stderr_keepalive = replacement
+            sys.stderr = replacement
+
+
 def capture_native_output(target: Path | None = None) -> Path | None:
     """把 fd 1 与 fd 2 重定向到当天的 ``console-<日期>.log``（只做一次）。
 
@@ -373,17 +427,16 @@ def capture_native_output(target: Path | None = None) -> Path | None:
         return _console_file
 
     path = target or console_file()
+    broken = _broken_standard_fds()  # 必须在 dup2 之前探（见 _broken_standard_fds 的说明）
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         handle = open(path, "ab", buffering=0)  # noqa: SIM115 - 这个句柄要和进程同寿
         os.dup2(handle.fileno(), 1)
         os.dup2(handle.fileno(), 2)
-        # 双击启动（没有控制台）时 sys.stdout/stderr 可能指向**无效句柄**：那时任何 print 都会抛
-        # `OSError: 句柄无效` —— 实测它会让 NiceGUI 的服务线程在打就绪横幅时直接死掉，表现是
-        # "界面服务 20 秒没起来 + 窗口白板"。所以这里**总是**把两个流重建到刚接好的 fd 上
-        # （UTF-8 + 行缓冲），保证进程里再没有任何一个流指着坏句柄。
-        sys.stdout = os.fdopen(1, "w", encoding="utf-8", errors="replace", buffering=1)
-        sys.stderr = os.fdopen(2, "w", encoding="utf-8", errors="replace", buffering=1)
+        # 两个流必须可用且是 UTF-8，否则双击启动（没有控制台、句柄无效）时任何 print 都会抛
+        # `OSError: 句柄无效` —— 实测它让 NiceGUI 的服务线程在打就绪横幅时**直接死掉**，
+        # 表现正是"界面服务 20 秒没起来 + 窗口白板"。
+        _ensure_valid_streams(broken)
     except OSError as exc:  # noqa: BLE001 - 允许失败：拿不到原生输出也要能启动
         logger.warning("原生输出重定向失败（{}）：{}", path, exc)
         return None
@@ -405,35 +458,74 @@ def console_output_file() -> Path | None:
     return _console_file
 
 
-def purge_old_logs(days: int = RETENTION_DAYS) -> int:
-    """删掉 ``logs/`` 下超过保留期的日志文件，返回删了几个。
+def purge_old_logs(days: int = RETENTION_DAYS, total_limit_mb: int = LOGS_TOTAL_LIMIT_MB) -> int:
+    """清理 ``logs/``：先按保留期、再按总量上限，返回删了几个文件。
 
-    为什么必须自己扫：``console-*.log`` 是 fd 直写的，loguru 根本不认识它们；
-    主日志的轮转文件由 loguru 的 ``retention`` 管，但"目录里别的东西"归我们管。
-    判据用**文件修改时间**（名字里的日期不可靠：用户可能改系统时间）。
+    为什么必须自己扫：``console-*.log`` 是 fd 直写的，loguru 根本不认识它们；主日志的轮转文件
+    虽然由 loguru 的 ``retention`` 管，但"目录里别的东西"与**总量**归我们管。
+
+    两道闸门：
+        1. **保留期**（默认 7 天）：判据用**文件修改时间**（名字里的日期不可靠：用户可能改系统时间）；
+        2. **总量上限**（默认 200 MB）：7 天里也可能堆出几个 G，超过就从最旧的开始删。
+
+    两个**正在写的文件**（主日志 + 当天原生输出）永远不动——删掉它们只会让日志立刻开始报错。
     """
-    cutoff = time.time() - days * 86400
+    protected = {path for path in (log_file(), console_output_file()) if path is not None}
+
+    def _candidates() -> list[Path]:
+        try:
+            return [path for path in paths.logs_dir().glob("*.log") if path not in protected]
+        except OSError:
+            return []
+
     removed = 0
-    try:
-        candidates = list(paths.logs_dir().glob("*.log"))
-    except OSError:
-        return 0
-    for path in candidates:
+
+    # 闸门 1：保留期
+    cutoff = time.time() - days * 86400
+    for path in _candidates():
         try:
             if path.stat().st_mtime < cutoff:
                 path.unlink()
                 removed += 1
         except OSError:
             continue
+
+    # 闸门 2：总量（从最旧的开始删）
+    try:
+        files = sorted(_candidates(), key=lambda item: item.stat().st_mtime)
+        total = sum(item.stat().st_size for item in files)
+    except OSError:
+        files, total = [], 0
+    limit = total_limit_mb * 1024 * 1024
+    while files and total > limit:
+        oldest = files.pop(0)
+        try:
+            size = oldest.stat().st_size
+            oldest.unlink()
+            total -= size
+            removed += 1
+        except OSError:
+            continue
+
     if removed:
-        logger.info("清理过期日志 {} 个（保留最近 {} 天）", removed, days)
+        logger.info("清理日志 {} 个（保留最近 {} 天，总量上限 {} MB）", removed, days, total_limit_mb)
     return removed
+
+
+def is_initialized() -> bool:
+    """日志系统是否已初始化（启动自检用）。"""
+    return _initialized
+
+
+def log_file() -> Path | None:
+    """当前日志文件路径；只有控制台 sink 时返回 None。"""
+    return _log_file
 
 
 def _distribution_version(name: str) -> str:
     """读某个发行版的版本号（**不导入它**：core 不许 import 界面库，QtWebEngine 也一样）。"""
     try:
-        from importlib.metadata import PackageNotFoundError, version
+        from importlib.metadata import version
 
         return version(name)
     except Exception:  # noqa: BLE001 - 版本号缺失不该影响启动
@@ -479,16 +571,6 @@ def log_environment_snapshot(extra: dict[str, str] | None = None) -> None:
     """把环境快照写进日志（一行一项，出问题时先看这一段）。"""
     info = environment_snapshot(extra)
     logger.info("环境快照：{}", "；".join(f"{key}={value}" for key, value in info.items()))
-
-
-def is_initialized() -> bool:
-    """日志系统是否已初始化（启动自检用）。"""
-    return _initialized
-
-
-def log_file() -> Path | None:
-    """当前日志文件路径；只有控制台 sink 时返回 None。"""
-    return _log_file
 
 
 def _read_tail(path: Path, limit: int = 60_000) -> str:

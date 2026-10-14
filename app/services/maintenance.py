@@ -26,6 +26,7 @@ from app.core import paths
 from app.core.db.connection import get_connection
 from app.core.jobs import api, store
 from app.core.jobs.model import JobContext
+from app.core.logging import purge_old_logs
 
 #: 孤儿副本的"最小年龄"：十分钟内动过的一律不碰（可能正在导入）
 ORPHAN_MIN_AGE_S = 600.0
@@ -34,7 +35,7 @@ ORPHAN_MIN_AGE_S = 600.0
 INBOX_MIN_AGE_S = 3600.0
 
 #: 清理分几步（进度按步报，界面上能看出卡在哪一步）
-STEPS = 4
+STEPS = 5
 
 
 def known_copy_dirs() -> set[str]:
@@ -126,8 +127,16 @@ def run_cleanup_job(ctx: JobContext) -> str:
 
     ctx.report(3, STEPS, "清历史记录…")
     purged = store.purge_finished()
+
+    ctx.report(4, STEPS, "清过期日志…")
+    logs = purge_old_logs()
     ctx.report(STEPS, STEPS, "完成")
 
-    parts = [f"孤儿副本 {copies} 个", f"暂存 {leftovers} 个", f"历史 {purged} 条"]
+    parts = [
+        f"孤儿副本 {copies} 个",
+        f"暂存 {leftovers} 个",
+        f"历史 {purged} 条",
+        f"过期日志 {logs} 个",
+    ]
     parts.append("WAL 已合并" if merged else "WAL 跳过")
     return " · ".join(parts)

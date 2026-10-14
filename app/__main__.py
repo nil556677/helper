@@ -146,9 +146,26 @@ def _free_port(host: str) -> int:
         return int(sock.getsockname()[1])
 
 
-def _wait_http(url: str, timeout_s: float = SERVER_WAIT_S) -> bool:
+def _probe_bind(host: str, port: int) -> str:
+    """再试着绑一次同一个端口，把结论写成一句人话。
+
+    为什么要它：uvicorn 启动失败时只抛 ``SystemExit(3)``，而**原因会被 uvicorn 自己的
+    logging 配置吞掉**（实测：``uvicorn.error`` 的 handler 被它的 dictConfig 清空，消息哪儿都不去）。
+    于是"端口被占"和"别的原因"在日志里长得一模一样。绑一次立刻就能区分，成本可忽略。
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind((host, port))
+        return f"端口 {host}:{port} 现在可以绑定 → 刚才是别的原因（不是端口被占）"
+    except OSError as exc:
+        return f"端口 {host}:{port} 现在绑不上（{exc}）→ 大概率是端口被占/被系统保留"
+
+
+def _wait_http(url: str, timeout_s: float = SERVER_WAIT_S, *, report_every_s: float = 5.0) -> bool:
     """等界面服务真的返回 HTTP 200（不是只等端口）。"""
     deadline = time.monotonic() + timeout_s
+    started = time.monotonic()
+    next_report = report_every_s
     while time.monotonic() < deadline:
         try:
             with urllib.request.urlopen(url, timeout=1.0) as response:
@@ -156,6 +173,10 @@ def _wait_http(url: str, timeout_s: float = SERVER_WAIT_S) -> bool:
                     return True
         except (urllib.error.URLError, OSError, ValueError):
             time.sleep(0.15)
+        waited = time.monotonic() - started
+        if waited >= next_report:
+            next_report += report_every_s
+            logger.warning('界面服务还没就绪（已等 {:.0f}s）：{}', waited, url)
     return False
 
 
@@ -273,21 +294,45 @@ def main() -> int:
     url = f'http://{host}:{port}/'
     warnings: list[str] = []
 
+    def serve() -> None:
+        """界面服务线程的入口。
+
+        **为什么要包一层函数而不是直接 lambda**：这一层以前是"哑"的——服务起不来时日志里
+        只有 20 秒后的一句"未就绪"，看不出是抛了异常、还是卡住了、还是退出了（实测踩过：
+        无控制台启动时偶发卡住，没有任何证据）。现在它把"开始 / 正常退出 / 异常退出"都记下来。
+        """
+        logger.info('界面服务线程启动：{}:{}', host, port)
+        try:
+            ui.run(
+                host=host,
+                port=port,
+                title='helper',
+                favicon='🧩',
+                show=False,     # 明确：不许打开浏览器
+                reload=False,   # 桌面窗口绝不能热重载
+                native=False,   # 窗口由下面的 QtWebEngine 提供
+                dark=False,     # 只做浅色（DSH 浅色色板）
+            )
+        except SystemExit as exc:
+            # uvicorn 启动失败会 sys.exit(3)，而且**失败原因被它自己的 logging 配置吞掉**
+            # （实测：uvicorn.error 的 handler 被 dictConfig 清空）。所以这里自己补上：
+            # 立刻再绑一次端口，把"是不是端口问题"直接写进日志 + startup-error.log。
+            logger.opt(exception=exc).critical('界面服务启动失败（SystemExit {}）：{}:{}', exc.code, host, port)
+            logger.error('端口自检：{}', _probe_bind(host, port))
+            _write_startup_error(
+                '界面服务没能起来',
+                f'uvicorn 以 SystemExit({exc.code}) 退出；地址 {host}:{port}\n'
+                f'端口自检：{_probe_bind(host, port)}',
+            )
+            return
+        except BaseException as exc:  # noqa: BLE001 - 服务线程死掉必须留证据
+            logger.opt(exception=exc).critical('界面服务线程异常退出：{}', exc)
+            _write_startup_error('界面服务线程异常退出', f'{type(exc).__name__}: {exc}\n地址 {host}:{port}')
+            return
+        logger.warning('界面服务线程已退出（服务不再可用）')
+
     # 界面服务跑在后台线程：主线程必须留给 Qt 的事件循环（窗口只能由主线程创建）。
-    _server = threading.Thread(
-        target=lambda: ui.run(
-            host=host,
-            port=port,
-            title='helper',
-            favicon='🧩',
-            show=False,     # 明确：不许打开浏览器
-            reload=False,   # 桌面窗口绝不能热重载
-            native=False,   # 窗口由下面的 QtWebEngine 提供
-            dark=False,     # 只做浅色（DSH 浅色色板）
-        ),
-        name='nicegui-server',
-        daemon=True,
-    )
+    _server = threading.Thread(target=serve, name='nicegui-server', daemon=True)
     _server.start()
 
     log_path = paths.logs_dir() / 'helper.log'
@@ -317,6 +362,15 @@ def main() -> int:
 
     view = QWebEngineView()
     view.setWindowTitle('helper')
+
+    def on_render_process_gone(status: object, exit_code: int) -> None:
+        """渲染进程结束：这是"白板"的一种真成因，必须明确留痕（§10.1「渲染」层）。
+
+        以前只能从"重载窗口 ×3 之后仍空白"反推，现在日志会直接说是渲染进程没了 + 原因码。
+        """
+        logger.error('渲染进程结束（status={}，exit_code={}），窗口可能变成白板', status, exit_code)
+
+    view.page().renderProcessTerminated.connect(on_render_process_gone)
 
     # 窗口几何：上次调过就照原样恢复（大小 + 位置，含最大化状态）；没存过 / 存坏了 /
     # 位置已经不在屏幕上（换了显示器）时 restoreGeometry 返回 False，就退回默认尺寸。

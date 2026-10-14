@@ -157,3 +157,60 @@ def test_startup_snapshot_is_recorded(coverage_run: dict[str, str]) -> None:
     assert "环境快照：" in tail
     for key in ("Python=", "TEMP=", "数据目录=", "Chromium 参数="):
         assert key in tail, f"快照里少了 {key}"
+
+
+#: 双击启动等价场景：标准句柄无效（无控制台）。实测那时任何 print 都抛
+#: ``OSError: 句柄无效``，而 NiceGUI 的服务线程就是靠 print 打就绪横幅 —— 会当场死掉（表现是白板）。
+CONSOLE_LESS_SCRIPT = f"""
+import os, sys
+from pathlib import Path
+
+ROOT = Path(r"{ROOT}")
+sys.path.insert(0, str(ROOT))
+
+from app.bootstrap import ensure_ready
+
+ensure_ready()
+
+# 模拟"没有控制台"：把标准句柄关掉（真实场景里它们是无效句柄）
+for fd in (1, 2):
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+from app.__main__ import _install_log_channels
+
+_install_log_channels()
+
+from loguru import logger
+
+print("{MARK} console-less-print", flush=True)
+logger.info("{MARK} console-less-logged")
+"""
+
+
+def test_console_less_startup_survives(tmp_path: Path) -> None:
+    """无控制台启动不能崩，而且 print 必须能落进原生输出文件。
+
+    这条钉住的是一个真实故障：坏句柄 → ``print`` 抛 OSError → NiceGUI 服务线程死 →
+    "界面服务 20 秒没起来 + 窗口白板"。
+    """
+    script = tmp_path / "console_less.py"
+    script.write_text(CONSOLE_LESS_SCRIPT, encoding="utf-8")
+
+    completed = subprocess.run(
+        [sys.executable, str(script)],
+        cwd=str(ROOT),
+        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
+        timeout=180,
+    )
+    assert completed.returncode == 0, "无控制台启动崩了（很可能又是坏句柄）"
+
+    from app.core.logging import console_file
+
+    console = console_file().read_text(encoding="utf-8", errors="replace")
+    assert f"{MARK} console-less-print" in console, "print 没能落进原生输出文件"
+
+    main_log = (ROOT / "logs" / "helper.log").read_text(encoding="utf-8", errors="replace")
+    assert f"{MARK} console-less-logged" in main_log

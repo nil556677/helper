@@ -10,6 +10,7 @@
 from app.core.logging.setup import (
     CONSOLE_PREFIX,
     LOG_FILENAME,
+    LOGS_TOTAL_LIMIT_MB,
     RETENTION_DAYS,
     ROTATION_SIZE_MB,
     RUN_ID,
@@ -33,6 +34,7 @@ from app.core.logging.setup import (
 __all__ = [
     "CONSOLE_PREFIX",
     "LOG_FILENAME",
+    "LOGS_TOTAL_LIMIT_MB",
     "RETENTION_DAYS",
     "ROTATION_SIZE_MB",
     "RUN_ID",

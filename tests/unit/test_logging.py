@@ -242,3 +242,51 @@ def test_rotation_triggers_on_size_and_new_day(tmp_path: Path) -> None:
     yesterday = time.time() - 86400
     os.utime(small, (yesterday, yesterday))
     assert _needs_rotation("", _File(small)) is True, "跨天要轮转"
+
+
+def test_purge_enforces_total_size_limit(fake_root: Path) -> None:
+    """总量闸门：即使都在 7 天内，超上限也要从最旧的开始删（防错误风暴堆满磁盘）。"""
+    import os
+    import time
+
+    from app.core import paths
+    from app.core.logging import purge_old_logs
+
+    logs = paths.logs_dir()
+    logs.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    made = []
+    for index in range(3):
+        path = logs / f"console-2026-10-0{index + 1}.log"
+        with open(path, "wb") as handle:
+            handle.truncate(1024 * 1024)  # 每个 1 MB
+        stamp = now - 3600 + index  # 都在 7 天内；index 越小越旧（made[0] 是最旧的）
+        os.utime(path, (stamp, stamp))
+        made.append(path)
+
+    removed = purge_old_logs(days=7, total_limit_mb=2)
+
+    assert removed == 1, "3 MB 超过 2 MB 上限，应删最旧的一个"
+    assert not made[0].exists()
+    assert made[1].exists() and made[2].exists()
+
+
+def test_purge_never_deletes_the_active_log(tmp_path: Path, fake_root: Path) -> None:
+    """正在写的主日志永不被清（删了它，日志立刻开始报句柄错误）。"""
+    import os
+    import time
+
+    from app.core import paths
+    from app.core.logging import purge_old_logs
+
+    logs = paths.logs_dir()
+    logs.mkdir(parents=True, exist_ok=True)
+    active = logs / "helper.log"
+    init_logging("DEBUG", log_file=active, console_level="ERROR")
+
+    old = time.time() - 30 * 86400          # 连保留期都超了
+    os.utime(active, (old, old))
+
+    purge_old_logs(days=7, total_limit_mb=0)  # 两道闸门都想删它
+
+    assert active.exists(), "当前正在写的日志不能被删"

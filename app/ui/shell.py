@@ -22,6 +22,7 @@ from __future__ import annotations
 from functools import partial
 from typing import Any
 
+from loguru import logger
 from nicegui import ui
 
 from app import tasks as tasks_app
@@ -82,6 +83,11 @@ def _toggle_sidebar(drawer: object, state: dict[str, bool]) -> None:
 def build_shell() -> None:
     """搭出两种模式的骨架（每个窗口调一次）。"""
     apply_theme()
+    # 浏览器侧（页内）异常必须**自己接**：NiceGUI 的 ``Client.handle_exception`` 只遍历注册过的钩子
+    # （nicegui/client.py），**没人注册就静默丢掉** —— 界面上"点了没反应、日志里什么都没有"
+    # 多半就是这一类（技术方案 §10.1「界面」层）。用 opt(exception=...) 显式带上异常对象，
+    # 不依赖 sys.exc_info（这里已经不在那个 except 块里了）。
+    ui.on_exception(lambda exc: logger.opt(exception=exc).error("界面上抛出未处理异常"))
     # 事件循环延迟看门狗：任务系统据此在界面卡顿时给吃 CPU 的任务让路（§13.5）。
     # 在这里启动是因为**只有页面构建时才确定拿得到 NiceGUI 服务线程的 asyncio 循环**。
     tasks_app.ensure_lag_monitor()
