@@ -15,9 +15,6 @@ from pathlib import Path
 
 import pytest
 
-#: 数据目录的环境变量（见 app.core.paths）：测试里必须清掉，否则会写到真实目录去
-ENV_DATA_DIR = "HELPER_DATA_DIR"
-
 
 def _safe_name(name: str) -> str:
     """把用例名变成合法目录名（参数化用例名里会带 ``[`` ``]`` ``/`` 这类字符）。"""
@@ -79,7 +76,6 @@ def fake_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]
 
     root = tmp_path / "root"
     root.mkdir(parents=True, exist_ok=True)
-    monkeypatch.delenv(ENV_DATA_DIR, raising=False)
     monkeypatch.setattr(paths, "project_root", lambda: root)
     config_access.invalidate()
     connection.close_thread_connection()

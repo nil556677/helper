@@ -12,44 +12,30 @@ from pathlib import Path
 import pytest
 
 from app.core import paths
+from app.core.config.schema import BootstrapConfig
 
 
 def test_project_root_is_repo_root() -> None:
-    """开发期：安装目录就是仓库根。
+    """开发期：安装目录就是仓库根（从 `app/core/paths.py` 往上三层）。
 
-    **判据要挑不会随目录调整而失效的东西**：以前这里断言"根下有 `core/`"，
-    把代码收进 `app/` 之后这条就假失败了（路径逻辑没问题，是断言过时）。
-    现在断言的是仓库根的稳定标志：`pyproject.toml` + `app/` + `tests/`。
+    **判据要挑不会随目录调整而失效的东西**：以前断言"根下有 `core/`"，把代码收进 `app/` 之后
+    就假失败了（路径逻辑没问题，是断言过时）。现在断言仓库根的稳定标志：`pyproject.toml` +
+    `app/` + `tests/`。
+
+    这里**用模块自身的位置算**而不是调 `paths.project_root()`：界面测试的会话装置会把那个函数
+    临时换到 `.tmp/ui-test-root`（pytest 先跑 `tests/ui`），直接调会拿到被换过的值。
     """
-    root = paths.project_root()
+    root = Path(paths.__file__).resolve().parents[2]
     assert (root / "pyproject.toml").exists()
     assert (root / "app").is_dir()
     assert (root / "tests").is_dir()
 
 
-def test_env_var_wins(fake_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """环境变量优先级最高（测试隔离与多实例就靠它）。"""
-    elsewhere = tmp_path / "elsewhere"
-    monkeypatch.setenv(paths.ENV_DATA_DIR, str(elsewhere))
-    assert paths.data_dir() == elsewhere.resolve()
-
-
-def test_config_override_used_when_env_absent(fake_root: Path) -> None:
-    """环境变量没设时，用引导配置里的 data_dir。"""
-    target = fake_root / "mydata"
-    (fake_root / "config.json").write_text(
-        '{"log_level": "DEBUG", "data_dir": ' + f'"{target.as_posix()}"' + "}",
-        encoding="utf-8",
-    )
-    from app.core.config import access
-
-    access.invalidate()
-    assert paths.data_dir() == target.resolve()
-
-
-def test_default_data_dir_is_under_root(fake_root: Path) -> None:
-    """两处都没设时，落在安装目录下的 data/。"""
+def test_data_dir_is_fixed_under_the_install_dir(fake_root: Path) -> None:
+    """数据目录**写死**：恒为安装目录下的 data/（配置与环境变量都不能再改道）。"""
     assert paths.data_dir() == fake_root / "data"
+    assert not hasattr(paths, "ENV_DATA_DIR"), "环境变量覆盖已经去掉"
+    assert "data_dir" not in BootstrapConfig.model_fields, "配置里不该再有 data_dir"
 
 
 def test_ensure_dirs_recreates_missing(fake_root: Path) -> None:

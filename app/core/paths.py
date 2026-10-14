@@ -9,12 +9,12 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
-#: 数据目录的环境变量覆盖项：测试隔离与多实例用（logs/models 仍跟随安装目录）。
-ENV_DATA_DIR = "HELPER_DATA_DIR"
+#: 数据目录名。**写死在安装目录旁**：配置里不再有 data_dir，也没有环境变量能改道
+#: （改动记录见技术方案 §12；2026-10 用户拍板「几个文件地址直接写死」）。
+DATA_DIR_NAME = "data"
 
 #: SQLite 主库文件名。
 DB_FILENAME = "helper.db"
@@ -56,22 +56,13 @@ def config_example_file() -> Path:
 
 
 def data_dir() -> Path:
-    """数据目录：SQLite 库、资料副本、以后的向量索引目录都在这下面。
+    """数据目录：**恒为** ``{安装目录}/data``。
 
-    优先级（技术方案 §12）：环境变量 ``HELPER_DATA_DIR`` → 引导配置 ``config.json`` 的
-    ``data_dir`` → 默认 ``{安装目录}/data``。
-
-    为什么配置那一级要惰性 import：``app.core.config`` 反过来要用本模块的 ``config_file()``，
-    在函数体里 import 就不会在 import 期形成循环。
+    为什么写死：路径只有一个答案，排查时不必先问"你把它挪哪去了"。
+    以前支持 config.json 的 ``data_dir`` 与环境变量 ``HELPER_DATA_DIR`` 改道，两个旋钮都已去掉；
+    测试要隔离就走 monkeypatch（把 :func:`project_root` 或本函数换掉），不再依赖环境变量。
     """
-    override = os.environ.get(ENV_DATA_DIR, "").strip()
-    if not override:
-        from app.core.config import access  # 惰性：见 docstring
-
-        override = (access.data_dir_override() or "").strip()
-    if override:
-        return Path(override).expanduser().resolve()
-    return project_root() / "data"
+    return project_root() / DATA_DIR_NAME
 
 
 def db_file() -> Path:
@@ -138,7 +129,7 @@ def describe() -> dict[str, str]:
     """把当前路径事实汇总成一份可打印的字典。
 
     用途：**启动时打进日志**（排查"我的资料去哪了"时，一眼能看出这次用的是哪个库），
-    以及启动失败时写进错误记录。注意 ``data_dir`` 可被环境变量/配置改道，
+    以及启动失败时写进错误记录。**所有路径都是写死的**（没有改道旋钮），
     而 ``logs_dir`` 恒在安装目录——所以同一份日志里可能混着多次运行，先看这一行再往下读。
     """
     return {

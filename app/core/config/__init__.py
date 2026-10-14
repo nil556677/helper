@@ -10,7 +10,6 @@
 
 from app.core.config.access import (
     config_file,
-    data_dir_override,
     ensure_default,
     invalidate,
     isolate_bad_file,
@@ -23,7 +22,6 @@ from app.core.config.schema import BootstrapConfig
 __all__ = [
     "BootstrapConfig",
     "config_file",
-    "data_dir_override",
     "ensure_default",
     "invalidate",
     "isolate_bad_file",

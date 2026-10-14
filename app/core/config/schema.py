@@ -37,7 +37,7 @@ def is_loopback(host: str) -> bool:
 
 
 class BootstrapConfig(BaseModel):
-    """``config.json`` 的全部内容——就这两项。
+    """``config.json`` 的全部内容：只有日志级别与监听地址两项。
 
     ``extra="forbid"``：键名拼错要立刻报错。"用户以为改了、其实没生效"是最难查的一类问题。
     ````_`` 开头的键由加载器当注释剥掉（见 access._strip_notes），不参与校验。
@@ -51,9 +51,6 @@ class BootstrapConfig(BaseModel):
     #: 只填地址，不要带 ``http://`` 或路径。留空视为默认值。
     host: str = DEFAULT_HOST
 
-    #: 数据目录覆盖；None = 用安装目录下的 ``data/``。
-    #: 注意优先级：环境变量 ``HELPER_DATA_DIR`` > 这一项 > 默认值。
-    data_dir: str | None = None
 
     @field_validator("host")
     @classmethod

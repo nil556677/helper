@@ -5,13 +5,12 @@
 也能进 CI。它只匹配**可见**元素，所以"切模式后聊天内容必须消失"这类断言是可信的。
 
 **数据目录必须隔离**：界面测试会真的建表、真的读配置，绝不能碰你的 `data/`。
-这里在 import 期就把 `HELPER_DATA_DIR` 指到 `.tmp/ui-test-data`
-（`app.core.paths.data_dir()` 每次调用都读这个变量，只要早于第一次使用就生效）。
+路径写死之后没有环境变量可用了，所以这里在**会话级装置**里把 `paths.project_root`（安装目录）
+指到 `.tmp/ui-test-root`：数据、日志、配置全在里面，单元测试的 `fake_root` 会按用例覆盖回来。
 """
 
 from __future__ import annotations
 
-import os
 import shutil
 import tempfile
 from collections.abc import Iterator
@@ -21,9 +20,32 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 TMP = ROOT / ".tmp"
-UI_DATA = TMP / "ui-test-data"
-UI_DATA.mkdir(parents=True, exist_ok=True)
-os.environ["HELPER_DATA_DIR"] = str(UI_DATA)
+#: 界面测试的"安装目录"：数据、日志、配置全落在它下面，绝不碰真实的 data/ 与 logs/。
+UI_ROOT = TMP / "ui-test-root"
+UI_ROOT.mkdir(parents=True, exist_ok=True)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def ui_installation_root() -> Iterator[None]:
+    """把整个"安装目录"指到 `.tmp/ui-test-root`（会话级）。
+
+    为什么替换 `project_root` 而不是 `data_dir`：
+
+    - `data_dir()` / `logs_dir()` / `config_file()` 都从它派生，一处替换就全隔离了；
+    - **单元测试的 `fake_root` 也替换它**，会按用例覆盖回来、用完还原 —— 两边不会打架；
+      而"直接换 `data_dir`"会让单元测试里的 `fake_root` 失效（实测踩过：一批断言全崩）。
+
+    为什么必须是**会话级**：数据库连接与日志 sink 在进程内缓存，中途换路径会让"页面写进 A、
+    断言读 B"（实测踩过：函数级装置让一批界面用例写进了真实数据库）。
+    """
+    from app.core import paths
+
+    original = paths.project_root
+    paths.project_root = lambda: UI_ROOT  # type: ignore[assignment]
+    try:
+        yield
+    finally:
+        paths.project_root = original  # type: ignore[assignment]
 
 #: **把 Python 的临时目录也钉进 `.tmp/`**。两个原因：
 #: ① NiceGUI 的测试装置用 `tempfile.mkdtemp(prefix="nicegui-test-storage-")`；

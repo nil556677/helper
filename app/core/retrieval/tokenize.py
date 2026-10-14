@@ -37,7 +37,7 @@ def tokenizer() -> jieba.Tokenizer:
                 # 为什么必须钉：jieba 的缓存路径是 `os.path.join(self.tmp_dir or tempfile.gettempdir(), name)`，
                 # 而 **`tempfile.gettempdir()` 在 TEMP/TMPDIR 都不可用时会退回"当前工作目录"** —— 于是仓库根里
                 # 会凭空多出一个 `jieba.cache`（和 NiceGUI 测试装置的 `nicegui-test-storage-*` 是同一类坑）。
-                # 钉进 data/ 还顺带得到：换 `HELPER_DATA_DIR` 就换缓存、测试之间互不干扰。
+                # 钉进 data/ 还顺带得到：测试换了安装目录就换缓存，用例之间互不干扰。
                 cache_dir = paths.data_dir()
                 Path(cache_dir).mkdir(parents=True, exist_ok=True)
                 instance.tmp_dir = str(cache_dir)

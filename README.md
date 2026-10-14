@@ -121,7 +121,7 @@ print('维度', v.shape, '行范数', float(numpy.linalg.norm(v, axis=-1)[0]))
 - **正常关窗口**才保存窗口大小与位置（存在 `data/helper.db` 的 `settings` 表里）；强杀不保存
 - 起不来时先看 `logs/startup-error.log`：启动前提不满足（目录建不出来 / 库损坏 / 迁移缺脚本）
   都会写在那里，同时弹一个提示框
-- 数据全在 `data/`；想要一份干净数据：设环境变量 `HELPER_DATA_DIR` 指到别处再启动
+- 数据全在 `data/`（**路径写死**在安装目录旁，没有改道的开关）；想要一份干净数据：把 `data/` 改名或删掉再启动
 - 改的是 Python 代码就**重启应用**（NiceGUI 的热重载在桌面壳里是关掉的）
 
 ### 配置文件
@@ -133,7 +133,6 @@ print('维度', v.shape, '行范数', float(numpy.linalg.norm(v, axis=-1)[0]))
 | --- | --- | --- |
 | `log_level` | `INFO` | 文件日志级别（`DEBUG`/`INFO`/`WARNING`/`ERROR`）。**界面上不提供**——正常别动它，排障时才调 |
 | `host` | `127.0.0.1` | 界面服务的监听地址。**默认只对本机开放**；填 `0.0.0.0` 或局域网 IP 会让同网络的人都能打开界面（界面没有认证），启动时会告警 |
-| `data_dir` | `null` | 数据目录改道（`null` = 安装目录下的 `data/`）。环境变量 `HELPER_DATA_DIR` 优先级更高 |
 
 日志在 `logs/`：`helper-<日期>.log`（程序自己的记录）+ `console-<日期>.log`（Qt/Chromium 等原生输出，
 白板这类问题的现场都在这里），**都是按天一个文件、只留最近 7 天**。
@@ -146,7 +145,7 @@ print('维度', v.shape, '行范数', float(numpy.linalg.norm(v, axis=-1)[0]))
 .venv\Scripts\python.exe -m pytest tests/ui -q    # 只跑界面测试（进程内模拟用户，不需要浏览器）
 ```
 
-- 测试的临时目录与数据都在 `.tmp/` 下，**不会碰真实的 `data/`**（界面测试用 `.tmp/ui-test-data`）
+- 测试的临时目录与数据都在 `.tmp/` 下，**不会碰真实的 `data/`**（界面测试用 `.tmp/ui-test-root`）
 - 唯一例外：测试进程的日志会追加进真实的 `logs/helper.log`（日志 sink 在进程内只建一次）
 - `tests/unit/test_layering.py` 是**分层红线**的机械检查：`app/core` 不许碰界面与 `services`、
   `app/ui` 不许碰 `core`、`app/services` 不许碰界面 —— 越界会直接测试失败

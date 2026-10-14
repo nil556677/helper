@@ -41,6 +41,7 @@ from app.__main__ import _install_log_channels
 _install_log_channels()
 
 from loguru import logger
+from app.core.logging import console_file, console_output_file, log_file
 
 logger.info(f"{{MARK}} loguru")
 import logging
@@ -80,7 +81,10 @@ except Exception as exc:
 
 json.dumps  # noqa: B018  (确保 import 被用到)
 result_path.write_text(
-    json.dumps({{"run": os.environ.get("HELPER_DATA_DIR", ""), "ok": True}}), encoding="utf-8"
+    json.dumps({{
+        "main_log": str(log_file()),
+        "console": str(console_output_file() or console_file()),
+    }}), encoding="utf-8"
 )
 print(f"{{MARK}} child-done")
 '''
@@ -104,16 +108,18 @@ def coverage_run(tmp_path: Path) -> dict[str, str]:
     )
     assert completed.returncode == 0, f"子进程失败：{completed.stdout}\n{completed.stderr}"
 
-    from app.core.logging import console_file, daily_log_file
+    # 子进程把自己的日志路径回报过来：父进程这边可能被界面测试的会话装置换了路径，
+    # 照回报的路径读才准（两边各读各的日志文件，互不干扰）。
+    import json as _json
 
-    main_log = daily_log_file()  # 主日志按天：logs/helper-<日期>.log
+    reported = _json.loads(result.read_text(encoding="utf-8"))
+    paths = {
+        "main": Path(reported["main_log"]),
+        "console": Path(reported["console"]),
+    }
     return {
-        "main": main_log.read_text(encoding="utf-8", errors="replace") if main_log.exists() else "",
-        "console": (
-            console_file().read_text(encoding="utf-8", errors="replace")
-            if console_file().exists()
-            else ""
-        ),
+        key: (value.read_text(encoding="utf-8", errors="replace") if value.exists() else "")
+        for key, value in paths.items()
     }
 
 
@@ -162,7 +168,7 @@ def test_startup_snapshot_is_recorded(coverage_run: dict[str, str]) -> None:
 #: 双击启动等价场景：标准句柄无效（无控制台）。实测那时任何 print 都抛
 #: ``OSError: 句柄无效``，而 NiceGUI 的服务线程就是靠 print 打就绪横幅 —— 会当场死掉（表现是白板）。
 CONSOLE_LESS_SCRIPT = f"""
-import os, sys
+import json, os, sys
 from pathlib import Path
 
 ROOT = Path(r"{ROOT}")
@@ -172,7 +178,7 @@ from app.bootstrap import ensure_ready
 
 ensure_ready()
 
-# 模拟"没有控制台"：把标准句柄关掉（真实场景里它们是无效句柄）
+# 模拟「没有控制台」：把标准句柄关掉（真实场景里它们是无效句柄）
 for fd in (1, 2):
     try:
         os.close(fd)
@@ -183,10 +189,19 @@ from app.__main__ import _install_log_channels
 
 _install_log_channels()
 
+from app.core.logging import console_file, console_output_file, log_file
 from loguru import logger
 
 print("{MARK} console-less-print", flush=True)
 logger.info("{MARK} console-less-logged")
+
+# 把本进程实际用的日志路径回报给父进程：父进程那边可能被界面测试的会话装置换了路径
+Path(sys.argv[1]).write_text(
+    json.dumps(
+        {{"main_log": str(log_file()), "console": str(console_output_file() or console_file())}}
+    ),
+    encoding="utf-8",
+)
 """
 
 
@@ -194,25 +209,24 @@ def test_console_less_startup_survives(tmp_path: Path) -> None:
     """无控制台启动不能崩，而且 print 必须能落进原生输出文件。
 
     这条钉住的是一个真实故障：坏句柄 → ``print`` 抛 OSError → NiceGUI 服务线程死 →
-    "界面服务 20 秒没起来 + 窗口白板"。
+    「界面服务 20 秒没起来 + 窗口白板」。
     """
     script = tmp_path / "console_less.py"
     script.write_text(CONSOLE_LESS_SCRIPT, encoding="utf-8")
+    result = tmp_path / "console_less_result.json"
 
     completed = subprocess.run(
-        [sys.executable, str(script)],
+        [sys.executable, str(script), str(result)],
         cwd=str(ROOT),
         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
         timeout=180,
     )
     assert completed.returncode == 0, "无控制台启动崩了（很可能又是坏句柄）"
 
-    from app.core.logging import console_file
+    reported = json.loads(result.read_text(encoding="utf-8"))
 
-    console = console_file().read_text(encoding="utf-8", errors="replace")
+    console = Path(reported["console"]).read_text(encoding="utf-8", errors="replace")
     assert f"{MARK} console-less-print" in console, "print 没能落进原生输出文件"
 
-    from app.core.logging import daily_log_file
-
-    main_log = daily_log_file().read_text(encoding="utf-8", errors="replace")
+    main_log = Path(reported["main_log"]).read_text(encoding="utf-8", errors="replace")
     assert f"{MARK} console-less-logged" in main_log

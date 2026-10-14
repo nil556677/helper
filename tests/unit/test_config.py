@@ -16,7 +16,6 @@ def test_missing_file_returns_defaults(fake_root: Path) -> None:
     """文件不存在：给默认值，不抛异常。"""
     config = access.load()
     assert config.log_level == "INFO"
-    assert config.data_dir is None
 
 
 def test_ensure_default_copies_example(fake_root: Path) -> None:
@@ -33,7 +32,7 @@ def test_ensure_default_copies_example(fake_root: Path) -> None:
 def test_comment_keys_are_stripped(fake_root: Path) -> None:
     """``_`` 开头的键当注释，不影响校验。"""
     (fake_root / "config.json").write_text(
-        json.dumps({"log_level": "WARNING", "_data_dir_note": "随便写点什么"}), encoding="utf-8"
+        json.dumps({"log_level": "WARNING", "_note": "随便写点什么"}), encoding="utf-8"
     )
     access.invalidate()
     assert access.load().log_level == "WARNING"
@@ -136,3 +135,15 @@ def test_listen_host_reads_config_and_warns_when_not_loopback(fake_root: Path) -
 
     assert captured, "非回环地址必须告警"
     assert "不是回环" in "".join(str(item) for item in captured)
+
+
+def test_legacy_config_keys_are_ignored_not_fatal(fake_root: Path) -> None:
+    """老配置里的 data_dir 要被静默忽略：删字段不能把用户的其它设置一起隔离走。"""
+    (fake_root / "config.json").write_text(
+        json.dumps({"log_level": "WARNING", "data_dir": "D:/old", "config_version": 1}),
+        encoding="utf-8",
+    )
+    access.invalidate()
+
+    assert access.load().log_level == "WARNING", "其它设置要保留"
+    assert not list(fake_root.glob("config.bad-*.json")), "不该被判成坏配置"

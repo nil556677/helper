@@ -101,7 +101,7 @@ def ensure_ready() -> None:
     version = schema.init_db()
 
     # 5. 起手把"东西都在哪"一次记全：排查"我的资料去哪了"时，这一行能省一轮来回。
-    #    注意 data_dir 可被环境变量/配置改道，而 logs_dir 恒在安装目录——同一份日志里可能混着
+    #    所有路径都写死在安装目录旁（见 paths）——data/ 与 logs/ 都是；同一份日志里可能混着
     #    多次运行，先看这一行再往下读。
     logger.info("运行路径：{}", "；".join(f"{k}={v}" for k, v in paths.describe().items()))
     # 环境快照：版本 / flags / TEMP / 目录，出问题时先看这一段（技术方案 §10.3）

@@ -260,6 +260,12 @@ async def test_tasks_page_shows_page_range(user: User) -> None:
     from app.core.jobs import api, registry as jobs_registry
 
     tasks_app.register_kinds()
+    # 上一步会顺带排一条「启动清理」任务；本用例只关心自己这 3 条，所以先清干净再排。
+    # （不清的话断言会变成 4 条 —— 这是个对执行顺序敏感的坑，实测踩过。）
+    from app.core.db.connection import transaction
+
+    with transaction() as conn:
+        conn.execute("DELETE FROM jobs")
     try:
         for index in range(3):
             api.enqueue("import", {"path": "（测试）", "name": f"第{index + 1}份.md"}, dedupe_key=f"p:{index}")

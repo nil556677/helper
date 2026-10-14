@@ -30,6 +30,11 @@ _cache: tuple[tuple[int, int, int], BootstrapConfig] | None = None
 #: ``_`` 开头的键当注释用（配置文件里写 ``_note`` 说明字段含义）。
 _NOTE_PREFIX = "_"
 
+#: 已经废弃、但老配置文件里可能还留着的键：**加载时剥掉**，别让 ``extra="forbid"`` 把整份配置
+#: 判成坏文件（那会把用户的日志级别设置一起隔离走，属于"改了程序却丢了用户的设置"）。
+#: ``data_dir`` 是"路径写死"之前的遗留。
+_LEGACY_KEYS = ("data_dir", "config_version")
+
 
 def config_file() -> Path:
     """当前引导配置文件路径。"""
@@ -43,6 +48,20 @@ def _stamp(path: Path) -> tuple[int, int, int] | None:
     except OSError:
         return None
     return (stat.st_mtime_ns, stat.st_size, stat.st_ctime_ns)
+
+
+def _strip_legacy(payload: Any) -> tuple[Any, list[str]]:
+    """剥掉废弃键，返回 (新载荷, 命中的键名)。
+
+    只剥一层（这些键都在顶层）。命中的键会记一条 INFO —— "用户以为改了、其实没生效"
+    是最难查的一类问题，所以要让日志说清楚"你那个字段已经不管用了"。
+    """
+    if not isinstance(payload, dict):
+        return payload, []
+    hits = [key for key in _LEGACY_KEYS if key in payload]
+    if not hits:
+        return payload, []
+    return {key: value for key, value in payload.items() if key not in hits}, hits
 
 
 def _strip_notes(payload: Any) -> Any:
@@ -101,6 +120,9 @@ def load_fresh() -> BootstrapConfig:
 
     try:
         payload = _strip_notes(json.loads(path.read_text(encoding="utf-8")))
+        payload, legacy = _strip_legacy(payload)
+        if legacy:
+            logger.info("配置文件里的 {} 已废弃，已忽略（路径现在是写死的）", "、".join(legacy))
         config = BootstrapConfig.model_validate(payload)
     except (OSError, json.JSONDecodeError, ValidationError, UnicodeDecodeError) as exc:
         # 读不动 / 不是 JSON / 不符合 schema：三种都当"配置不可用"，隔离后回落默认值。
@@ -175,12 +197,3 @@ def ensure_default() -> Path:
         logger.info("模板缺失，已写出内置默认配置：{}", path)
     invalidate()
     return path
-
-
-def data_dir_override() -> str | None:
-    """引导配置里的数据目录覆盖项（**给 app.core.paths 用**）。
-
-    为什么单独一个函数：``paths.data_dir()`` 要读它，而本模块又用 ``paths``；
-    从 paths 侧**惰性**调用这里，就不会在 import 期形成循环。
-    """
-    return load().data_dir
