@@ -1,0 +1,53 @@
+# ---------- 运行期数据：内容不进版本控制，目录靠 .gitkeep 保留 ----------
+# 备份 = 复制 data/ 整个目录；模型文件太大，单独下载（下载说明见 models/README.md）
+/data/*
+!/data/.gitkeep
+/models/*
+!/models/.gitkeep
+!/models/README.md
+/logs/*
+!/logs/.gitkeep
+
+# ---------- 可再生缓存（别进版本库） ----------
+# jieba 的分词前缀词典缓存：首次运行自动生成（约 9 MB），换机器/删掉都会自己重建
+jieba.cache
+
+# ---------- 本机配置 ----------
+# config.json 只放引导项（日志级别、数据目录）；api key 加密后存在数据库里，不属于这个文件
+/config.json
+/config.bad-*.json
+
+# ---------- 内部文档：整个 docs/ 不进版本控制（按用户要求） ----------
+# 技术方案、开发计划、命名规范都只在本机维护；clone 到别的机器不会带上 docs/ 下的任何文件
+/docs/
+
+# ---------- 第三方往当前目录写的日志 ----------
+# 搜狗输入法会在我们进程的 CWD 里写 debug.log（不是本项目的日志，本项目的在 logs/ 下）；
+# 不带前导斜杠：仓库根和任何子目录（比如 app/）里出现都要忽略
+debug.log
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# ---------- 测试与工具缓存（临时产物一律放仓库内 .tmp/，见技术方案 §11） ----------
+/.tmp/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ---------- 打包产物（打包暂缓，先把忽略项占住） ----------
+/packaging/build/
+/packaging/output/
+/packaging/dist/
+
+# ---------- IDE / 系统 ----------
+.idea/
+.vscode/
+Thumbs.db
+desktop.ini

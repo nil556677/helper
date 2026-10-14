@@ -1,0 +1,20 @@
+[project]
+name = "helper"
+version = "0.1.0"
+description = "本地桌面 AI 助手（本机检索 + 云端大模型回答）"
+requires-python = ">=3.12"
+# 运行时依赖统一在装环境时写进 requirements.txt（安装成功后 pip freeze 出 lock 文件），
+# 此处不重复声明，避免两处清单漂移。
+dependencies = []
+
+[project.scripts]
+# 以包方式启动：python -m app
+# （app/__main__.py 在 P0 落地，见 docs/技术方案.md §13）
+helper = "app.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]

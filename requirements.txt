@@ -1,0 +1,47 @@
+# =====================================================================
+# helper —— 依赖清单
+# 环境：Python 3.12（Windows x64）
+#
+# 安装（两条本机环境事实，换机器时可能不再需要）：
+#   1) 本机 pip 默认缓存目录权限是坏的，构建依赖时会报 WinError 5 拒绝访问
+#      —— 安装要加 --no-cache-dir，或把 PIP_CACHE_DIR 指到项目内；
+#   2) PyPI 官方源不稳，用国内镜像。
+#      .venv\Scripts\python.exe -m pip install --no-cache-dir ^
+#          -i https://pypi.mirrors.ustc.edu.cn/simple/ -r requirements.txt
+#
+# 版本策略：==x.y.z 已核实；>=a,<b 兼容区间。
+# 装完执行 pip freeze > requirements.lock.txt，之后交付 / 打包 / 复现一律以 lock 为准。
+# =====================================================================
+
+# ---------- 界面层：纯 Python 写界面（页面与组件都是 Python 代码） ----------
+nicegui==3.18.0
+
+# ---------- 桌面窗口壳：QtWebEngine（自带 Chromium） ----------
+# 为什么不是 nicegui[native]（= pywebview）：pywebview 在 Windows 上要经 pythonnet 加载 .NET，
+# 本机实测 CLR 加载失败（Failed to resolve Python.Runtime.Loader.Initialize）；
+# QtWebEngine 自带 Chromium，也不依赖目标机器装没装 WebView2 运行时。
+PySide6==6.12.0
+
+# ---------- 配置校验：引导配置在加载期就要拒掉坏值 ----------
+pydantic>=2.9,<3
+
+# ---------- 日志 ----------
+loguru==0.7.3
+
+# ---------- 测试 ----------
+pytest>=9.1,<10
+# 界面测试走 NiceGUI 自带的 nicegui.testing.user 装置（进程内模拟用户，不需要浏览器），
+# 而它的 fixture 是 async 的，所以需要 pytest-asyncio
+pytest-asyncio>=1.2,<2
+
+# ---------- 知识库：资料解析与分词 ----------
+# 为什么要分词库：FTS5 的 unicode61 把连续汉字当**一个** token——"合同违约金"整串是一个词，
+# 搜"违约"一条都命不中。所以写入与查询都必须用 jieba 预分词（见 core/retrieval/tokenize.py）。
+jieba==0.42.1
+
+# 为什么要自己写解析而不上 langchain/unstructured：我们只要"文件字节 → 纯文本"，
+# 这几个库各自只做一件事、都是纯 Python；那套框架会带进来几十个依赖和一堆用不上的抽象。
+pypdf>=5.1,<7          # PDF 文字层（扫描件要 OCR，还没接）
+python-docx>=1.1,<2    # Word
+openpyxl>=3.1,<4       # Excel
+python-pptx>=1.0,<2    # PowerPoint
