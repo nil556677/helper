@@ -24,22 +24,40 @@ def _safe_name(name: str) -> str:
     return re.sub(r"[^0-9A-Za-z_.\-]+", "_", name)[:60] or "case"
 
 
-def pytest_sessionstart(session: pytest.Session) -> None:
-    """开跑前扫掉上一轮留下的临时目录。
+def _tests_tmp() -> Path:
+    """测试临时目录 —— **只认这一处**：`paths.tmp_dir()`（即仓库内 `.tmp/`）。
 
-    为什么需要：会话被强杀（关窗口 / Ctrl+C）时用例的 teardown 不会执行，
-    ``.tmp/`` 会一轮一轮长大（实测积了 60 多个目录）。这里按命名前缀清一遍，代价可忽略。
+    以前这里与 ``tmp_path`` 装置各写一份路径，两份一旦不一致，清扫就扫不到装置留下的目录。
     """
     from app.core import paths
 
-    for stale in paths.tmp_dir().glob("test_*-*"):
+    return paths.tmp_dir()
+
+
+def _sweep_stale() -> int:
+    """扫掉 `.tmp/test_*-*`（上一轮遗留 / 被强杀留下的）。返回清掉几个。"""
+    removed = 0
+    for stale in _tests_tmp().glob("test_*-*"):
         shutil.rmtree(stale, ignore_errors=True)
+        removed += 1
+    return removed
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """开跑前扫一遍：会话被强杀（关窗口 / Ctrl+C）时用例的 teardown 不会执行，
+    `.tmp/` 会一轮一轮长大（实测积过 60 多个、也见过 19 个）。"""
+    _sweep_stale()
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """跑完再扫一遍：正常结束的会话不该在 `.tmp/` 里留下任何 `test_*` 目录。"""
+    _sweep_stale()
 
 
 @pytest.fixture
 def tmp_path(request: pytest.FixtureRequest) -> Iterator[Path]:
     """仓库内的一次性临时目录（替代 pytest 默认实现）。"""
-    base = Path(__file__).resolve().parent.parent / ".tmp" / f"{_safe_name(request.node.name)}-{os.getpid()}"
+    base = _tests_tmp() / f"{_safe_name(request.node.name)}-{os.getpid()}"
     shutil.rmtree(base, ignore_errors=True)
     base.mkdir(parents=True, exist_ok=True)
     try:
