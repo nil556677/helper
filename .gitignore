@@ -1,10 +1,9 @@
 # ---------- 运行期数据：内容不进版本控制，目录靠 .gitkeep 保留 ----------
-# 备份 = 复制 data/ 整个目录；模型文件太大，单独下载（下载说明见 models/README.md）
+# 备份 = 复制 data/ 整个目录；模型文件太大（1.09 GB），下载与量化说明都在 README.md 里
 /data/*
 !/data/.gitkeep
 /models/*
 !/models/.gitkeep
-!/models/README.md
 /logs/*
 !/logs/.gitkeep
 

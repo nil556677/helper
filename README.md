@@ -31,7 +31,51 @@ huggingface-cli download BAAI/bge-m3 --include "onnx/*" "tokenizer.json" --local
 ```
 
 **量化命令、自检脚本、以及两个必须知道的坑**（官方 ONNX 没有 pooling/sparse head，稠密向量要自己按
-`CLS → 按行归一(keepdims) → 取前 768 维 → 再按行归一` 算）都写在 [models/README.md](models/README.md)。
+`CLS → 按行归一(keepdims) → 取前 768 维 → 再按行归一` 算）都写在下面。
+
+### 两个关键事实（当初挑模型的实测结论，别再重新发现）
+
+1. **官方 ONNX 只输出 `last_hidden_state [B, L, 1024]`** —— **没有** sparse head、**没有** pooling head。
+   所以稠密向量必须自己算：`CLS → 按行 L2 归一 → 取前 768 维 → 再按行 L2 归一`，且**不加** query 前缀。
+   > ⚠ 归一**必须带 `keepdims=True`**（按行做）。漏掉它就是把整批当成一个矩阵做 Frobenius 范数：
+   > 行范数会掉到 0.58~0.72，后果是**绝对分被缩放、跨批不可比、任何余弦阈值失效**
+   > （同批内排序看着还正常，所以这个坑很难靠眼睛发现）。
+2. **官方不提供量化文件**。这两个 `.int8.onnx` 是自己做动态量化得到的（精排排序相关性没有可见退化，
+   但**别再用 fp32 的分数阈值**）：
+
+```python
+from onnxruntime.quantization import QuantType, quantize_dynamic
+
+quantize_dynamic("model.onnx", "bge-m3.int8.onnx", weight_type=QuantType.QInt8)
+quantize_dynamic("reranker.onnx", "bge-reranker-v2-m3.int8.onnx", weight_type=QuantType.QInt8)
+```
+
+### 放进目录后自检
+
+```bash
+dir models            # 三个文件在、大小对得上
+
+python -c "
+import numpy, onnxruntime
+from tokenizers import Tokenizer
+tok = Tokenizer.from_file('models/tokenizer.json'); print('词表', tok.get_vocab_size())
+sess = onnxruntime.InferenceSession('models/bge-m3.int8.onnx', providers=['CPUExecutionProvider'])
+enc = tok.encode('测试一句话')
+ids = numpy.array([enc.ids]); mask = numpy.array([enc.attention_mask])
+hid = sess.run(None, {'input_ids': ids, 'attention_mask': mask})[0]
+v = hid[:, 0, :]; v = v / numpy.linalg.norm(v, axis=-1, keepdims=True)
+v = v[:, :768];    v = v / numpy.linalg.norm(v, axis=-1, keepdims=True)
+print('维度', v.shape, '行范数', float(numpy.linalg.norm(v, axis=-1)[0]))
+"
+```
+
+**行范数必须是 1.0**；0.58~0.72 那一档就是漏了 `keepdims=True`。
+
+### 运行时相关
+
+- 只用 **ONNX Runtime（CPU）**，**不引** torch / transformers；
+- `intra_op_num_threads = 6`（实测最优；14 线程反而慢一倍以上）；
+- 嵌入在**首次向量化**时加载，精排**首次需要精排时**才加载（省 550 MB 常驻）。
 
 ## 当前状态
 
