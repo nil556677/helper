@@ -189,15 +189,21 @@ async def test_back_to_chat(user: User) -> None:
 
 
 async def test_settings_sections_switch(user: User) -> None:
-    """设置分区能切：「通用」有真内容（日志级别、数据目录、版本）。"""
+    """设置分区能切：「通用」有真内容（日志在哪、数据目录、版本）。
+
+    顺带钉住一条设计决定：**日志级别不在界面上**（技术方案 §10.4 第 12 条）——
+    它只由 `config.json` 给，界面上不该出现这个控件。
+    """
     await user.open('/')
     user.find(marker='pin-settings').click()
 
     user.find(marker='section-general').click()
 
-    await user.should_see('日志级别')
+    await user.should_see('日志')
+    await user.should_see('打开日志目录')
     await user.should_see('数据目录')
     await user.should_see('helper')  # 关于那一段
+    await user.should_not_see('日志级别')
 
 
 async def test_tasks_page_renders_empty_state(user: User) -> None:
@@ -458,7 +464,7 @@ async def test_model_slots_are_live_and_per_slot(user: User) -> None:
     assert len(connects) == 2, [str(getattr(e, 'text', '')) for e in connects]
     assert not any(element.enabled for element in connects), '还没配好时不该能点测试'
     assert all(element.enabled for element in saves), '保存随时可以点'
-    assert len(saves) >= 2  # 两个槽位各一个（「通用」里还有个日志级别的保存）
+    assert len(saves) >= 2  # 两个模型槽位各一个（日志级别那个保存按钮已按 §10.4 移出界面）
 
     await user.should_not_see('温度')  # 高级参数不上界面（用库里的默认值）
     await user.should_see('llm_slots')  # 说明里写清配置进数据库

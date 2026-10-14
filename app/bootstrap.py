@@ -12,6 +12,12 @@
    （双击启动没有控制台，等于什么都没留下）；
 4. **建表 / 迁移**放最后：它失败要能在日志里看到原因。
 
+另外两件"顺手做完"的事：**过期日志清理**（只留最近 7 天）与**受限环境嗅探**（从原生输出里认出
+"上次窗口没渲染出来"，见 §10.3）——它们都只读日志目录，失败不该挡住启动，所以放在建表之前。
+
+**这里不做两件事**（它们是进程级副作用，只归真正的入口管，见 ``app/__main__.py``）：
+fd 1/2 重定向（会把测试进程的输出也劫走）与 stdlib ``logging`` 劫持（会动 pytest 的日志捕获）。
+
 异常处理：这里**不吞异常**——启动前提不满足时由入口（`app/__main__.py`）转成用户看得见的
 提示 + 一份 `logs/startup-error.log`。悄悄降级启动比直接报错更糟。
 """
@@ -26,7 +32,14 @@ from loguru import logger
 from app.core import paths
 from app.core.config import access
 from app.core.db import schema
-from app.core.logging import init_logging, install_exception_hooks, is_initialized
+from app.core.logging import (
+    init_logging,
+    install_exception_hooks,
+    is_initialized,
+    log_environment_snapshot,
+    purge_old_logs,
+    sniff_restricted_hint,
+)
 
 _ready = False
 
@@ -77,6 +90,13 @@ def ensure_ready() -> None:
     config = access.load()
     init_logging(config.log_level)
 
+    # 3b. 过期日志清理（只留最近 7 天）与"上次是不是被沙箱挡了"的嗅探。
+    #     清理放在建表之前：它只动 logs/，失败也不该挡住建库。
+    purge_old_logs()
+    hint = sniff_restricted_hint()
+    if hint:
+        logger.warning(hint)
+
     # 4. 建表 / 迁移（幂等）
     version = schema.init_db()
 
@@ -84,6 +104,8 @@ def ensure_ready() -> None:
     #    注意 data_dir 可被环境变量/配置改道，而 logs_dir 恒在安装目录——同一份日志里可能混着
     #    多次运行，先看这一行再往下读。
     logger.info("运行路径：{}", "；".join(f"{k}={v}" for k, v in paths.describe().items()))
+    # 环境快照：版本 / flags / TEMP / 目录，出问题时先看这一段（技术方案 §10.3）
+    log_environment_snapshot()
     logger.info("引导配置：{}（日志级别 {}）", config_path, config.log_level)
     logger.info("数据库：{}（schema v{}）", paths.db_file(), version)
 

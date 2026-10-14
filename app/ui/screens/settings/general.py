@@ -23,18 +23,6 @@ def _card_head(icon: str, title: str) -> None:
 def render() -> None:
     """画「通用」分区的内容。"""
     overview = settings_service.data_overview()
-    level = ui.select(
-        list(settings_service.LOG_LEVELS),
-        value=settings_service.log_level(),
-    ).props("outlined dense").classes("w-28")
-
-    def save() -> None:
-        try:
-            settings_service.save_log_level(str(level.value))
-        except OSError as exc:  # 配置文件不可写：说清楚，别静默失败
-            ui.notify(f"保存失败：{exc}", type="negative")
-            return
-        ui.notify("已保存，日志级别立即生效", type="positive")
 
     def open_it(target: str, what: str) -> None:
         """打开目录。失败要说出来——静默失败就是"点了按钮什么都没发生"。"""
@@ -46,17 +34,18 @@ def render() -> None:
         ui.label("最基础的三件事：日志、数据放在哪、版本。").classes("hp-hint")
 
         # ---- 日志 ----
+        # **界面上不提供日志级别**（技术方案 §10.4 第 12 条）：它只由 config.json 给。
+        # 用户把级别调成 ERROR 就再也拿不到现场，而且出问题时无法确定"当时是什么级别"；
+        # 这里只告诉他日志在哪、怎么打开。
         with ui.column().classes("hp-card w-full gap-3"):
             _card_head("subject", "日志")
             with ui.row().classes("hp-field-row"):
                 with ui.column().classes("hp-field-main gap-0"):
-                    ui.label("日志级别").classes("hp-field-name")
-                    ui.label("改完立即生效，不用重启。").classes("hp-field-help")
-                with ui.row().classes("items-center gap-2 no-wrap"):
-                    level
-                    ui.button("保存", on_click=save).props("unelevated dense no-caps").classes(
-                        "hp-send"
-                    )
+                    ui.label("日志文件").classes("hp-field-name")
+                    ui.label(
+                        "按天记录，只留最近 7 天；界面不提供级别设置（排障时改 config.json）。"
+                    ).classes("hp-field-help")
+                ui.label(str(overview["paths"]["日志文件"])).classes("hp-path")
 
         # ---- 数据 ----
         with ui.column().classes("hp-card w-full gap-3"):

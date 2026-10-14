@@ -64,6 +64,57 @@ RELOAD_DELAY_MS = 800
 STARTUP_ERROR_FILE = "startup-error.log"
 
 
+def _install_qt_message_handler() -> None:
+    """把 Qt 自己的 warning/critical 送进日志（技术方案 §10.1 的"渲染"层）。
+
+    为什么放在这里而不是 ``core/logging``：core 不许 import 界面库（红线 1），
+    而 ``qInstallMessageHandler`` 必须 import ``PySide6.QtCore``。
+    """
+    from loguru import logger as qt_logger
+    from PySide6.QtCore import QtMsgType, qInstallMessageHandler
+
+    levels = {
+        QtMsgType.QtDebugMsg: "DEBUG",
+        QtMsgType.QtInfoMsg: "INFO",
+        QtMsgType.QtWarningMsg: "WARNING",
+        QtMsgType.QtCriticalMsg: "ERROR",
+        QtMsgType.QtFatalMsg: "CRITICAL",
+    }
+
+    def handler(mode: QtMsgType, context: object, message: str) -> None:  # noqa: ARG001
+        level = levels.get(mode, "INFO")
+        qt_logger.opt(depth=1).log(level, "Qt: {}", message)
+
+    qInstallMessageHandler(handler)
+
+
+def _install_log_channels() -> None:
+    """四个通道里属于"入口"的那些（技术方案 §10.2）。
+
+    顺序不能改：**fd 重定向必须在 QtWebEngine 初始化之前**，否则 Qt 的启动输出就漏掉了。
+    stdlib 桥要装在这里而不是 ``bootstrap``：它会动 root logger，测试进程里跑会劫走 pytest 的输出。
+    """
+    from loguru import logger as entry_logger
+
+    from app.core.config import access
+    from app.core.logging import (
+        capture_native_output,
+        init_logging,
+        install_asyncio_handler,
+        install_stdlib_bridge,
+    )
+
+    console = capture_native_output()          # ① 原生输出（fd 1+2）→ logs/console-<日期>.log
+    # 捕获会把 sys.stdout/stderr 换成新流（绑定到刚接好的 fd），所以日志的**控制台 sink 要重建**：
+    # 否则它还握着旧流——旧流编码是 GBK（console 文件里中文变乱码），且可能已经是坏句柄。
+    init_logging(access.load().log_level)
+    install_stdlib_bridge()                    # ② stdlib logging（NiceGUI/uvicorn/asyncio/PySide6）
+    install_asyncio_handler()                  # ③ asyncio 任务异常（界面回调）
+    _install_qt_message_handler()              # ④ Qt 自己的消息
+    if console is not None:
+        entry_logger.info("原生输出已捕获：{}", console)
+
+
 def _listen_host() -> str:
     """界面服务的监听地址（来自 ``config.json``）。
 
@@ -85,10 +136,13 @@ def _listen_host() -> str:
     return host
 
 
-def _free_port() -> int:
-    """向系统要一个空闲端口（桌面应用不该因为端口被占就起不来）。"""
+def _free_port(host: str) -> int:
+    """向系统要一个空闲端口（桌面应用不该因为端口被占就起不来）。
+
+    注意要**按配置里的监听地址**去要：绑 ``127.0.0.1`` 拿到的端口在别的网卡上未必空闲。
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind((HOST, 0))
+        sock.bind((host, 0))
         return int(sock.getsockname()[1])
 
 
@@ -105,17 +159,41 @@ def _wait_http(url: str, timeout_s: float = SERVER_WAIT_S) -> bool:
     return False
 
 
+def _tail_of(path: Path, lines: int = 40) -> str:
+    """取文件末尾若干行（日志可能很大，不整份读进来）。"""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    return "\n".join(text.splitlines()[-lines:])
+
+
 def _write_startup_error(title: str, detail: str) -> Path | None:
     """把启动失败写进一个**用户找得到**的文件，返回实际写入的路径。
 
     为什么不只靠日志：日志系统本身可能正是失败的那一环（目录不可写、坏配置隔离发生在
     建 sink 之前），所以这里不依赖任何前提，直接写文件；两个位置都写不进去才放弃。
+
+    **从 2026-10 起还附上两样东西**（技术方案 §10.5 的 S3）：受限环境的诊断结论，以及
+    **原生输出的尾巴** —— 白板那类问题的现场（Qt/Chromium 的 ``FATAL``）只在
+    ``console-<日期>.log`` 里，而用户报障时最该看到的就是它。
     """
     from app.core import paths
+    from app.core.logging import RUN_ID, console_file, console_output_file, sniff_restricted_hint
 
-    lines = [f"helper 启动失败：{title}", ""]
+    lines = [f"helper 启动失败：{title}", f"run：{RUN_ID}", ""]
     lines += [f"{name}：{value}" for name, value in paths.describe().items()]
     lines += ["", detail]
+
+    hint = sniff_restricted_hint()
+    if hint:
+        lines += ["", "诊断：" + hint]
+
+    console = console_output_file() or console_file()
+    tail = _tail_of(console) if console else ""
+    if tail.strip():
+        lines += ["", f"原生输出最后几行（{console}）：", "-" * 60, tail]
+
     text = "\n".join(lines)
 
     for target in (paths.logs_dir() / STARTUP_ERROR_FILE, paths.project_root() / STARTUP_ERROR_FILE):
@@ -188,8 +266,10 @@ def main() -> int:
     def index() -> None:
         build_shell()
 
-    port = _free_port()
+    _install_log_channels()
+
     host = _listen_host()
+    port = _free_port(host)
     url = f'http://{host}:{port}/'
     warnings: list[str] = []
 
@@ -293,7 +373,15 @@ def main() -> int:
         attempts['n'] += 1
         if attempts['n'] > MAX_RELOAD:
             logger.error('界面仍是空白（{}），已重试 {} 次；服务地址：{}', why, MAX_RELOAD, url)
-            warnings.append(f'界面没能显示出来（{why}）。\n服务地址：{url}\n日志在：{log_path}')
+            # 落一份"用户找得到"的记录：白板的现场在原生输出里，光看 helper.log 看不出所以然
+            target = _write_startup_error(
+                '界面没有渲染出来',
+                f'重试 {MAX_RELOAD} 次仍是空白：{why}\n服务地址：{url}',
+            )
+            warnings.append(
+                f'界面没能显示出来（{why}）。\n服务地址：{url}\n'
+                f'诊断记录：{target or log_path}'
+            )
             flush_warnings()
             return
         logger.warning('重载窗口（{}，第 {} 次）', why, attempts['n'])

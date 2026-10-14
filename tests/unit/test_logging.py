@@ -137,3 +137,108 @@ def test_unwritable_log_dir_falls_back_to_console(tmp_path: Path) -> None:
 
     assert init_logging("DEBUG", log_file=blocked / "helper.log") is None
     assert log_file() is None
+
+
+def test_purge_old_logs_keeps_recent_and_removes_stale(fake_root: Path) -> None:
+    """只留最近 7 天：过期文件删掉，新文件留着（用户报"日志占地方"时靠这条）。"""
+    import os
+    import time
+
+    from app.core import paths
+    from app.core.logging import purge_old_logs
+
+    logs = paths.logs_dir()
+    logs.mkdir(parents=True, exist_ok=True)
+    stale = logs / "console-2026-01-01.log"
+    fresh = logs / "console-2026-10-14.log"
+    stale.write_text("很久以前", encoding="utf-8")
+    fresh.write_text("刚刚", encoding="utf-8")
+    old = time.time() - 9 * 86400
+    os.utime(stale, (old, old))
+
+    assert purge_old_logs() == 1
+    assert not stale.exists(), "超过 7 天的要删"
+    assert fresh.exists(), "7 天内的不能动"
+
+
+def test_purge_old_logs_counts_nothing_when_all_fresh(fake_root: Path) -> None:
+    """都是新的：返回 0，一个都不删。"""
+    from app.core import paths
+    from app.core.logging import purge_old_logs
+
+    logs = paths.logs_dir()
+    logs.mkdir(parents=True, exist_ok=True)
+    (logs / "console-2026-10-14.log").write_text("新的", encoding="utf-8")
+
+    assert purge_old_logs() == 0
+
+
+def test_sniff_reports_restricted_when_window_never_rendered(fake_root: Path) -> None:
+    """受限嗅探：原生输出里有特征行、且上次"界面服务就绪"之后没有"界面已渲染" → 给出结论。"""
+    from app.core import paths
+    from app.core.logging import LOG_FILENAME, console_file, sniff_restricted_hint
+
+    logs = paths.logs_dir()
+    logs.mkdir(parents=True, exist_ok=True)
+    console_file().write_text(
+        "[123:456:ERROR:gpu_channel_manager.cc:920] Failed to create GLES3 context\n"
+        "[123:456:FATAL::82] Check failed: . : 拒绝访问。 (0x5)\n",
+        encoding="utf-8",
+    )
+    (logs / LOG_FILENAME).write_text(
+        "2026-10-14 22:00:00 | INFO | __main__:193 | 界面服务就绪：http://127.0.0.1:1/\n",
+        encoding="utf-8",
+    )
+
+    hint = sniff_restricted_hint()
+    assert hint is not None
+    assert "受限环境" in hint and "没有出现「界面已渲染」" in hint
+
+
+def test_sniff_stays_quiet_without_markers(fake_root: Path) -> None:
+    """没有特征行就不要乱猜（干净的日志不该冒出"疑似受限"）。"""
+    from app.core import paths
+    from app.core.logging import LOG_FILENAME, console_file, sniff_restricted_hint
+
+    logs = paths.logs_dir()
+    logs.mkdir(parents=True, exist_ok=True)
+    console_file().write_text("一切正常\n", encoding="utf-8")
+    (logs / LOG_FILENAME).write_text("界面服务就绪：…\n界面已渲染（根节点到位）\n", encoding="utf-8")
+
+    assert sniff_restricted_hint() is None
+
+
+def test_run_id_is_in_every_line(tmp_path: Path) -> None:
+    """run id 要进每一行：把"一次启动"的所有记录串起来（用户说"刚才那次"才筛得出来）。"""
+    from app.core.logging import RUN_ID
+
+    target = tmp_path / "run.log"
+    init_logging("DEBUG", log_file=target, console_level="ERROR")
+    logger.info("带 run id 的一行")
+
+    assert RUN_ID in _read(target)
+
+
+def test_rotation_triggers_on_size_and_new_day(tmp_path: Path) -> None:
+    """轮转判据：跨天、或单文件超过上限都要轮（不然一个死循环能把磁盘刷满）。"""
+    import os
+    import time
+
+    from app.core.logging.setup import ROTATION_SIZE_MB, _needs_rotation
+
+    class _File:
+        def __init__(self, path: Path) -> None:
+            self.name = str(path)
+
+    small = tmp_path / "small.log"
+    small.write_text("x", encoding="utf-8")
+    assert _needs_rotation("", _File(small)) is False
+
+    big = tmp_path / "big.log"
+    with open(big, "wb") as handle:
+        handle.truncate(ROTATION_SIZE_MB * 1024 * 1024)
+    assert _needs_rotation("", _File(big)) is True, "超过上限要轮转"
+
+    yesterday = time.time() - 86400
+    os.utime(small, (yesterday, yesterday))
+    assert _needs_rotation("", _File(small)) is True, "跨天要轮转"

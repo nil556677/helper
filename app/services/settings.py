@@ -1,6 +1,9 @@
-"""设置相关的编排：读写引导配置、汇总数据概览、打开目录。
+"""设置相关的编排：汇总数据概览、读版本、打开目录。
 
 界面只认这里返回的普通数据（dict / 字符串），不碰 core 内部细节（技术方案 §5.1 红线 2）。
+
+**这里没有日志级别的读写**：那个旋钮只由 `config.json` 给，界面不提供（§10.4 第 12 条），
+所以 2026-10 把 `log_level()` / `save_log_level()` 一并删了（不留死代码）。
 """
 
 from __future__ import annotations
@@ -11,45 +14,9 @@ from typing import Any
 from loguru import logger
 
 from app.core import paths
-from app.core.config import access
-from app.core.config.schema import BootstrapConfig
 from app.core.db import schema
 from app.core.db.connection import get_connection
 from app.core.logging import LOG_FILENAME
-
-#: 日志级别选项（与 app.core.config.schema 的 Literal 一致）。
-LOG_LEVELS: tuple[str, ...] = ("DEBUG", "INFO", "WARNING", "ERROR")
-
-
-def log_level() -> str:
-    """当前生效的日志级别（来自引导配置 config.json）。"""
-    return access.load().log_level
-
-
-def save_log_level(level: str) -> None:
-    """保存日志级别，并让它**立即**生效（不重启）。
-
-    **"已保存"与"已生效"分开对待**：配置写盘失败才算失败（异常抛出去，界面提示"保存失败"）；
-    重建日志 sink 失败只告警——配置已经落盘了，报成"保存失败"会让用户反复点。
-
-    参数：
-        level: ``DEBUG`` / ``INFO`` / ``WARNING`` / ``ERROR`` 之一。
-    异常：
-        OSError: 配置文件写不进去。
-        pydantic.ValidationError: 值非法（界面只从固定选项里选，正常不会发生）。
-    """
-    current = access.load()
-    # 走一次完整校验再落盘：避免"界面传了非法值、直接写进配置文件"。
-    access.save(BootstrapConfig(log_level=level, data_dir=current.data_dir))  # type: ignore[arg-type]
-
-    try:
-        from app.core.logging import init_logging
-
-        init_logging(level)
-    except OSError as exc:  # noqa: BLE001 - 允许失败：配置已落盘，不该报成"保存失败"
-        logger.warning("日志级别已保存，但重建日志 sink 失败：{}", exc)
-        return
-    logger.info("日志级别已切换为 {}", level)
 
 
 def data_overview() -> dict[str, Any]:
