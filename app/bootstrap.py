@@ -18,6 +18,9 @@
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 from loguru import logger
 
 from app.core import paths
@@ -28,6 +31,21 @@ from app.core.logging import init_logging, install_exception_hooks, is_initializ
 _ready = False
 
 
+def pin_temp_dir() -> Path:
+    """把**整个进程**的临时目录钉进 `data/tmp/`，返回该目录。
+
+    为什么必须做（本机实测）：`tempfile.gettempdir()` 在 TEMP/TMPDIR 都不可用时**会退回"当前工作目录"**
+    —— 本机就是仓库根。后果是"任何用 tempfile 的库都会往仓库根里丢东西"：实测出现过
+    ① NiceGUI 测试装置的 `nicegui-test-storage-*` 空目录（9 个，还因为工作区根上的删除保护事后删不掉）；
+    ② jieba 的前缀词典缓存 `jieba.cache`（8.8 MB）。
+    钉住之后这些产物统一落在 `data/tmp/`（跟着数据目录走，测试隔离也顺带生效）。
+    """
+    target = Path(paths.data_dir()) / "tmp"
+    target.mkdir(parents=True, exist_ok=True)
+    tempfile.tempdir = str(target)
+    return target
+
+
 def ensure_ready() -> None:
     """保证运行前提（幂等：重复调用几乎零开销）。
 
@@ -36,6 +54,13 @@ def ensure_ready() -> None:
         sqlite3.Error / RuntimeError: 库损坏、迁移缺脚本、库版本比程序新。
     """
     global _ready
+
+    # 0. 临时目录**每次调用都要钉**（不能放进下面的幂等区间）：它跟着 `data_dir()` 走，
+    #    而测试里每个用例的数据目录都不一样——只钉一次的话，后面用到的就是上一个用例
+    #    已经被删掉的路径（实测：`tempfile.mkdtemp` 直接 FileNotFoundError，还会连累别的用例）。
+    #    这件事只花一次 mkdir + 一次赋值，不用省。
+    pin_temp_dir()
+
     if _ready:
         return
 

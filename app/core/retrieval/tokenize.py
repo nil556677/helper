@@ -16,8 +16,11 @@ SQLite 的 ``unicode61`` 分词器把连续汉字当成一个 token——"合同
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 import jieba
+
+from app.core import paths
 
 _lock = threading.Lock()
 _tokenizer: jieba.Tokenizer | None = None
@@ -30,6 +33,14 @@ def tokenizer() -> jieba.Tokenizer:
         with _lock:
             if _tokenizer is None:
                 instance = jieba.Tokenizer()
+                # 把分词缓存（前缀词典，约 9 MB）钉进 data/。
+                # 为什么必须钉：jieba 的缓存路径是 `os.path.join(self.tmp_dir or tempfile.gettempdir(), name)`，
+                # 而 **`tempfile.gettempdir()` 在 TEMP/TMPDIR 都不可用时会退回"当前工作目录"** —— 于是仓库根里
+                # 会凭空多出一个 `jieba.cache`（和 NiceGUI 测试装置的 `nicegui-test-storage-*` 是同一类坑）。
+                # 钉进 data/ 还顺带得到：换 `HELPER_DATA_DIR` 就换缓存、测试之间互不干扰。
+                cache_dir = paths.data_dir()
+                Path(cache_dir).mkdir(parents=True, exist_ok=True)
+                instance.tmp_dir = str(cache_dir)
                 instance.initialize()
                 _tokenizer = instance
     return _tokenizer
