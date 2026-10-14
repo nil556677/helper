@@ -192,6 +192,12 @@ _install_log_channels()
 from app.core.logging import console_file, console_output_file, log_file
 from loguru import logger
 
+# 关键断言：替身流必须**自己 dup 了 fd**（不能直接包 fd 1/2）——否则原对象被回收时
+# close() 会把它关掉，那个 fd 立刻被 loguru 的文件 sink 拿走（实测：print 的输出跑进主日志、
+# 退出码变成 120）。
+assert sys.stdout.fileno() not in (1, 2), sys.stdout.fileno()
+assert sys.stderr.fileno() not in (1, 2), sys.stderr.fileno()
+
 print("{MARK} console-less-print", flush=True)
 logger.info("{MARK} console-less-logged")
 

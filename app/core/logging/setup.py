@@ -504,23 +504,24 @@ def _broken_standard_fds() -> set[int]:
 
 
 def _ensure_valid_streams(broken: set[int]) -> None:
-    """保证 ``sys.stdout`` / ``sys.stderr`` 可用且是 UTF-8。
+    """把 ``sys.stdout`` / ``sys.stderr`` 换成绑定到**我们自己的 dup fd** 的 UTF-8 流。
 
-    - **本来就好用的**：原地 ``reconfigure`` 成 UTF-8 就够。不能换对象——loguru 的控制台 sink
-      在初始化时就抓住了这个对象，换掉它就会用旧编码（GBK）写 → console 文件里中文全乱码。
-    - **本来就坏的**（双击启动、没有控制台）：只能换替身流，而且替身流必须**自己 dup 一个 fd**。
-      实测过直接 ``os.fdopen(1, ...)`` 包 fd 1 的后果：原对象被回收时 ``close()`` 把 fd 1 关掉，
-      fd 立刻被 loguru 的文件 sink 拿走 → ``print`` 的输出跑进 ``helper.log``，退出码还会变成 120。
+    **无条件换，不做"能 reconfigure 就复用"**——这一条是被线上故障逼出来的：
+
+    Windows 上标准流对象内部缓存了**进程启动那一刻的 OS 句柄**。双击启动（没有控制台）时那是无效句柄，
+    可是 ``os.dup2`` 把 CRT fd 接到文件上之后，``os.fstat(1)`` 会报成功、``reconfigure`` 也不报错，
+    **唯独 write 仍然失败**（``OSError: [WinError 6] 句柄无效``）。后果实测过：
+    NiceGUI 的 ``welcome.collect_urls()`` 里那句 ``print('NiceGUI ready to go on ...')`` 抛错 →
+    lifespan 启动失败 → ``uvicorn sys.exit(3)`` → 表现正是「界面服务 20 秒没起来 + 窗口白板」。
+
+    替身流必须**自己 ``os.dup`` 一个 fd**（不能直接包 fd 1/2）：否则原对象被回收时 ``close()`` 会把
+    fd 1 关掉，那个 fd 立刻被 loguru 的文件 sink 拿走 → ``print`` 的输出跑进主日志、退出码还会变成 120。
+
+    编码统一 UTF-8 之后，调用方还要**重建 loguru 的控制台 sink**（否则它还握着旧流，用 GBK 写 → 乱码）。
     """
     global _stdout_keepalive, _stderr_keepalive
 
-    for index, current in ((1, sys.stdout), (2, sys.stderr)):
-        if index not in broken and current is not None:
-            try:
-                current.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
-                continue
-            except (AttributeError, OSError, ValueError):
-                pass
+    for index in (1, 2):
         replacement = os.fdopen(
             os.dup(index), "w", encoding="utf-8", errors="replace", buffering=1
         )
@@ -551,6 +552,8 @@ def capture_native_output(target: Path | None = None) -> Path | None:
 
     path = target or console_file()
     broken = _broken_standard_fds()  # 必须在 dup2 之前探（见 _broken_standard_fds 的说明）
+    if broken:
+        logger.warning("启动时标准句柄就是坏的（fd {}）——多半是双击启动（没有控制台）", sorted(broken))
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         handle = open(path, "ab", buffering=0)  # noqa: SIM115 - 这个句柄要和进程同寿
