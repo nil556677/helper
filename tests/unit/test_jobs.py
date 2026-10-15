@@ -596,3 +596,25 @@ def test_purge_finished_keeps_recent(jobs_db: None) -> None:
     removed = store.purge_finished(now=1000.0 + store.KEEP_FINISHED_DAYS * 86400.0 + 1)
     assert removed == 0  # 只有 4 条，没到"至少留 200 条"之外
     assert len(api.list_jobs()) == 4
+
+
+def test_count_jobs_can_filter_by_finish_time(jobs_db: None) -> None:
+    """按结束时间过滤：退出收尾行靠它统计「本次运行完成了多少」。"""
+    before = 1_700_000_000.0
+    first = _enqueue_at(before)
+    job = _claim(now=before)
+    assert job is not None
+    store.finish(first, note="跑完了", now=before + 10)
+
+    second = _enqueue_at(before + 100)
+    claimed = _claim(now=before + 100)
+    assert claimed is not None
+    store.fail(second, error="坏了", retryable=False, now=before + 110)
+
+    # 全部（不限时间）
+    assert store.count_jobs(statuses=("done",), finished_since=0) >= 1
+    # 只看"运行开始之后"结束的：第一个在这次运行之前，第二个在这次之内
+    assert store.count_jobs(statuses=("done",), finished_since=before + 50) == 0
+    assert store.count_jobs(statuses=("failed",), finished_since=before + 50) == 1
+    # 没有结束时间的任务不该被算进来（finished_at IS NULL）
+    assert store.count_jobs(statuses=("pending",), finished_since=0) == 0

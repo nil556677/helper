@@ -352,3 +352,48 @@ def test_purge_removes_old_daily_logs_and_keeps_todays(fake_root: Path) -> None:
     assert purge_old_logs() == 1
     assert not old_day.exists()
     assert today.exists()
+
+
+def test_snapshot_reports_log_and_database_sizes(fake_root: Path) -> None:
+    """快照要报「日志目录占用」与「数据库大小」——排查「怎么这么占地方」时先用它。
+
+    只统计 logs/ 一层与数据库文件本身，**不递归 data/**（那底下可能有几十万向量，会拖慢启动）。
+    """
+    from app.core import paths
+    from app.core.logging import environment_snapshot
+
+    logs_dir = paths.logs_dir()
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "helper-2026-10-14.log").write_text("x" * 2048, encoding="utf-8")
+    paths.db_file().parent.mkdir(parents=True, exist_ok=True)
+    paths.db_file().write_bytes(b"y" * 4096)
+
+    info = environment_snapshot()
+
+    assert info["日志目录占用"].endswith("KB"), info["日志目录占用"]
+    assert info["数据库大小"].endswith("KB"), info["数据库大小"]
+
+
+def test_check_disk_space_warns_only_when_low(fake_root: Path) -> None:
+    """磁盘检查：空间够就不出声，不够才给一句人话。"""
+    from app.core import paths
+    from app.core.logging import check_disk_space
+
+    target = paths.data_dir()
+    target.mkdir(parents=True, exist_ok=True)
+
+    assert check_disk_space(target, min_free_mb=1) is None
+    warning = check_disk_space(target, min_free_mb=10**9)  # 要求 1000 TB 空闲 → 必然告警
+
+    assert warning is not None
+    assert "磁盘剩余空间不足" in warning
+
+
+def test_human_size_units() -> None:
+    """大小格式化：B / KB / MB / GB 四档。"""
+    from app.core.logging.setup import _human_size
+
+    assert _human_size(512) == "512 B"
+    assert _human_size(2048).endswith("KB")
+    assert _human_size(5 * 1024**2).endswith("MB")
+    assert _human_size(3 * 1024**3).endswith("GB")

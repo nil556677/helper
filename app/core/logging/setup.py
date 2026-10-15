@@ -39,6 +39,7 @@ import asyncio
 import logging
 import os
 import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -60,6 +61,9 @@ LOG_FILENAME = "helper.log"
 #: 原生输出（fd 1+2）的当天文件名前缀，实际是 ``console-YYYY-MM-DD.log``。
 CONSOLE_PREFIX = "console-"
 
+#: 启动时要求的最小剩余磁盘空间（MB）：低于它就在日志里告警。
+MIN_FREE_MB = 200
+
 #: 保留天数（技术方案 §10.2：只留最近 7 天）。
 RETENTION_DAYS = 7
 
@@ -73,7 +77,7 @@ LOGS_TOTAL_LIMIT_MB = 200
 
 #: 文件 sink 的格式。loguru 对 ``colorize=False`` 的 sink 会自动去掉颜色标签。
 #: ``{extra[run]}`` 是本次运行的 run id（由 :func:`new_run_id` 生成，patcher 保证一定有值）。
-LOG_FORMAT = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {extra[run]} | {name}:{line} | {message}"
+LOG_FORMAT = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {extra[run]} | {extra[src]}:{extra[at]} | {message}"
 
 #: 本次运行的短 id：把"一次启动"的所有记录串起来（用户报"刚才那次"，我们能一眼筛出来）。
 RUN_ID = uuid.uuid4().hex[:6]
@@ -155,6 +159,11 @@ def _patch(record: object) -> None:
     if isinstance(message, str):
         record["message"] = redact(message)  # type: ignore[index]
     record["extra"].setdefault("run", RUN_ID)  # type: ignore[index]
+    # 来源兜底：loguru 的 {name}/{line} 在"记录不是 Python 帧产生"时是 None（截获来的第三方日志、
+    # Qt 回调都是这种），直接打印就成了「None:0」这种没法看的东西。这里给个兜底值，
+    # 真正知道来源的地方（stdlib 桥、Qt 处理器）会 bind 覆盖它。
+    record["extra"].setdefault("src", record["name"] or "?")  # type: ignore[index]
+    record["extra"].setdefault("at", record["line"] or 0)  # type: ignore[index]
 
 
 def _needs_rotation(message: str, file: object) -> bool:
@@ -415,7 +424,10 @@ class InterceptHandler(logging.Handler):
         while frame is not None and frame.f_code.co_filename == logging.__file__:
             frame = frame.f_back
             depth += 1
-        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
+        # bind 真实来源：截获来的记录没有 Python 帧，{name}/{line} 会是 None（显示成 None:0）
+        logger.bind(src=record.name, at=record.lineno).opt(
+            depth=depth, exception=record.exc_info
+        ).log(level, record.getMessage())
 
 
 def install_stdlib_bridge(level: int = logging.WARNING) -> InterceptHandler:
@@ -668,6 +680,48 @@ def _has_console() -> str:
         return "未知"
 
 
+def _file_size(path: Path) -> int:
+    """文件大小（字节）；读不到算 0。"""
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _dir_size(directory: Path) -> int:
+    """目录下**一层**文件的总大小（不递归：``data/`` 可能有几十万向量，递归会拖慢启动）。"""
+    try:
+        return sum(_file_size(item) for item in directory.iterdir() if item.is_file())
+    except OSError:
+        return 0
+
+
+def _human_size(size: int) -> str:
+    """人读的大小（KB / MB / GB）。"""
+    for unit, scale in (("GB", 1024**3), ("MB", 1024**2), ("KB", 1024)):
+        if size >= scale:
+            return f"{size / scale:.1f} {unit}"
+    return f"{size} B"
+
+
+def check_disk_space(path: Path, min_free_mb: int = MIN_FREE_MB) -> str | None:
+    """看磁盘剩余空间够不够；返回告警文本（够用时 None）。
+
+    为什么要有：日志写不进去时 loguru 只会把错误打到 stderr（``catch=True``），而在同一个满盘上
+    连错误都写不下——于是"日志突然没了"完全无迹可寻。启动时先看一眼，能提前告诉用户。
+    """
+    try:
+        usage = shutil.disk_usage(path)
+    except OSError:
+        return None
+    if usage.free < min_free_mb * 1024 * 1024:
+        return (
+            f"磁盘剩余空间不足：{path} 所在盘只剩 {_human_size(usage.free)}"
+            f"（低于 {min_free_mb} MB），日志与数据可能写不进去"
+        )
+    return None
+
+
 def environment_snapshot(extra: dict[str, str] | None = None) -> dict[str, str]:
     """收集"这次是在什么环境里跑的"（技术方案 §10.3）。
 
@@ -688,6 +742,8 @@ def environment_snapshot(extra: dict[str, str] | None = None) -> dict[str, str]:
         "数据目录": str(paths.data_dir()),
         "日志目录": str(paths.logs_dir()),
         "Chromium 参数": os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "—"),
+        "日志目录占用": _human_size(_dir_size(paths.logs_dir())),
+        "数据库大小": _human_size(_file_size(paths.db_file())),
     }
     info.update(extra or {})
     return info

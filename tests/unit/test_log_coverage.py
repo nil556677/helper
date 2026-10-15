@@ -36,6 +36,7 @@ result_path = Path(sys.argv[1])
 ensure_ready()
 
 # 真实入口装钩子的那段（fd 捕获 / stdlib 桥 / asyncio 策略 / Qt 消息）
+from app.core.logging import RUN_ID, console_file, console_output_file, log_file
 from app.__main__ import _install_log_channels
 
 _install_log_channels()
@@ -84,6 +85,7 @@ result_path.write_text(
     json.dumps({{
         "main_log": str(log_file()),
         "console": str(console_output_file() or console_file()),
+        "run": RUN_ID,
     }}), encoding="utf-8"
 )
 print(f"{{MARK}} child-done")
@@ -117,10 +119,12 @@ def coverage_run(tmp_path: Path) -> dict[str, str]:
         "main": Path(reported["main_log"]),
         "console": Path(reported["console"]),
     }
-    return {
+    texts = {
         key: (value.read_text(encoding="utf-8", errors="replace") if value.exists() else "")
         for key, value in paths.items()
     }
+    texts["run"] = str(reported["run"])  # 断言"不该出现什么"时只筛本次运行的行
+    return texts
 
 
 @pytest.mark.parametrize(
@@ -189,7 +193,7 @@ from app.__main__ import _install_log_channels
 
 _install_log_channels()
 
-from app.core.logging import console_file, console_output_file, log_file
+from app.core.logging import RUN_ID, console_file, console_output_file, log_file
 from loguru import logger
 
 # 关键断言：替身流必须**自己 dup 了 fd**（不能直接包 fd 1/2）——否则原对象被回收时
@@ -201,10 +205,15 @@ assert sys.stderr.fileno() not in (1, 2), sys.stderr.fileno()
 print("{MARK} console-less-print", flush=True)
 logger.info("{MARK} console-less-logged")
 
-# 把本进程实际用的日志路径回报给父进程：父进程那边可能被界面测试的会话装置换了路径
+# 把本进程实际用的日志路径与 run id 回报给父进程：父进程那边可能被界面测试的会话装置换了路径，
+# 而且主日志是**按天累积**的，断言"不该出现什么"时必须只筛本次运行的行
 Path(sys.argv[1]).write_text(
     json.dumps(
-        {{"main_log": str(log_file()), "console": str(console_output_file() or console_file())}}
+        {{
+            "main_log": str(log_file()),
+            "console": str(console_output_file() or console_file()),
+            "run": RUN_ID,
+        }}
     ),
     encoding="utf-8",
 )
@@ -236,3 +245,17 @@ def test_console_less_startup_survives(tmp_path: Path) -> None:
 
     main_log = Path(reported["main_log"]).read_text(encoding="utf-8", errors="replace")
     assert f"{MARK} console-less-logged" in main_log
+
+
+def test_bridged_records_do_not_print_none_zero(coverage_run: dict[str, str]) -> None:
+    """截获来的记录不能显示成「None:0」。
+
+    那些记录不是 Python 帧产生的（stdlib 桥、Qt 回调），loguru 的 {name}/{line} 会是 None；
+    格式改用 {extra[src]}:{extra[at]} 兜底之后，这里应该看到真实来源（logger 名 / js / Qt）。
+    """
+    run_id = coverage_run["run"]
+    mine = [line for line in coverage_run["main"].splitlines() if f"| {run_id} |" in line]
+
+    assert mine, "没筛出本次运行的行"
+    offenders = [line for line in mine if "None:0" in line]
+    assert not offenders, "这些行没带上来源：\n" + "\n".join(offenders[:5])

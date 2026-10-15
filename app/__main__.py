@@ -23,6 +23,7 @@ Windows 上要经 pythonnet 加载 .NET，本机上 CLR 加载直接失败
 
 from __future__ import annotations
 
+import atexit
 import os
 import socket
 import sys
@@ -64,6 +65,58 @@ RELOAD_DELAY_MS = 800
 STARTUP_ERROR_FILE = "startup-error.log"
 
 
+#: 收尾行只记一次（Qt 的 aboutToQuit 与 atexit 都会来叫它）。
+_run_summary_logged = False
+
+
+def _log_run_summary(started_monotonic: float, started_wall: float) -> None:
+    """记一行「本次运行结束」（幂等）。
+
+    **有这一行才说明是用户正常关窗**；进程崩掉时不会有——这是日志里唯一能区分
+    「正常退出」与「挂掉」的信号（以前只能靠有没有「已记住窗口几何」反推）。
+
+    除了 Qt 的 ``aboutToQuit``，还挂到 ``atexit``：现实里退出可能走别的路径
+    （实测：从外部发 WM_CLOSE 到控制台窗口时 Qt 的退出序列根本不参与），这行不该因此丢掉。
+    ``atexit`` 只在**正常结束**时跑，崩溃不会触发——正好符合我们要的语义。
+    """
+    global _run_summary_logged
+    if _run_summary_logged:
+        return
+    _run_summary_logged = True
+    try:
+        from loguru import logger
+
+        from app.core.jobs import store as jobs_store
+        from app.core.logging import RUN_ID
+
+        done = jobs_store.count_jobs(statuses=("done",), finished_since=started_wall)
+        failed = jobs_store.count_jobs(statuses=("failed",), finished_since=started_wall)
+        logger.info(
+            "本次运行结束：run={} 时长 {:.1f} 分钟；任务完成 {} 条、失败 {} 条",
+            RUN_ID,
+            (time.monotonic() - started_monotonic) / 60,
+            done,
+            failed,
+        )
+    except Exception as exc:  # noqa: BLE001 - 统计失败不该挡住退出
+        from loguru import logger
+
+        logger.warning("运行收尾统计失败（不影响退出）：{}", exc)
+
+
+def _js_log_level(enum_name: str) -> str:
+    """浏览器控制台级别 → 日志级别。
+
+    ``InfoMessageLevel`` 降到 DEBUG：前端 ``console.log`` 的量很大，压到 DEBUG 之后默认级别
+    （INFO）就不记了，只留真正要看的 warning / error。
+    """
+    return {
+        "InfoMessageLevel": "DEBUG",
+        "WarningMessageLevel": "WARNING",
+        "ErrorMessageLevel": "ERROR",
+    }.get(enum_name, "DEBUG")
+
+
 def _install_qt_message_handler() -> None:
     """把 Qt 自己的 warning/critical 送进日志（技术方案 §10.1 的"渲染"层）。
 
@@ -83,9 +136,28 @@ def _install_qt_message_handler() -> None:
 
     def handler(mode: QtMsgType, context: object, message: str) -> None:  # noqa: ARG001
         level = levels.get(mode, "INFO")
-        qt_logger.opt(depth=1).log(level, "Qt: {}", message)
+        qt_logger.bind(src="Qt", at=0).opt(depth=1).log(level, "Qt: {}", message)
 
     qInstallMessageHandler(handler)
+
+
+def _logging_page_class() -> type:
+    """造一个把**浏览器控制台消息**送进日志的 QWebEnginePage 子类。
+
+    为什么需要：界面是跑在 Chromium 里的，前端自己的报错（脚本异常、Vue 警告、资源 404）
+    只在浏览器控制台里——服务端一行都看不到。表现就是"界面行为怪怪的，日志里干干净净"。
+    """
+    from loguru import logger as js_logger
+    from PySide6.QtWebEngineCore import QWebEnginePage
+
+    class LoggingPage(QWebEnginePage):
+        def javaScriptConsoleMessage(self, level, message, line_number, source_id) -> None:  # type: ignore[no-untyped-def]
+            name = getattr(level, "name", None) or str(level).rsplit(".", 1)[-1]
+            js_logger.bind(src=source_id or "js", at=line_number).opt(depth=1).log(
+                _js_log_level(name), "浏览器控制台：{}", message
+            )
+
+    return LoggingPage
 
 
 def _install_log_channels() -> None:
@@ -247,6 +319,9 @@ def _show_box(icon: str, title: str, message: str) -> None:
 
 def main() -> int:
     """启动桌面窗口（阻塞到窗口关闭）。"""
+    run_started_monotonic = time.monotonic()
+    run_started_wall = time.time()
+    atexit.register(_log_run_summary, run_started_monotonic, run_started_wall)
     root = Path(__file__).resolve().parent.parent
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
@@ -364,6 +439,9 @@ def main() -> int:
 
     view = QWebEngineView()
     view.setWindowTitle('helper')
+    # 前端报错也要进日志（见 _logging_page_class 的说明）；页面必须用同一个 profile，
+    # 否则前面设好的缓存/存储路径就白设了。
+    view.setPage(_logging_page_class()(profile, view))
 
     def on_render_process_gone(status: object, exit_code: int) -> None:
         """渲染进程结束：这是"白板"的一种真成因，必须明确留痕（§10.1「渲染」层）。
@@ -401,6 +479,8 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001 - 允许失败：任务没收完不该挡住退出
             logger.warning('任务系统停止失败：{}', exc)
         remember_geometry()
+        # 收尾行（幂等；atexit 也会来叫它，见 _log_run_summary）
+        _log_run_summary(run_started_monotonic, run_started_wall)
         # 关连接前把 WAL 合并回主库：否则"只拷 helper.db"的备份会丢最近的写入（§9）
         close_thread_connection(checkpoint_first=True)
 

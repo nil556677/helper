@@ -509,8 +509,17 @@ def get_job(job_id: int) -> Job | None:
     return Job.from_row(row) if row else None
 
 
-def count_jobs(*, statuses: tuple[str, ...] | None = None, kind: str | None = None) -> int:
-    """数任务（分页要用的总数；走索引，别用"查出来再 len()"）。"""
+def count_jobs(
+    *,
+    statuses: tuple[str, ...] | None = None,
+    kind: str | None = None,
+    finished_since: float | None = None,
+) -> int:
+    """数任务（分页要用的总数；走索引，别用"查出来再 len()"）。
+
+    参数：
+        finished_since: 只要**在这个时刻之后结束**的任务（退出收尾行用它统计"本次运行完成了多少"）。
+    """
     where: list[str] = []
     params: list[Any] = []
     if statuses:
@@ -519,6 +528,9 @@ def count_jobs(*, statuses: tuple[str, ...] | None = None, kind: str | None = No
     if kind:
         where.append("kind = ?")
         params.append(kind)
+    if finished_since is not None:
+        where.append("finished_at IS NOT NULL AND finished_at >= ?")
+        params.append(finished_since)
     clause = f"WHERE {' AND '.join(where)}" if where else ""
     row = get_connection().execute(f"SELECT count(*) AS n FROM jobs {clause}", tuple(params)).fetchone()
     return int(row["n"]) if row else 0

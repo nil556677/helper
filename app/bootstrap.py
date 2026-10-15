@@ -33,6 +33,7 @@ from app.core import paths
 from app.core.config import access
 from app.core.db import schema
 from app.core.logging import (
+    check_disk_space,
     init_logging,
     install_exception_hooks,
     is_initialized,
@@ -106,6 +107,9 @@ def ensure_ready() -> None:
     logger.info("运行路径：{}", "；".join(f"{k}={v}" for k, v in paths.describe().items()))
     # 环境快照：版本 / flags / TEMP / 目录，出问题时先看这一段（技术方案 §10.3）
     log_environment_snapshot()
+    space_warning = check_disk_space(paths.data_dir())
+    if space_warning:
+        logger.warning(space_warning)
     logger.info("引导配置：{}（日志级别 {}）", config_path, config.log_level)
     logger.info("数据库：{}（schema v{}）", paths.db_file(), version)
 
