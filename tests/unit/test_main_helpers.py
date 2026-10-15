@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 
 def test_js_log_level_mapping() -> None:
     """浏览器控制台级别 → 日志级别：Info 压到 DEBUG（前端 console.log 量太大）。

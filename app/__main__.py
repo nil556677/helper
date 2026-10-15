@@ -254,6 +254,8 @@ def _probe_bind(host: str, port: int) -> str:
 
 def _wait_http(url: str, timeout_s: float = SERVER_WAIT_S, *, report_every_s: float = 5.0) -> bool:
     """等界面服务真的返回 HTTP 200（不是只等端口）。"""
+    from loguru import logger  # noqa: PLC0415 - 与本模块其它地方一致：惰性导入
+
     deadline = time.monotonic() + timeout_s
     started = time.monotonic()
     next_report = report_every_s
