@@ -33,6 +33,14 @@ from app.bootstrap import ensure_ready
 MARK = "{MARK}"
 result_path = Path(sys.argv[1])
 
+# 把安装目录指到 .tmp/ 下：否则子进程会把测试记录写进**真实**的 logs/helper-<日期>.log，
+# 用户翻日志时会看到一堆 COVER-71C4 的假错误（实测污染了 80 多行）。
+from app.core import paths
+
+_TEST_ROOT = ROOT / ".tmp" / "log-coverage-root"
+_TEST_ROOT.mkdir(parents=True, exist_ok=True)
+paths.project_root = lambda: _TEST_ROOT  # type: ignore[assignment]
+
 ensure_ready()
 
 # 真实入口装钩子的那段（fd 捕获 / stdlib 桥 / asyncio 策略 / Qt 消息）
@@ -179,6 +187,14 @@ ROOT = Path(r"{ROOT}")
 sys.path.insert(0, str(ROOT))
 
 from app.bootstrap import ensure_ready
+
+# 把安装目录指到 .tmp/ 下：否则子进程会把测试记录写进**真实**的 logs/helper-<日期>.log，
+# 用户翻日志时会看到一堆 COVER-71C4 的假错误（实测污染了 80 多行）。
+from app.core import paths
+
+_TEST_ROOT = ROOT / ".tmp" / "log-coverage-root"
+_TEST_ROOT.mkdir(parents=True, exist_ok=True)
+paths.project_root = lambda: _TEST_ROOT  # type: ignore[assignment]
 
 ensure_ready()
 

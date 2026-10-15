@@ -470,6 +470,13 @@ def _asyncio_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -
     """事件循环里的未处理异常 → 日志（含"Task exception was never retrieved"这一类）。"""
     exception = context.get("exception")
     message = str(context.get("message") or "asyncio 未处理异常")
+    # 已知噪音，降到 DEBUG：Windows 上对端（浏览器/渲染进程）突然断开连接时，
+    # ProactorEventLoop 会在 _call_connection_lost 里抛 ConnectionResetError。
+    # 窗口关闭、页面重载都会触发它，属于正常现象；渲染进程真崩了我们另有
+    # renderProcessTerminated 记着（见 __main__），所以这里不必占 ERROR。
+    if isinstance(exception, ConnectionResetError) or "_call_connection_lost" in message:
+        logger.opt(exception=exception).debug("事件循环里的连接重置（正常现象）：{}", message)
+        return
     if isinstance(exception, BaseException):
         logger.opt(exception=exception).error("事件循环里未捕获异常：{}", message)
     else:

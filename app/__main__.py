@@ -104,6 +104,31 @@ def _log_run_summary(started_monotonic: float, started_wall: float) -> None:
         logger.warning("运行收尾统计失败（不影响退出）：{}", exc)
 
 
+#: Qt 消息级别映射（按枚举名，便于测试）。
+_QT_LEVELS: dict[str, str] = {
+    "QtDebugMsg": "DEBUG",
+    "QtInfoMsg": "INFO",
+    "QtWarningMsg": "WARNING",
+    "QtCriticalMsg": "ERROR",
+    "QtFatalMsg": "CRITICAL",
+}
+
+#: **已知无害、几乎每次启动都会出现**的 Qt 消息：我们强制软件渲染（``--disable-gpu``），
+#: 这类消息是必然结果（渲染本身没问题——日志里那句「界面已渲染」就是证据）。
+#: 降到 DEBUG：不丢证据，但默认级别（INFO）下不再占地方、不再淹没真报错。
+#: **只按整条文本精确匹配**，不做前缀/模糊匹配——模糊匹配会误伤真正的告警。
+_QT_KNOWN_HARMLESS: frozenset[str] = frozenset({
+    "GPUInfo not initialized on GpuInfoUpdate",
+})
+
+
+def _qt_message_level(mode_name: str, message: str) -> str:
+    """Qt 消息 → 日志级别（纯逻辑，便于测试）。"""
+    if message.strip() in _QT_KNOWN_HARMLESS:
+        return "DEBUG"
+    return _QT_LEVELS.get(mode_name, "INFO")
+
+
 def _js_log_level(enum_name: str) -> str:
     """浏览器控制台级别 → 日志级别。
 
@@ -126,17 +151,11 @@ def _install_qt_message_handler() -> None:
     from loguru import logger as qt_logger
     from PySide6.QtCore import QtMsgType, qInstallMessageHandler
 
-    levels = {
-        QtMsgType.QtDebugMsg: "DEBUG",
-        QtMsgType.QtInfoMsg: "INFO",
-        QtMsgType.QtWarningMsg: "WARNING",
-        QtMsgType.QtCriticalMsg: "ERROR",
-        QtMsgType.QtFatalMsg: "CRITICAL",
-    }
-
     def handler(mode: QtMsgType, context: object, message: str) -> None:  # noqa: ARG001
-        level = levels.get(mode, "INFO")
-        qt_logger.bind(src="Qt", at=0).opt(depth=1).log(level, "Qt: {}", message)
+        name = getattr(mode, "name", None) or str(mode)
+        qt_logger.bind(src="Qt", at=0).opt(depth=1).log(
+            _qt_message_level(name, message), "Qt: {}", message
+        )
 
     qInstallMessageHandler(handler)
 

@@ -35,3 +35,16 @@ def test_run_summary_is_logged_once(tmp_path: Path, fake_root: Path) -> None:
     text = target.read_text(encoding="utf-8")
     assert text.count("本次运行结束") == 1, text
     assert "任务完成" in text and "失败" in text
+
+
+def test_qt_known_harmless_messages_are_demoted() -> None:
+    """已知无害的 Qt 消息降到 DEBUG；真正的告警/错误保持原级别。"""
+    from app.__main__ import _qt_message_level
+
+    assert _qt_message_level("QtWarningMsg", "GPUInfo not initialized on GpuInfoUpdate") == "DEBUG"
+    assert _qt_message_level("QtWarningMsg", "GPUInfo not initialized on GpuInfoUpdate\n") == "DEBUG"
+
+    assert _qt_message_level("QtWarningMsg", "真的警告") == "WARNING"
+    assert _qt_message_level("QtCriticalMsg", "真的错误") == "ERROR"
+    assert _qt_message_level("QtFatalMsg", "致命") == "CRITICAL"
+    assert _qt_message_level("QtInfoMsg", "Sandboxing disabled by user.") == "INFO"
