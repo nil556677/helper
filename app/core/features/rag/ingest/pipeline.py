@@ -68,7 +68,7 @@ def _fingerprint(text: str) -> str:
 
 def _existing_by(column: str, value: str) -> int | None:
     row = get_connection().execute(
-        f"SELECT id FROM documents WHERE {column} = ? ORDER BY id LIMIT 1", (value,)  # noqa: S608 - 列名由本模块固定
+        f"SELECT id FROM documents WHERE {column} = ? ORDER BY id LIMIT 1", (value,)
     ).fetchone()
     return int(row["id"]) if row else None
 
@@ -166,7 +166,7 @@ def import_bytes(data: bytes, filename: str) -> ImportResult:
             )
             doc_id = int(cursor.lastrowid or 0)
             write_chunks(conn, doc_id, chunks, now=now)
-    except Exception as exc:  # noqa: BLE001 - 允许失败：单份文件失败不该中断整批导入
+    except Exception as exc:
         logger.exception("资料入库失败（{}）：{}", source_name, exc)
         return ImportResult("failed", source_name, reason=f"入库失败：{exc}")
 
@@ -238,11 +238,11 @@ def delete_documents(doc_ids: list[int]) -> int:
         return 0
     placeholders = ",".join("?" for _ in doc_ids)
     rows = get_connection().execute(
-        f"SELECT id, stored_path FROM documents WHERE id IN ({placeholders})",  # noqa: S608 - 占位符由本模块生成
+        f"SELECT id, stored_path FROM documents WHERE id IN ({placeholders})",
         tuple(doc_ids),
     ).fetchall()
     with transaction() as conn:
-        conn.execute(f"DELETE FROM documents WHERE id IN ({placeholders})", tuple(doc_ids))  # noqa: S608
+        conn.execute(f"DELETE FROM documents WHERE id IN ({placeholders})", tuple(doc_ids))
 
     for row in rows:
         stored = str(row["stored_path"] or "")
@@ -251,7 +251,7 @@ def delete_documents(doc_ids: list[int]) -> int:
         folder = (paths.files_dir() / stored).parent
         try:
             shutil.rmtree(folder, ignore_errors=True)  # 副本目录按哈希分，删掉就够
-        except OSError as exc:  # noqa: BLE001 - 允许失败：删不掉副本不影响库的一致性
+        except OSError as exc:
             logger.warning("删副本失败（{}）：{}", folder, exc)
     logger.info("已删除 {} 份资料", len(rows))
     return len(rows)

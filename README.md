@@ -193,3 +193,27 @@ print('维度', v.shape, '行范数', float(numpy.linalg.norm(v, axis=-1)[0]))
 | `scripts/` | 开发脚本：`check_ui.py`（真实引擎里的 DOM 断言）、`install_wheels.py` |
 | `tests/` | `unit`（不碰界面）+ `ui`（NiceGUI 的 user 装置，进程内模拟用户） |
 | `docs/` | 内部方案文档（不进版本控制） |
+
+## 发布流程
+
+版本号唯一来源 = [pyproject.toml](pyproject.toml) 的 `version`（设置页"关于"、自检命令都从它读，
+**不要在代码里再写一份版本号**）。内部文档不进版本控制，公开可查的变更轨迹只有 `CHANGELOG.md` ——
+**每次发布都要在上面补一条**。四步（在仓库根执行）：
+
+```powershell
+# 1) 改版本号（改 pyproject.toml 的 version，如升到 0.2.0）
+#    改完顺带在 CHANGELOG.md 顶部补一条对应当前版本的改动
+
+# 2) 全检：lint + 单测 + 全量 + 依赖漂移 +（能跑就）真实渲染
+.venv\Scripts\python.exe scripts\check.py
+
+# 3) 提交 + 打 tag（tag 名 = 版本号前面加 v）
+git commit -m "<本次变更的标题>"
+git tag v0.1.0
+
+# 4) 推送（网络允许时；离线环境可先打 tag，等有网再 push）
+git push
+git push origin v0.1.0
+```
+
+> `git log` 用的是版本号在 `pyproject.toml` 里那个；发布前先确认 `check.py` 全绿、tag 名与版本号一致。

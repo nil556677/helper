@@ -37,4 +37,9 @@ def test_tempfile_creates_things_inside_the_workspace(fake_root: Path) -> None:
         assert made.parent == pin_temp_dir()
         assert paths.project_root() in made.parents, "临时目录跑到工作区外面了"
     finally:
-        made.rmdir()
+        # mkdtemp 建的是 0o700 目录：受限令牌下列不出也删不掉（conftest 记的同款
+        # 环境事实）。删除是清理不是断言——失败不该让用例红（内容断言已经过了）。
+        import contextlib
+
+        with contextlib.suppress(OSError):
+            made.rmdir()

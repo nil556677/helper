@@ -18,6 +18,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
+from typing import ClassVar
 
 from loguru import logger
 
@@ -66,8 +67,8 @@ class _TagStripper(HTMLParser):
     不引第三方 HTML 库：我们只要"能读的文字"，不要 DOM。
     """
 
-    _BLOCK = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article"}
-    _SKIP = {"script", "style", "noscript", "head"}
+    _BLOCK: ClassVar[set[str]] = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article"}
+    _SKIP: ClassVar[set[str]] = {"script", "style", "noscript", "head"}
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -75,6 +76,7 @@ class _TagStripper(HTMLParser):
         self._skip_depth = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        _ = attrs  # HTMLParser 回调签名要求该参数；我们只看 tag
         if tag in self._SKIP:
             self._skip_depth += 1
         elif tag in self._BLOCK:
@@ -137,7 +139,7 @@ def _parse_csv(data: bytes, name: str) -> Parsed:
     return Parsed(text=_clean("\n".join(rows)))
 
 
-def _parse_json(data: bytes, name: str) -> Parsed:
+def _parse_json(data: bytes, _name: str) -> Parsed:
     """JSON：拍平成"键: 值"的行，便于检索。"""
     try:
         payload = json.loads(_decode(data))
@@ -159,7 +161,7 @@ def _parse_json(data: bytes, name: str) -> Parsed:
     return Parsed(text=_clean("\n".join(lines)))
 
 
-def _parse_pdf(data: bytes, name: str) -> Parsed:
+def _parse_pdf(data: bytes, _name: str) -> Parsed:
     """PDF：用 pypdf 抽文字层；抽不到就提示可能是扫描件。"""
     try:
         from pypdf import PdfReader
@@ -171,12 +173,12 @@ def _parse_pdf(data: bytes, name: str) -> Parsed:
         if reader.is_encrypted:
             try:
                 reader.decrypt("")  # 很多 PDF 只是"空口令"加密
-            except Exception as exc:  # noqa: BLE001 - 允许失败：加密的就只能报错
+            except Exception as exc:
                 raise ParseError("这份 PDF 有口令，打不开") from exc
         pages = [page.extract_text() or "" for page in reader.pages]
     except ParseError:
         raise
-    except Exception as exc:  # noqa: BLE001 - 解析库对坏文件抛的异常五花八门
+    except Exception as exc:
         raise ParseError(f"PDF 解析失败：{exc}") from exc
 
     text = _clean("\n\n".join(pages))
@@ -186,7 +188,7 @@ def _parse_pdf(data: bytes, name: str) -> Parsed:
     return Parsed(text=text, pages=len(pages), notes=notes)
 
 
-def _parse_docx(data: bytes, name: str) -> Parsed:
+def _parse_docx(data: bytes, _name: str) -> Parsed:
     """Word（.docx）：段落 + 表格里的文字。"""
     try:
         import docx  # type: ignore[import-untyped]
@@ -201,12 +203,12 @@ def _parse_docx(data: bytes, name: str) -> Parsed:
                 cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
                 if cells:
                     parts.append(" | ".join(cells))
-    except Exception as exc:  # noqa: BLE001 - 同上
+    except Exception as exc:
         raise ParseError(f"Word 解析失败：{exc}") from exc
     return Parsed(text=_clean("\n".join(parts)))
 
 
-def _parse_xlsx(data: bytes, name: str) -> Parsed:
+def _parse_xlsx(data: bytes, _name: str) -> Parsed:
     """Excel（.xlsx/.xlsm）：每个工作表逐行展开（取"有值的单元格"，公式取缓存值）。"""
     try:
         import openpyxl  # type: ignore[import-untyped]
@@ -215,7 +217,7 @@ def _parse_xlsx(data: bytes, name: str) -> Parsed:
 
     try:
         workbook = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-    except Exception as exc:  # noqa: BLE001 - 同上
+    except Exception as exc:
         raise ParseError(f"Excel 解析失败：{exc}") from exc
 
     lines: list[str] = []
@@ -231,7 +233,7 @@ def _parse_xlsx(data: bytes, name: str) -> Parsed:
     return Parsed(text=_clean("\n".join(lines)))
 
 
-def _parse_pptx(data: bytes, name: str) -> Parsed:
+def _parse_pptx(data: bytes, _name: str) -> Parsed:
     """PowerPoint（.pptx）：每页的文本框与表格，页码进 notes 之外还给出 pages。"""
     try:
         from pptx import Presentation  # type: ignore[import-untyped]
@@ -240,7 +242,7 @@ def _parse_pptx(data: bytes, name: str) -> Parsed:
 
     try:
         presentation = Presentation(io.BytesIO(data))
-    except Exception as exc:  # noqa: BLE001 - 同上
+    except Exception as exc:
         raise ParseError(f"PPT 解析失败：{exc}") from exc
 
     lines: list[str] = []

@@ -200,7 +200,7 @@ def _remove_inbox(path: Path) -> None:
     """删掉 inbox 里的暂存文件（成功失败都删：留着只会越积越多）。"""
     try:
         path.unlink(missing_ok=True)
-    except OSError as exc:  # noqa: BLE001 - 删不掉不该影响导入结果
+    except OSError as exc:
         logger.warning("清理暂存文件失败（{}）：{}", path, exc)
 
 

@@ -58,13 +58,12 @@ def build() -> Callable[[str], None]:
     # 结果那个空 column 带 h-full 把高度吃光，滚动区被挤成 0 高——用户看到的就是白板。
     with ui.column().classes("w-full h-full gap-0 hp-settings-body"):
         scroll = ui.scroll_area().classes("w-full flex-1 min-h-0 hp-settings-scroll")
-        with scroll:
-            with ui.column().classes("w-full hp-measure gap-10 px-4 py-6"):
-                for key, _title, _icon in SECTIONS:
-                    panel = ui.column().classes("w-full gap-4")
-                    panels[key] = panel
-                    with panel:
-                        RENDERERS[key]()
+        with scroll, ui.column().classes("w-full hp-measure gap-10 px-4 py-6"):
+            for key, _title, _icon in SECTIONS:
+                panel = ui.column().classes("w-full gap-4")
+                panels[key] = panel
+                with panel:
+                    RENDERERS[key]()
 
     def select(key: str) -> None:
         for panel_key, panel in panels.items():

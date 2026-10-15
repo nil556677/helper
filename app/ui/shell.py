@@ -26,10 +26,10 @@ from loguru import logger
 from nicegui import ui
 
 from app import tasks as tasks_app
+from app.services import tasks as tasks_service
 from app.ui.resources.theme import apply as apply_theme
 from app.ui.screens import FEATURES, MAIN_FEATURES, PINNED_FEATURES
 from app.ui.screens import settings as settings_screen
-from app.services import tasks as tasks_service
 from app.ui.state import conversations
 from app.ui.state.layout import layout
 
@@ -167,17 +167,16 @@ def build_shell() -> None:
             # 还没种子会话时不要调 current()——它会顺手建一个空会话，把种子会话挤掉
             return
         active_id = conversations.current().id
-        with conversation_box:
-            with ui.column().classes('w-full gap-0'):
-                for conversation in items:
-                    # 同样用 button（ui.item 的点击在真机不触发，见上面功能导航的注释）
-                    classes = 'w-full hp-row-button hp-conv-row'
-                    if conversation.id == active_id:
-                        classes += ' hp-row-active'
-                    row = ui.button(conversation.title).props('flat dense no-caps align=left').classes(
-                        classes
-                    ).mark(f'conv-{conversation.id}')
-                    row.on('click', partial(open_conversation, conversation.id))
+        with conversation_box, ui.column().classes('w-full gap-0'):
+            for conversation in items:
+                # 同样用 button（ui.item 的点击在真机不触发，见上面功能导航的注释）
+                classes = 'w-full hp-row-button hp-conv-row'
+                if conversation.id == active_id:
+                    classes += ' hp-row-active'
+                row = ui.button(conversation.title).props('flat dense no-caps align=left').classes(
+                    classes
+                ).mark(f'conv-{conversation.id}')
+                row.on('click', partial(open_conversation, conversation.id))
 
     def open_conversation(conversation_id: str) -> None:
         """切到某个会话：聊天页会把对话流整块重画。"""
@@ -250,27 +249,29 @@ def build_shell() -> None:
 
                     ui.timer(2.0, update_badge)
 
-        with ui.column().classes('w-full h-full p-3 gap-2') as settings_side:
+        with (
+            ui.column().classes('w-full h-full p-3 gap-2') as settings_side,
+            ui.column().classes('w-full gap-2'),
+        ):
             # 设置模式：自己的左栏。**「返回聊天」放在左栏顶部**（用户定的）：
             # 它是"离开这一页"的动作，和导航属于同一类，放一起视线不用来回跳。
-            with ui.column().classes('w-full gap-2'):
-                ui.button(
-                    '返回聊天', icon='arrow_back', on_click=partial(open_page, MAIN_FEATURES[0].key)
-                ).props('flat dense no-caps align=left').classes('w-full hp-row-button').mark(
-                    'back-to-chat'
-                )
-                ui.separator()
-                with ui.column().classes('w-full gap-0'):
-                    for key, title, icon in settings_screen.SECTIONS:
-                        # 用 button 而不是 ui.item（真机上 ui.item 的点击不触发，见上）
-                        button = (
-                            ui.button(title, icon=icon)
-                            .props('flat dense no-caps align=left')
-                            .classes('w-full hp-row-button')
-                            .mark(f'section-{key}')
-                        )
-                        button.on('click', partial(select_section, key))
-                        section_items[key] = button
+            ui.button(
+                '返回聊天', icon='arrow_back', on_click=partial(open_page, MAIN_FEATURES[0].key)
+            ).props('flat dense no-caps align=left').classes('w-full hp-row-button').mark(
+                'back-to-chat'
+            )
+            ui.separator()
+            with ui.column().classes('w-full gap-0'):
+                for key, title, icon in settings_screen.SECTIONS:
+                    # 用 button 而不是 ui.item（真机上 ui.item 的点击不触发，见上）
+                    button = (
+                        ui.button(title, icon=icon)
+                        .props('flat dense no-caps align=left')
+                        .classes('w-full hp-row-button')
+                        .mark(f'section-{key}')
+                    )
+                    button.on('click', partial(select_section, key))
+                    section_items[key] = button
 
     # ---- 中栏：聊天模式的顶栏 / 设置模式的顶栏（含「返回聊天」）+ 两套内容 ----
     # **高度必须"确定"**：整页 `.q-layout`/`.q-page`/`.nicegui-content` 的高度实测都是 0，

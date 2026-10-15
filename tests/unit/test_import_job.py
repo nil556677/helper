@@ -16,10 +16,10 @@ from pathlib import Path
 import pytest
 
 from app import tasks as tasks_app
-from app.services import knowledge
 from app.core.jobs import api, registry
-from app.core.jobs.model import FAILED, PENDING, RUNNING
+from app.core.jobs.model import FAILED, PENDING
 from app.core.jobs.runner import Runner
+from app.services import knowledge
 
 SAMPLE = "# 设备采购合同\n\n第一条 乙方应在 30 日内交付设备。\n\n第二条 违约金按日万分之五计算。\n"
 

@@ -351,8 +351,8 @@ def requeue_interrupted(
                 now=stamp,
             )
         conn.execute(
-            f"UPDATE jobs SET status = ?, note = ?, lease_until = NULL, worker = NULL, started_at = NULL,"
-            f" runs = max(0, runs - 1), next_run_at = ?, updated_at = ? WHERE id = ?",
+            "UPDATE jobs SET status = ?, note = ?, lease_until = NULL, worker = NULL, started_at = NULL,"
+            " runs = max(0, runs - 1), next_run_at = ?, updated_at = ? WHERE id = ?",
             (PENDING, note, stamp + max(0.0, delay_s), stamp, job_id),
         )
 

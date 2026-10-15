@@ -22,8 +22,8 @@ import sys
 import threading
 import time
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))

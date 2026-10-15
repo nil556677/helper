@@ -90,18 +90,20 @@ def _build_composer(stream: Any, scroll: Any) -> None:
         box.run_method('focus')  # 连续追问不用每次用鼠标点一下输入框
         scroll.scroll_to(percent=1.0)
 
-    with ui.column().classes('w-full hp-composer'):
-        with ui.column().classes('w-full hp-measure px-4 py-3'):
-            with ui.row().classes('w-full items-end gap-1 hp-composer-box'):
-                box = (
-                    ui.textarea(placeholder='问点什么…（Enter 发送，Shift+Enter 换行）')
-                    .props('autogrow borderless dense autofocus')
-                    .classes('flex-1')
-                    .mark('chat-input')  # 界面测试用锚点（见 tests/ui/）
-                )
-                ui.button(icon='send', on_click=send).props('round unelevated').classes(
-                    'hp-send'
-                ).mark('chat-send')
+    with (
+        ui.column().classes('w-full hp-composer'),
+        ui.column().classes('w-full hp-measure px-4 py-3'),
+        ui.row().classes('w-full items-end gap-1 hp-composer-box'),
+    ):
+        box = (
+            ui.textarea(placeholder='问点什么…（Enter 发送，Shift+Enter 换行）')
+            .props('autogrow borderless dense autofocus')
+            .classes('flex-1')
+            .mark('chat-input')  # 界面测试用锚点（见 tests/ui/）
+        )
+        ui.button(icon='send', on_click=send).props('round unelevated').classes(
+            'hp-send'
+        ).mark('chat-send')
 
     # Enter 发送：`.exact` 让 Shift+Enter 保持换行
     box.on('keydown.enter.exact', send)
@@ -159,10 +161,12 @@ def _build_process_row() -> tuple[Any, Any, Any]:
     **默认收起**（DSH：先看答案，想看过程再展开）。
     """
     row = ui.expansion().classes('w-full hp-process')
-    with row.add_slot('header'):
-        with ui.row().classes('w-full items-center gap-2 no-wrap hp-process-row'):
-            ui.icon('travel_explore').classes('text-base')
-            title = ui.label('').classes('hp-process-title')
+    with (
+        row.add_slot('header'),
+        ui.row().classes('w-full items-center gap-2 no-wrap hp-process-row'),
+    ):
+        ui.icon('travel_explore').classes('text-base')
+        title = ui.label('').classes('hp-process-title')
     with row:
         details = ui.column().classes('w-full gap-0 pt-1 pl-6')
     return row, title, details

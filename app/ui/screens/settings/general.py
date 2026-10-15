@@ -71,11 +71,10 @@ def render() -> None:
             # 绝对路径与"数据结构版本"收进折叠区：排障有用，摆在正文里既像开发术语又撑窄屏
             with ui.expansion("详细信息（排查问题时用）", icon="bug_report").classes(
                 "w-full text-sm hp-sources"
-            ):
-                with ui.column().classes("w-full gap-2 p-2"):
-                    for name in ("安装目录", "数据库", "日志文件", "资料副本"):
-                        _detail_row(name, str(overview["paths"][name]))
-                    _detail_row("数据结构版本", str(overview["schema_version"]))
+            ), ui.column().classes("w-full gap-2 p-2"):
+                for name in ("安装目录", "数据库", "日志文件", "资料副本"):
+                    _detail_row(name, str(overview["paths"][name]))
+                _detail_row("数据结构版本", str(overview["schema_version"]))
 
         # ---- 关于 ----
         with ui.column().classes("hp-card w-full gap-2"):

@@ -24,10 +24,10 @@ from typing import Any
 
 from nicegui import ui
 
+from app.services import tasks as tasks_service
 from app.ui.components.auto_refresh import AutoRefresh
 from app.ui.components.format import human_time
 from app.ui.components.pager import PAGE_SIZES, PageState, render_pager
-from app.services import tasks as tasks_service
 
 #: 刷新间隔（秒）。进度写库有 0.2 秒节流，所以 0.5 秒够跟得上。
 REFRESH_S = 0.5

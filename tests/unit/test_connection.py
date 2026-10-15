@@ -29,13 +29,12 @@ def test_transaction_rolls_back_on_error(fake_root: Path) -> None:
     """事务里抛异常 → 整段回滚（半截写入是最难查的一类问题）。"""
     schema.init_db()
 
-    with pytest.raises(RuntimeError):
-        with transaction() as conn:
-            conn.execute(
-                "INSERT INTO conversations(id, title, created_at, updated_at)"
-                " VALUES ('c1', '', 0, 0)"
-            )
-            raise RuntimeError("故意的失败")
+    with pytest.raises(RuntimeError), transaction() as conn:
+        conn.execute(
+            "INSERT INTO conversations(id, title, created_at, updated_at)"
+            " VALUES ('c1', '', 0, 0)"
+        )
+        raise RuntimeError("故意的失败")
 
     count = get_connection().execute("SELECT count(*) AS n FROM conversations").fetchone()["n"]
     assert int(count) == 0

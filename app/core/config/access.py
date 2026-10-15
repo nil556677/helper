@@ -98,7 +98,7 @@ def isolate_bad_file(path: Path, reason: str) -> str | None:
         counter += 1
     try:
         path.replace(target)
-    except OSError as exc:  # noqa: BLE001 - 允许失败：隔离失败也要能继续启动
+    except OSError as exc:
         logger.error("坏配置隔离失败（{}），继续用默认配置启动：{}", reason, exc)
         return None
     logger.error("配置不可用（{}），已隔离为 {}，本次用默认配置启动", reason, target.name)
@@ -170,11 +170,11 @@ def save(config: BootstrapConfig) -> None:
 
     # 同目录的临时文件才能保证 os.replace 是原子替换（跨盘会退化成复制）。
     tmp = path.with_name(path.name + ".tmp")
-    with open(tmp, "w", encoding="utf-8", newline="\n") as handle:
+    with tmp.open("w", encoding="utf-8", newline="\n") as handle:
         handle.write(payload)
         handle.flush()
         os.fsync(handle.fileno())
-    os.replace(tmp, path)
+    tmp.replace(path)
     invalidate()
 
 

@@ -27,9 +27,9 @@ SAMPLE_TITLE = '示例对话（模拟数据）'
 def _import_now(name: str, data: bytes) -> int:
     """走真实路径导入一份资料：暂存 → 排队 → inline 跑完（界面测试用）。"""
     from app import tasks as tasks_app
-    from app.services import knowledge as knowledge_service
     from app.core.jobs import registry as jobs_registry
     from app.core.jobs.runner import Runner
+    from app.services import knowledge as knowledge_service
 
     tasks_app.register_kinds()
     payload = knowledge_service.stage_upload(name, data)
@@ -235,7 +235,8 @@ async def test_tasks_page_renders_empty_state(user: User) -> None:
 async def test_tasks_page_shows_a_queued_job(user: User) -> None:
     """有任务时：任务名、等待状态与取消按钮都要出来（"我的活排上了没有"）。"""
     from app import tasks as tasks_app
-    from app.core.jobs import api, registry as jobs_registry
+    from app.core.jobs import api
+    from app.core.jobs import registry as jobs_registry
 
     tasks_app.register_kinds()
     try:
@@ -257,7 +258,8 @@ async def test_tasks_page_shows_page_range(user: User) -> None:
     用户在长列表里想知道的是"我在数据的哪一段、这段有多少条"，页码回答不了这个。
     """
     from app import tasks as tasks_app
-    from app.core.jobs import api, registry as jobs_registry
+    from app.core.jobs import api
+    from app.core.jobs import registry as jobs_registry
 
     tasks_app.register_kinds()
     # 上一步会顺带排一条「启动清理」任务；本用例只关心自己这 3 条，所以先清干净再排。
@@ -284,7 +286,8 @@ async def test_tasks_page_shows_page_range(user: User) -> None:
 async def test_cancel_a_queued_job_from_the_page(user: User) -> None:
     """从界面取消一条排队中的任务：后端状态变了、切到「已完成」也看得到（前后端闭环）。"""
     from app import tasks as tasks_app
-    from app.core.jobs import api, registry as jobs_registry
+    from app.core.jobs import api
+    from app.core.jobs import registry as jobs_registry
 
     tasks_app.register_kinds()
     try:
@@ -313,7 +316,8 @@ async def test_failed_job_shows_details_timeline(user: User) -> None:
     以前只有行内一句话，完整原因躺在 `logs/helper.log` 里，用户得自己去翻文件。
     """
     from app import tasks as tasks_app
-    from app.core.jobs import api, registry as jobs_registry, store
+    from app.core.jobs import api, store
+    from app.core.jobs import registry as jobs_registry
 
     tasks_app.register_kinds()
     try:
@@ -345,7 +349,8 @@ async def test_failed_job_shows_details_timeline(user: User) -> None:
 async def test_bulk_retry_failed_jobs_from_the_page(user: User) -> None:
     """批量选择 + 批量重试：一次把多条失败任务重新排队（数据一多最痛的缺口）。"""
     from app import tasks as tasks_app
-    from app.core.jobs import api, registry as jobs_registry, store
+    from app.core.jobs import api, store
+    from app.core.jobs import registry as jobs_registry
 
     tasks_app.register_kinds()
     try:
@@ -377,9 +382,9 @@ async def test_bulk_retry_failed_jobs_from_the_page(user: User) -> None:
 async def test_bulk_delete_documents_from_the_page(user: User) -> None:
     """知识库页：勾选 → 批量删除 → 确认 → 一份都不剩（副本与片段一起走）。"""
     from app import tasks as tasks_app
-    from app.services import knowledge as knowledge_service
     from app.core.jobs import registry as jobs_registry
     from app.core.jobs.runner import Runner
+    from app.services import knowledge as knowledge_service
 
     tasks_app.register_kinds()
     try:

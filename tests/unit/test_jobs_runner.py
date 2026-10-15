@@ -31,7 +31,6 @@ from app.core.jobs.model import (
 from app.core.jobs.runner import Runner
 
 
-
 @pytest.fixture
 def jobs_db(fake_root: Path) -> Iterator[None]:
     """建好 schema v2 的空库 + 干净注册表。"""

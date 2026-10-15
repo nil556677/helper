@@ -101,6 +101,17 @@ def ensure_ready() -> None:
     # 4. 建表 / 迁移（幂等）
     version = schema.init_db()
 
+    # 4b. T3.2 数据库体检：只在"上次没干净退出"时做（干净退出会写标记，启动读一次就清掉）。
+    #     发现问题不在这里处理（只读；由调用方决定从备份恢复 / 重命名坏库）。
+    from app.core.db import health
+
+    health_problem = health.verify_unclean_exit()
+    if health_problem is not None:
+        raise RuntimeError(
+            f"数据库体检未通过（quick_check 返回 {health_problem}）：库可能损坏。"
+            "可以从备份恢复 data/，或重命名 data/helper.db 让其重建（会丢未备份的资料）。"
+        )
+
     # 5. 起手把"东西都在哪"一次记全：排查"我的资料去哪了"时，这一行能省一轮来回。
     #    所有路径都写死在安装目录旁（见 paths）——data/ 与 logs/ 都是；同一份日志里可能混着
     #    多次运行，先看这一行再往下读。

@@ -31,27 +31,27 @@ from app.core.jobs.api import (
     stats,
 )
 from app.core.jobs.model import (
+    PRIORITY_DEFAULT,
+    PRIORITY_MAINTENANCE,
+    PRIORITY_WAITING,
     Job,
     JobCancelled,
     JobContext,
     JobError,
     JobInterrupted,
-    PRIORITY_DEFAULT,
-    PRIORITY_MAINTENANCE,
-    PRIORITY_WAITING,
 )
 from app.core.jobs.registry import JobKind
 
 __all__ = [
+    "PRIORITY_DEFAULT",
+    "PRIORITY_MAINTENANCE",
+    "PRIORITY_WAITING",
     "Job",
     "JobCancelled",
     "JobContext",
     "JobError",
     "JobInterrupted",
     "JobKind",
-    "PRIORITY_DEFAULT",
-    "PRIORITY_MAINTENANCE",
-    "PRIORITY_WAITING",
     "cancel",
     "enqueue",
     "get",

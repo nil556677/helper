@@ -25,10 +25,10 @@ from typing import Any
 from nicegui import events, run, ui
 
 from app import tasks as tasks_app
+from app.services import knowledge as knowledge_service
 from app.ui.components.auto_refresh import AutoRefresh
 from app.ui.components.format import human_size, human_time
 from app.ui.components.pager import PAGE_SIZES, PageState, render_pager
-from app.services import knowledge as knowledge_service
 
 #: 单个文件的上传上限（NiceGUI 默认只有 1 MB，装不下一份 PDF）
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024

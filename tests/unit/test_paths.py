@@ -9,8 +9,6 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-import pytest
-
 from app.core import paths
 from app.core.config.schema import BootstrapConfig
 

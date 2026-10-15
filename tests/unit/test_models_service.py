@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from app.services import models
 from app.core.db.connection import get_connection
+from app.services import models
 
 PLAIN_KEY = "sk-test-abcdefghijklmnop-1234"
 

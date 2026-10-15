@@ -43,7 +43,7 @@ _HREF = re.compile(r'href="([^"#]+\.whl)(?:#[^"]*)?"', re.IGNORECASE)
 def _wheels_on(index: str, name: str) -> list[str]:
     """取某个包在索引页上的所有 wheel 链接（绝对 URL）。"""
     url = f"{index.rstrip('/')}/{name}/"
-    with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310 - 只取固定索引
+    with urllib.request.urlopen(url, timeout=60) as response:
         html = response.read().decode("utf-8", "replace")
     links = []
     for href in _HREF.findall(html):
@@ -98,7 +98,7 @@ def _download(url: str, folder: Path) -> Path:
         print(f"  已有的 {target.name} 不完整，重下")
         target.unlink(missing_ok=True)
     print(f"  下载 {target.name} …", end="", flush=True)
-    with urllib.request.urlopen(url, timeout=300) as response, open(target, "wb") as handle:  # noqa: S310
+    with urllib.request.urlopen(url, timeout=300) as response, target.open("wb") as handle:
         while chunk := response.read(1 << 20):
             handle.write(chunk)
     print(f" {target.stat().st_size / 1048576:.1f} MB")
@@ -131,7 +131,7 @@ def _installed(name: str) -> bool:
     try:
         metadata.version(name)
         return True
-    except Exception:  # noqa: BLE001 - PackageNotFoundError 等
+    except Exception:
         return False
 
 
@@ -145,7 +145,7 @@ def _installed_requirements(name: str) -> list[str]:
 
     try:
         requires = metadata.requires(name) or []
-    except Exception:  # noqa: BLE001 - 查不到就算了
+    except Exception:
         return []
     names: list[str] = []
     for requirement in requires:
@@ -184,13 +184,13 @@ def install(names: list[str], *, index: str, with_deps: bool = True) -> int:
                 continue
             wheel = _download(chosen, wheels)
             with zipfile.ZipFile(wheel) as archive:
-                archive.extractall(target_dir)  # noqa: S202 - 内容来自固定镜像的 wheel
+                archive.extractall(target_dir)
             print(f"✓ {name} ← {wheel.name}")
             if with_deps:
                 for requirement in _requirements(wheel):
                     if requirement not in queue:
                         queue.append(requirement)
-        except Exception as exc:  # noqa: BLE001 - 一次性工具，报清楚就行
+        except Exception as exc:
             print(f"✗ {name}：{type(exc).__name__}: {exc}")
             failures += 1
     return failures

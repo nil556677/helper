@@ -25,12 +25,12 @@ from app.core.jobs.model import (
     DONE,
     FAILED,
     PENDING,
+    PRIORITY_MAINTENANCE,
+    PRIORITY_WAITING,
     RUNNING,
     JobCancelled,
     JobContext,
     JobError,
-    PRIORITY_MAINTENANCE,
-    PRIORITY_WAITING,
 )
 
 SAMPLE_KIND = registry.JobKind(

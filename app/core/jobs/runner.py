@@ -83,7 +83,7 @@ class Runner:
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
-        self._busy: dict[str, int] = {lane: 0 for lane in self._lane_limits}
+        self._busy: dict[str, int] = dict.fromkeys(self._lane_limits, 0)
         self._workers: list[threading.Thread] = []
         #: 本执行器正在跑的 job id（退出收尾时要区分"线程还活着"与"线程已经死了"）
         self._inflight: set[int] = set()
@@ -391,7 +391,7 @@ class Runner:
             if kind.on_cancel is not None:
                 try:
                     kind.on_cancel(context)
-                except Exception:  # noqa: BLE001 - 清理失败不该把取消变成失败
+                except Exception:
                     logger.exception("任务 #{} 的 on_cancel 清理失败", job.id)
             store.settle_cancelled(job.id)
             logger.info("任务 #{}（{}）已取消", job.id, kind.key)
@@ -401,7 +401,7 @@ class Runner:
             logger.info("任务 #{}（{}）因退出中断，已放回队列", job.id, kind.key)
         except JobError as exc:
             self._fail(job, kind, error=str(exc), retryable=exc.retryable, error_kind=exc.kind)
-        except Exception as exc:  # noqa: BLE001 - handler 里任何异常都要落到任务状态上
+        except Exception as exc:
             logger.exception("任务 #{}（{}）崩了", job.id, kind.key)
             # 没预料到的异常：**把 traceback 也存下来**（只进日志的话，用户从界面上找不到它）
             self._fail(
@@ -489,7 +489,7 @@ class Runner:
                 if time.time() - self._last_lag_check >= LAG_CHECK_EVERY_S:
                     self._last_lag_check = time.time()
                     self.check_lag()
-            except Exception:  # noqa: BLE001 - 调度线程不许死：出错记下来继续
+            except Exception:
                 logger.exception("调度循环出错（继续跑）")
             self._wait_next()
 

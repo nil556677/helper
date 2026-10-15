@@ -149,6 +149,7 @@ def pick_turn(question: str = "") -> Turn:
         question: 用户输入（模拟数据源用不到它，真实数据源会用）。
     返回：:class:`~app.ui.state.chat_model.Turn`。
     """
+    _ = question  # 模拟数据源用不到输入，真实数据源才会用
     global _cursor
     turn = SCENARIOS[_cursor % len(SCENARIOS)]
     _cursor += 1

@@ -235,7 +235,7 @@ def test_rotation_triggers_on_size_and_new_day(tmp_path: Path) -> None:
     assert _needs_rotation("", _File(small)) is False
 
     big = tmp_path / "big.log"
-    with open(big, "wb") as handle:
+    with big.open("wb") as handle:
         handle.truncate(ROTATION_SIZE_MB * 1024 * 1024)
     assert _needs_rotation("", _File(big)) is True, "超过上限要轮转"
 
@@ -258,7 +258,7 @@ def test_purge_enforces_total_size_limit(fake_root: Path) -> None:
     made = []
     for index in range(3):
         path = logs / f"console-2026-10-0{index + 1}.log"
-        with open(path, "wb") as handle:
+        with path.open("wb") as handle:
             handle.truncate(1024 * 1024)  # 每个 1 MB
         stamp = now - 3600 + index  # 都在 7 天内；index 越小越旧（made[0] 是最旧的）
         os.utime(path, (stamp, stamp))

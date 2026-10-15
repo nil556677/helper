@@ -18,8 +18,9 @@ from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from pathlib import Path
 
-from app.core import paths
 from loguru import logger
+
+from app.core import paths
 
 #: 写锁等待上限：桌面场景下写操作很短，等 5 秒还没拿到锁说明有别的东西出了问题。
 DEFAULT_BUSY_TIMEOUT_MS = 5000
@@ -118,7 +119,7 @@ def close_thread_connection(*, checkpoint_first: bool = False) -> None:
     if checkpoint_first:
         try:
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        except sqlite3.Error as exc:  # noqa: BLE001 - 允许失败：checkpoint 失败不该挡住退出
+        except sqlite3.Error as exc:
             logger.warning("WAL checkpoint 失败：{}", exc)
     conn.close()
     _local.conn = None

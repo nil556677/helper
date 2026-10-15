@@ -244,8 +244,8 @@ def test_copy_is_kept_so_rebuild_works(ingest_db: None) -> None:
 
 def test_rebuild_regenerates_chunks(ingest_db: None) -> None:
     """重建：用副本重新解析切分，片段数对得上，而且不会翻倍。"""
-    from app.services import knowledge
     from app.core.db.connection import get_connection
+    from app.services import knowledge
 
     _import("合同.md", SAMPLE.encode())
     doc_id = knowledge.documents()[0]["id"]
@@ -258,9 +258,9 @@ def test_rebuild_regenerates_chunks(ingest_db: None) -> None:
 
 def test_delete_removes_document_chunks_and_copy(ingest_db: None) -> None:
     """删除要连带片段、索引与副本一起清掉（外键级联 + 触发器负责索引）。"""
-    from app.services import knowledge
     from app.core import paths
     from app.core.db.connection import get_connection
+    from app.services import knowledge
 
     _import("合同.md", SAMPLE.encode())
     doc_id = knowledge.documents()[0]["id"]

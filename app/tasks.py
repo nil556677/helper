@@ -14,11 +14,11 @@ from collections import deque
 
 from loguru import logger
 
-from app.services import knowledge as knowledge_service
-from app.services import maintenance as maintenance_service
 from app.core.jobs import api
 from app.core.jobs.registry import JobKind
 from app.core.jobs.runner import Runner, get_runner, set_runner
+from app.services import knowledge as knowledge_service
+from app.services import maintenance as maintenance_service
 
 #: 事件循环延迟的采样间隔与窗口（窗口 40 × 50ms = 最近 2 秒）
 LAG_INTERVAL_S = 0.05

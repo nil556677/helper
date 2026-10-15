@@ -98,7 +98,7 @@ def _log_run_summary(started_monotonic: float, started_wall: float) -> None:
             done,
             failed,
         )
-    except Exception as exc:  # noqa: BLE001 - 统计失败不该挡住退出
+    except Exception as exc:
         from loguru import logger
 
         logger.warning("运行收尾统计失败（不影响退出）：{}", exc)
@@ -254,7 +254,7 @@ def _probe_bind(host: str, port: int) -> str:
 
 def _wait_http(url: str, timeout_s: float = SERVER_WAIT_S, *, report_every_s: float = 5.0) -> bool:
     """等界面服务真的返回 HTTP 200（不是只等端口）。"""
-    from loguru import logger  # noqa: PLC0415 - 与本模块其它地方一致：惰性导入
+    from loguru import logger
 
     deadline = time.monotonic() + timeout_s
     started = time.monotonic()
@@ -352,11 +352,36 @@ def main() -> int:
     from app.bootstrap import ensure_ready
     from app.core import paths
 
+    # T2.3 自检命令：**必须在 import Qt 之前**接线（自检不需要 Qt，受限会话里也要能跑）。
+    # 也不用走 single_instance 守卫（它就是排查环境用的）。
+    if "--selfcheck" in sys.argv:
+        from app.selfcheck import main as selfcheck_main
+
+        return selfcheck_main(json_output="--json" in sys.argv, deep_hash="--no-hash" not in sys.argv)
+
+    # 单实例守卫（T2.1，只在 main() 里做；测试 / 脚本 / --selfcheck 都不走这里，不会被挡）。
+    # 放在 ensure_ready() 之前：已有实例时根本不该再初始化目录/日志/数据库。
+    from app.core import single_instance
+
+    if not single_instance.acquire():
+        try:
+            activated = single_instance.activate_existing_window()
+            _show_box(
+                "warning",
+                "helper",
+                "helper 已经在运行了（已把它的窗口切到前面）。"
+                if activated
+                else "helper 已经在运行了。",
+            )
+        except Exception as exc:
+            logger.warning("单实例提示未能弹出：{}", exc)
+        return 0
+
     # 启动前提不满足（目录建不出来 / 库损坏 / 迁移缺脚本）时**必须让用户看见**：
     # 双击启动没有常驻控制台，以前这种情况就是"闪一下、什么都没有"。
     try:
         ensure_ready()
-    except Exception as exc:  # noqa: BLE001 - 启动前提失败：转成用户可读的提示再退出
+    except Exception as exc:
         where = _write_startup_error(f"{type(exc).__name__}: {exc}", traceback.format_exc())
         _show_box(
             "critical",
@@ -421,7 +446,7 @@ def main() -> int:
                 f'端口自检：{_probe_bind(host, port)}',
             )
             return
-        except BaseException as exc:  # noqa: BLE001 - 服务线程死掉必须留证据
+        except BaseException as exc:
             logger.opt(exception=exc).critical('界面服务线程异常退出：{}', exc)
             _write_startup_error('界面服务线程异常退出', f'{type(exc).__name__}: {exc}\n地址 {host}:{port}')
             return
@@ -454,6 +479,17 @@ def main() -> int:
     (cache_dir / 'storage').mkdir(parents=True, exist_ok=True)
 
     application = QApplication(sys.argv)
+    # T2.2 屏幕/DPI 快照：补上技术方案 §10.3 的落空项。屏幕信息必须等 QApplication 才能拿到
+    # （启动快照在 bootstrap/ 里、早于 Qt 初始化）。无头/受限会话 primaryScreen 可能为 None。
+    screen = application.primaryScreen()
+    if screen is None:
+        logger.warning("无可用主屏幕，跳过显示环境快照")
+    else:
+        logger.info(
+            "显示环境：屏幕 {}×{}；逻辑 DPI {}；缩放 {:.0%}",
+            screen.size().width(), screen.size().height(),
+            screen.logicalDotsPerInch(), screen.devicePixelRatio(),
+        )
     profile = QWebEngineProfile.defaultProfile()
     profile.setCachePath(str(cache_dir / 'cache'))
     profile.setPersistentStoragePath(str(cache_dir / 'storage'))
@@ -490,16 +526,23 @@ def main() -> int:
         try:
             preferences.save_window_geometry(bytes(view.saveGeometry()))
             logger.info('已记住窗口几何')
-        except Exception as exc:  # noqa: BLE001 - 允许失败：记不住窗口大小不该影响退出
+        except Exception as exc:
             logger.warning('窗口几何保存失败：{}', exc)
 
     def on_quit() -> None:
         # 先让在跑的任务收尾：还没跑完的放回队列（**不算失败**），下次打开接着做
         try:
             tasks_app.stop(grace_s=3.0)
-        except Exception as exc:  # noqa: BLE001 - 允许失败：任务没收完不该挡住退出
+        except Exception as exc:
             logger.warning('任务系统停止失败：{}', exc)
         remember_geometry()
+        # T3.2 标记"本次干净退出"：下次启动若读不到就做 DB 体检
+        try:
+            from app.core.db import health as db_health
+
+            db_health.mark_clean_exit()
+        except Exception as exc:
+            logger.warning('干净退出标记写失败：{}', exc)
         # 收尾行（幂等；atexit 也会来叫它，见 _log_run_summary）
         _log_run_summary(run_started_monotonic, run_started_wall)
         # 关连接前把 WAL 合并回主库：否则"只拷 helper.db"的备份会丢最近的写入（§9）

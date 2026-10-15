@@ -36,6 +36,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
@@ -172,6 +173,7 @@ def _needs_rotation(message: str, file: object) -> bool:
     loguru 的 ``rotation`` 只接受"按时间"或"按大小"两者之一，这里用一个可调用对象把两条
     合成"先到先得"：桌面程序既不能一天一个文件涨到几个 G，也不能文件多到翻不过来。
     """
+    _ = message  # 名字是 loguru 回调要求的签名；轮转判据只用文件大小与时间
     path = Path(str(file.name))
     try:
         stat = path.stat()
@@ -262,7 +264,7 @@ class DailyFileSink:
             return
         self._close()
         target.parent.mkdir(parents=True, exist_ok=True)
-        self._handle = open(target, "ab", buffering=0)  # noqa: SIM115 - 生命周期随 sink
+        self._handle = target.open("ab", buffering=0)  # 生命周期随 sink
         self._path = target
         try:
             self._size = target.stat().st_size
@@ -277,10 +279,8 @@ class DailyFileSink:
 
     def _close(self) -> None:
         if self._handle is not None:
-            try:
+            with contextlib.suppress(OSError):
                 self._handle.close()  # type: ignore[attr-defined]
-            except OSError:
-                pass
         self._handle = None
 
 
@@ -326,14 +326,14 @@ def init_logging(
         daily = DailyFileSink(paths.logs_dir())
         paths_seen = daily_log_file()
     # 公共参数（两类 sink 都收）
-    common = dict(
-        level=level.upper(),
-        format=LOG_FORMAT,
-        enqueue=False,  # 受限令牌下建不了命名管道，异步队列会被拒；同步写足够快
-        backtrace=False,
-        diagnose=False,  # 见模块说明第 1 条：异常栈不许带局部变量
-        catch=True,  # 日志自身出错不该把业务代码带崩
-    )
+    common = {
+        "level": level.upper(),
+        "format": LOG_FORMAT,
+        "enqueue": False,  # 受限令牌下建不了命名管道，异步队列会被拒；同步写足够快
+        "backtrace": False,
+        "diagnose": False,  # 见模块说明第 1 条：异常栈不许带局部变量
+        "catch": True,  # 日志自身出错不该把业务代码带崩
+    }
     try:
         paths_seen.parent.mkdir(parents=True, exist_ok=True)
         if daily is not None:
@@ -351,7 +351,7 @@ def init_logging(
                 **common,
             )
         _log_file = paths_seen
-    except OSError as exc:  # noqa: BLE001 - 允许失败：日志目录不可写也要能启动
+    except OSError as exc:
         # 退回控制台：装到只读位置时至少还能看到告警，而不是直接起不来。
         logger.add(sys.stderr, level=console_level.upper(), backtrace=False, diagnose=False)
         logger.warning("日志文件不可用（{}），本次只输出到控制台：{}", paths_seen, exc)
@@ -466,7 +466,7 @@ def install_stdlib_bridge(level: int = logging.WARNING) -> InterceptHandler:
     return handler
 
 
-def _asyncio_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+def _asyncio_exception_handler(_loop: asyncio.AbstractEventLoop, context: dict) -> None:
     """事件循环里的未处理异常 → 日志（含"Task exception was never retrieved"这一类）。"""
     exception = context.get("exception")
     message = str(context.get("message") or "asyncio 未处理异常")
@@ -522,7 +522,7 @@ def _broken_standard_fds() -> set[int]:
     return broken
 
 
-def _ensure_valid_streams(broken: set[int]) -> None:
+def _ensure_valid_streams(_broken: set[int]) -> None:
     """把 ``sys.stdout`` / ``sys.stderr`` 换成绑定到**我们自己的 dup fd** 的 UTF-8 流。
 
     **无条件换，不做"能 reconfigure 就复用"**——这一条是被线上故障逼出来的：
@@ -575,14 +575,14 @@ def capture_native_output(target: Path | None = None) -> Path | None:
         logger.warning("启动时标准句柄就是坏的（fd {}）——多半是双击启动（没有控制台）", sorted(broken))
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        handle = open(path, "ab", buffering=0)  # noqa: SIM115 - 这个句柄要和进程同寿
+        handle = path.open("ab", buffering=0)  # 这个句柄要和进程同寿
         os.dup2(handle.fileno(), 1)
         os.dup2(handle.fileno(), 2)
         # 两个流必须可用且是 UTF-8，否则双击启动（没有控制台、句柄无效）时任何 print 都会抛
         # `OSError: 句柄无效` —— 实测它让 NiceGUI 的服务线程在打就绪横幅时**直接死掉**，
         # 表现正是"界面服务 20 秒没起来 + 窗口白板"。
         _ensure_valid_streams(broken)
-    except OSError as exc:  # noqa: BLE001 - 允许失败：拿不到原生输出也要能启动
+    except OSError as exc:
         logger.warning("原生输出重定向失败（{}）：{}", path, exc)
         return None
 
@@ -673,7 +673,7 @@ def _distribution_version(name: str) -> str:
         from importlib.metadata import version
 
         return version(name)
-    except Exception:  # noqa: BLE001 - 版本号缺失不该影响启动
+    except Exception:
         return "—"
 
 
@@ -683,7 +683,7 @@ def _has_console() -> str:
         import ctypes
 
         return "有" if ctypes.windll.kernel32.GetConsoleWindow() else "无（双击启动的样子）"
-    except Exception:  # noqa: BLE001
+    except Exception:
         return "未知"
 
 
@@ -766,7 +766,7 @@ def _read_tail(path: Path, limit: int = 60_000) -> str:
     """读文件末尾若干字节（日志可能很大，不整份读进来）。"""
     try:
         size = path.stat().st_size
-        with open(path, "rb") as handle:
+        with path.open("rb") as handle:
             if size > limit:
                 handle.seek(size - limit)
             return handle.read().decode("utf-8", "replace")

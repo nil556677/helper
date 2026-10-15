@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -45,9 +46,9 @@ def app_version() -> str:
     try:
         import tomllib
 
-        with open(paths.project_root() / "pyproject.toml", "rb") as handle:
+        with (paths.project_root() / "pyproject.toml").open("rb") as handle:
             return str(tomllib.load(handle)["project"]["version"])
-    except (OSError, KeyError, ValueError) as exc:  # noqa: BLE001 - 允许失败：读不到就显示未知
+    except (OSError, KeyError, ValueError) as exc:
         logger.debug("读版本号失败：{}", exc)
         return "未知"
 
@@ -60,10 +61,10 @@ def open_folder(target: str) -> bool:
     返回：打开成功为 True。**失败必须让调用方知道**——界面据此提示用户，
     否则就成了"点了按钮什么都没发生"。
     """
-    folder = target if os.path.isdir(target) else os.path.dirname(target)
+    folder = target if Path(target).is_dir() else str(Path(target).parent)
     try:
         os.startfile(folder)  # type: ignore[attr-defined]  # Windows 专有
-    except OSError as exc:  # noqa: BLE001 - 允许失败：打不开目录不该影响应用
+    except OSError as exc:
         logger.warning("打开目录失败（{}）：{}", folder, exc)
         return False
     return True

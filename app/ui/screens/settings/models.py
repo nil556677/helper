@@ -36,19 +36,21 @@ def render() -> None:
         for item in models_service.load_all():
             _render_slot(item)
 
-        with ui.expansion("说明：这些配置存在哪", icon="help_outline").classes(
-            "w-full text-sm hp-sources"
+        with (
+            ui.expansion("说明：这些配置存在哪", icon="help_outline").classes(
+                "w-full text-sm hp-sources"
+            ),
+            ui.column().classes("w-full gap-1 p-2"),
         ):
-            with ui.column().classes("w-full gap-1 p-2"):
-                ui.label(
-                    "配置写进**数据库**的 llm_slots 表（每个槽位一行）；api key 只存 DPAPI 密文，明文不落盘。"
-                ).classes("hp-field-help")
-                ui.label(
-                    "config.json 只留「打开数据库之前就必须知道」的两项：日志级别与数据目录。"
-                ).classes("hp-field-help")
-                ui.label(
-                    "采样参数、超时、输出上限这些高级项不在界面上暴露，统一用数据库里的默认值。"
-                ).classes("hp-field-help")
+            ui.label(
+                "配置写进**数据库**的 llm_slots 表（每个槽位一行）；api key 只存 DPAPI 密文，明文不落盘。"
+            ).classes("hp-field-help")
+            ui.label(
+                "config.json 只留「打开数据库之前就必须知道」的两项：日志级别与数据目录。"
+            ).classes("hp-field-help")
+            ui.label(
+                "采样参数、超时、输出上限这些高级项不在界面上暴露，统一用数据库里的默认值。"
+            ).classes("hp-field-help")
 
 
 def _mask(tail: str) -> str:

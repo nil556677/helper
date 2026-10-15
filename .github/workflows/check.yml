@@ -1,0 +1,58 @@
+# =====================================================================
+# helper —— CI 全套静态检查 + 单元测试
+#
+# 为什么用 windows-latest（不是 ubuntu）：
+#   本仓库代码里有依赖 Windows 的分支（DPAPI 相关 Windows API、
+#   QtWebEngine 壳），交叉平台跑单测没有意义，直接钉在 Windows。
+#   见 docs/基础设施补全计划.md T1.4。
+#
+# 为什么依赖用 `requirements.txt` 而不是 `requirements.lock.txt`：
+#   仓库的锁文件是"冻结安装后状态"，可能滞后/不完整（T1.3 的
+#   完整脚本尚未跑通，当前 lock 未补全分组和 header）。CI 里用
+#   带版本区间的 `requirements.txt`（直接依赖）让 pip 现场解析，
+#   更稳；等 lock 真正落实后可在注释里切回 `-r requirements.lock.txt`。
+#   （两种方式都只覆盖单测依赖，见下方 `ruff` 说明。）
+#
+# 为什么安装并单独用 `python -m ruff`：
+#   `ruff` 不在 requirements.txt / lock 里（本机是辅助脚本单独装的），
+#   CI 是干净环境，需显式先装。用 `python -m ruff` 可确保用的是
+#   当前解释器下的版本，避免与否决缓存/其它环境路径打架。
+#
+# 为什么不跑 tests/ui：
+#   CI 里没有 QtWebEngine 的显示环境（窗口与 DOM 断言都要真实
+#   Chromium 渲染，受限/无头环境会白屏，见 README「两条环境限制」）。
+#   界面测试在本机才是主战场，CI 只跑不动界面的单元测试。
+# =====================================================================
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Install ruff
+        run: python -m pip install ruff
+
+      - name: Lint (ruff check)
+        run: python -m ruff check .
+
+      - name: Unit tests (no ui)
+        # 只跑不碰界面的单测；tests/ui 需 QtWebEngine 显示环境，不在 CI 跑。
+        # `-m "not slow and not eval"` 与 pytest.ini 的 markers 定义对应。
+        run: python -m pytest tests/unit -q -m "not slow and not eval"

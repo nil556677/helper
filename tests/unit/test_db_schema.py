@@ -50,7 +50,7 @@ def _seed_document(conn: sqlite3.Connection) -> int:
 
 def test_init_creates_all_tables(tmp_path: Path) -> None:
     conn = _fresh(tmp_path)
-    assert EXPECTED_TABLES <= table_names(conn)
+    assert table_names(conn) >= EXPECTED_TABLES
     assert schema_version(conn) == SCHEMA_VERSION
 
 

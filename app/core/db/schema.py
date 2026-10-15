@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 import time
 from pathlib import Path
@@ -28,7 +29,7 @@ from pathlib import Path
 from loguru import logger
 
 from app.core import paths
-from app.core.db.connection import get_connection, transaction
+from app.core.db.connection import get_connection
 
 #: 当前 schema 版本。改表结构就 +1，并在 MIGRATIONS 里补一条。
 SCHEMA_VERSION = 3
@@ -258,10 +259,8 @@ def _apply_migration(conn: sqlite3.Connection, version: int, sql: str) -> None:
     try:
         conn.executescript(script)
     except sqlite3.Error as exc:
-        try:
+        with contextlib.suppress(sqlite3.Error):  # 允许失败：可能已经没有活动事务了
             conn.execute("ROLLBACK")
-        except sqlite3.Error:  # noqa: BLE001 - 允许失败：可能已经没有活动事务了
-            pass
         raise RuntimeError(f"schema v{version} 迁移失败（已回滚）：{exc}") from exc
 
 

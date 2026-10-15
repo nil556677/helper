@@ -12,6 +12,12 @@ from app.core.db.connection import (
     get_connection,
     transaction,
 )
+from app.core.db.health import (
+    last_shutdown_was_clean,
+    mark_clean_exit,
+    quick_check,
+    verify_unclean_exit,
+)
 from app.core.db.schema import SCHEMA_VERSION, init_db, init_schema, schema_version
 
 __all__ = [
@@ -22,6 +28,10 @@ __all__ = [
     "get_connection",
     "init_db",
     "init_schema",
+    "last_shutdown_was_clean",
+    "mark_clean_exit",
+    "quick_check",
     "schema_version",
     "transaction",
+    "verify_unclean_exit",
 ]

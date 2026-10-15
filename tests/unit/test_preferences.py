@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.services import preferences
 from app.core.db import schema
+from app.services import preferences
 
 
 def _prepare(fake_root: Path) -> None:

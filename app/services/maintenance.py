@@ -78,7 +78,7 @@ def remove_orphan_copies(*, now: float | None = None, min_age_s: float = ORPHAN_
             shutil.rmtree(child, ignore_errors=True)
             removed += 1
             logger.info("清理孤儿副本：{}", child.name)
-        except OSError as exc:  # noqa: BLE001 - 删不掉不该让整个清理失败
+        except OSError as exc:
             logger.warning("删孤儿副本失败（{}）：{}", child, exc)
     return removed
 
@@ -99,7 +99,7 @@ def remove_inbox_leftovers(*, now: float | None = None, min_age_s: float = INBOX
                 continue
             child.unlink(missing_ok=True)
             removed += 1
-        except OSError as exc:  # noqa: BLE001 - 同上
+        except OSError as exc:
             logger.warning("删暂存文件失败（{}）：{}", child, exc)
     return removed
 
