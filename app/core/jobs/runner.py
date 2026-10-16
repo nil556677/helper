@@ -34,6 +34,12 @@ from app.core.jobs.model import (
 #: 每条泳道的并发上限（cpu 必须 1：实测依据见模块说明）
 LANE_LIMITS: dict[str, int] = {"cpu": 1, "io": 2}
 
+#: **全局**同时执行的任务数上限（在泳道之上再加一道总闸）。
+#: 泳道上限管的是"哪一类活儿能并几个"，这个管的是"整台机器上同时跑几个"——
+#: 桌面场景下任务吃的是同一块磁盘与同一批 CPU 核，放开跑只会让界面和用户操作一起变慢。
+#: 默认 3 = 现有泳道之和（cpu 1 + io 2），即"不改变现状的总量"，但从此有一个**明确、可见**的上限。
+MAX_CONCURRENT_TASKS = 3
+
 #: 有活可干时的轮询间隔；没活时最多睡这么久（等被 wake 或被下一条 next_run_at 叫醒）
 ACTIVE_POLL_S = 0.5
 IDLE_SLEEP_S = 5.0
@@ -74,10 +80,13 @@ class Runner:
         inline: bool = False,
         lag_provider: Callable[[], float] | None = None,
         lane_limits: dict[str, int] | None = None,
+        max_concurrent: int | None = None,
     ) -> None:
         self.inline = inline
         self._lag_provider = lag_provider
         self._lane_limits = dict(lane_limits or LANE_LIMITS)
+        #: 全局并发上限（见 :data:`MAX_CONCURRENT_TASKS`）
+        self.max_concurrent = max(1, int(max_concurrent or MAX_CONCURRENT_TASKS))
         #: 本执行器的身份（进程号 + 随机后缀）：认领时写进 `worker`，退出收尾时据此只认自己的活
         self._tag = f"{os.getpid()}-{uuid4().hex[:6]}"
         self._stop = threading.Event()
@@ -161,6 +170,12 @@ class Runner:
         """调度线程是否在跑。"""
         return bool(self._thread and self._thread.is_alive())
 
+    @property
+    def running_count(self) -> int:
+        """当前**正在执行**的任务数（不含排队）——界面显示的"并发 x/y"用它。"""
+        with self._lock:
+            return sum(self._busy.values())
+
     # ---------------- 调度 ----------------
 
     def tick(self, *, now: float | None = None) -> list[Job]:
@@ -176,6 +191,10 @@ class Runner:
             while True:
                 with self._lock:
                     if self._busy.get(lane, 0) >= limit:
+                        break
+                    # 全局总闸（泳道之上）：同时跑的任务总数不超过上限。
+                    # inline 模式是同步执行、没有并发，这道闸对它没有意义（同泳道上限）。
+                    if not self.inline and sum(self._busy.values()) >= self.max_concurrent:
                         break
                 job = store.claim_next(
                     kinds, lease_s=self._lane_lease(lane), worker=self._worker_name(lane), now=now

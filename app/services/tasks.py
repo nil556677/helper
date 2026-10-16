@@ -1,11 +1,19 @@
 """任务系统的**界面侧**服务（UI-free，可直接被 pytest 调用）。
 
-界面只认这里返回的普通数据；表结构、状态机、执行器都在 `app/app/core/jobs`（§13.2 的接缝）。
+界面只认这里返回的**类型化视图模型**（§8.2 的接缝）：表结构、状态机、执行器都在
+`app/core/jobs`；本模块把 `Job` 这类领域对象整理成界面直接能画的形状。
+
+**为什么返回 dataclass 而不是 dict**：层与层之间用字符串键传数据时，**改一个字段名不会有任何
+地方报错**——只能靠测试发现。返回 `frozen dataclass` 之后，界面写 `job.note` 写错当场可见；
+也让"这一屏到底需要哪些字段"成为一份可读的契约（见 `docs/分层与类型化改造方案.md`）。
 """
 
 from __future__ import annotations
 
+import json
+import time
 from collections.abc import Iterable
+from dataclasses import dataclass, replace
 from typing import Any
 
 from app.core.jobs import api
@@ -45,14 +53,18 @@ _STATUS_LABELS = {
 }
 
 #: 事件/失败分类 → 中文。**复用 §10.1 的九类**（同一套词汇，别造第二套），
-#: 再补任务特有的几种：进程中断、被关窗口、用户取消、类型没了。
+#: 再补任务特有的几种：进程中断、被关窗口、用户取消、类型没了、执行结果。
 KIND_LABELS: dict[str, str] = {
     **LLM_KIND_LABELS,
     "interrupted": "被中断（关窗口）",
     "crash": "进程中断（强杀/断电）",
     "cancelled": "用户取消",
     "unsupported": "类型已不存在",
+    "result": "执行结果",
 }
+
+#: 参数值在界面上最多显示多少个字符（长路径/长文本截断，完整值靠 tooltip）
+PARAM_MAX_CHARS = 120
 
 #: 任务类型 → 图标（界面用；不认识的就给个通用图标）
 _KIND_ICONS = {
@@ -62,6 +74,198 @@ _KIND_ICONS = {
     "rebuild": "refresh",
     "cleanup": "cleaning_services",
 }
+
+
+# ---------------------------------------------------------------------------
+# 视图模型（界面只读它们）
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ParamItem:
+    """一项任务参数（界面逐行显示；``full`` 是未截断的原值，挂在 tooltip 上）。"""
+
+    key: str
+    value: str
+    full: str
+
+
+@dataclass(frozen=True)
+class TaskEventView:
+    """事件时间线里的一条（失败/中断/取消/结果的经过）。"""
+
+    at: float
+    attempt: int
+    kind: str
+    kind_label: str
+    message: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class TaskStats:
+    """各状态计数（左栏徽标与页面状态行用）。"""
+
+    pending: int
+    running: int
+    done: int
+    failed: int
+    cancelled: int
+    active: int
+
+
+@dataclass(frozen=True)
+class Concurrency:
+    """当前并发情况（界面显示"并发 x/y"）。"""
+
+    running: int
+    limit: int
+    degraded: bool
+
+
+@dataclass(frozen=True)
+class TaskView:
+    """任务页一行所需的**全部**字段。
+
+    ``from_job`` 是「行 → 视图模型」的唯一映射处：新增字段只改这里一处。
+    """
+
+    id: int
+    kind: str
+    title: str
+    icon: str
+    name: str
+    status: str
+    status_label: str
+    progress: float
+    done: int
+    total: int
+    note: str
+    result: str
+    params: tuple[ParamItem, ...]
+    error: str
+    error_kind: str
+    error_label: str
+    attempts: int
+    max_attempts: int
+    cancelling: bool
+    created_at: float
+    started_at: float | None
+    finished_at: float | None
+    duration_s: float | None
+    updated_at: float
+    queue_position: int = 0
+
+    @classmethod
+    def from_job(cls, job: Any, *, now: float | None = None) -> TaskView:
+        """把一个 ``Job`` 变成界面要的形状（**唯一**映射处）。"""
+        name = str(job.payload.get("name") or job.payload.get("source_name") or "")
+        if not name and job.payload.get("doc_id"):
+            name = f"资料 #{job.payload['doc_id']}"
+        return cls(
+            id=job.id,
+            kind=job.kind,
+            title=kind_title(job.kind),
+            icon=kind_icon(job.kind),
+            name=name,
+            status=job.status,
+            status_label=_STATUS_LABELS.get(job.status, job.status),
+            progress=job.progress,
+            done=job.done,
+            total=job.total,
+            note=job.note,
+            result=job.note,
+            params=_format_params(job.payload),
+            error=job.error or "",
+            error_kind=job.error_kind or "",
+            error_label=KIND_LABELS.get(job.error_kind or "", ""),
+            attempts=job.fails,
+            max_attempts=job.max_attempts,
+            cancelling=job.cancelled_pending,
+            created_at=job.created_at,
+            started_at=job.started_at,
+            finished_at=job.finished_at,
+            duration_s=_duration_s(job, now=now),
+            updated_at=job.updated_at,
+        )
+
+
+@dataclass(frozen=True)
+class TaskDetail(TaskView):
+    """详情弹窗用：一行所需的字段 + 事件时间线。"""
+
+    events: tuple[TaskEventView, ...] = ()
+
+
+@dataclass(frozen=True)
+class TaskOverview:
+    """任务页一屏所需的全部数据（服务端分页）。"""
+
+    stats: TaskStats
+    running: tuple[TaskView, ...]
+    items: tuple[TaskView, ...]
+    total: int
+    page: int
+    pages: int
+    size: int
+    group: str
+    paused: bool
+    concurrency: Concurrency
+    degraded: bool
+    hint: str
+
+
+# ---------------------------------------------------------------------------
+# 内部：领域对象 → 视图模型
+# ---------------------------------------------------------------------------
+
+
+def _duration_s(job: Any, *, now: float | None = None) -> float | None:
+    """这次执行花了多久（秒）：开始过才有；还在跑就按"到现在"算。"""
+    started = job.started_at
+    if not started:
+        return None
+    ended = job.finished_at or (time.time() if now is None else now)
+    return max(0.0, float(ended) - float(started))
+
+
+def _format_params(payload: dict[str, Any]) -> tuple[ParamItem, ...]:
+    """把参数整理成界面能逐行显示的键值对（值统一成短字符串）。"""
+    items: list[ParamItem] = []
+    for key in sorted(payload):
+        value = payload[key]
+        if isinstance(value, (dict, list)):
+            text = json.dumps(value, ensure_ascii=False)
+        elif value is None:
+            text = "—"
+        else:
+            text = str(value)
+        items.append(
+            ParamItem(
+                key=str(key),
+                value=text if len(text) <= PARAM_MAX_CHARS else text[:PARAM_MAX_CHARS] + "…",
+                full=text,
+            )
+        )
+    return tuple(items)
+
+
+def _stats() -> TaskStats:
+    """各状态计数（core 给的是 dict，这里转成类型化对象）。"""
+    raw = api.stats()
+    return TaskStats(
+        pending=int(raw.get(PENDING, 0)),
+        running=int(raw.get(RUNNING, 0)),
+        done=int(raw.get(DONE, 0)),
+        failed=int(raw.get(FAILED, 0)),
+        cancelled=int(raw.get(CANCELLED, 0)),
+        active=int(raw.get("active", 0)),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 任务类型元信息
+# ---------------------------------------------------------------------------
 
 
 def kind_title(kind: str) -> str:
@@ -77,57 +281,47 @@ def kind_icon(kind: str) -> str:
     return _KIND_ICONS.get(kind, "task_alt")
 
 
-def describe(job: Any) -> dict[str, Any]:
-    """把任务整理成界面直接能画的字段。"""
-    name = str(job.payload.get("name") or job.payload.get("source_name") or "")
-    if not name and job.payload.get("doc_id"):
-        name = f"资料 #{job.payload['doc_id']}"
-    return {
-        "id": job.id,
-        "kind": job.kind,
-        "title": kind_title(job.kind),
-        "icon": kind_icon(job.kind),
-        "name": name,
-        "status": job.status,
-        "status_label": _STATUS_LABELS.get(job.status, job.status),
-        "progress": job.progress,
-        "done": job.done,
-        "total": job.total,
-        "note": job.note,
-        "error": job.error or "",
-        "error_kind": job.error_kind or "",
-        "error_label": KIND_LABELS.get(job.error_kind or "", ""),
-        "attempts": job.fails,
-        "max_attempts": job.max_attempts,
-        "cancelling": job.cancelled_pending,
-        "created_at": job.created_at,
-        "updated_at": job.updated_at,
-        "queue_position": 0,
-    }
+def concurrency() -> Concurrency:
+    """当前并发情况（界面显示"并发 x/y"）：在跑几个、上限几个、是不是被让路了。"""
+    from app.core.jobs.runner import MAX_CONCURRENT_TASKS
+
+    runner = get_runner()
+    if runner is None:
+        return Concurrency(running=0, limit=MAX_CONCURRENT_TASKS, degraded=False)
+    return Concurrency(
+        running=runner.running_count,
+        limit=runner.max_concurrent,
+        degraded=bool(runner.lag_degraded),
+    )
 
 
-def detail(job_id: int) -> dict[str, Any] | None:
-    """一个任务的**完整情况**：字段 + 事件时间线（每次失败/中断/取消各一笔）。
+# ---------------------------------------------------------------------------
+# 列表与详情
+# ---------------------------------------------------------------------------
 
-    界面上"详情"弹卡用它：用户点开就能看到"失败了几次、每次什么原因、有没有完整报错"，
-    而不用去翻日志文件。
+
+def detail(job_id: int) -> TaskDetail | None:
+    """一个任务的**完整情况**：字段 + 事件时间线（每次失败/中断/取消/结果各一笔）。
+
+    界面上"详情"弹卡用它：用户点开就能看到"带了什么参数、跑了多久、结果是什么、
+    失败了几次、每次什么原因"，而不用去翻日志文件。
     """
     job = api.get(job_id)
     if job is None:
         return None
-    data = describe(job)
-    data["events"] = [
-        {
-            "at": event.at,
-            "attempt": event.attempt,
-            "kind": event.kind,
-            "kind_label": KIND_LABELS.get(event.kind, event.kind),
-            "message": event.message,
-            "detail": event.detail,
-        }
+    view = TaskView.from_job(job)
+    events = tuple(
+        TaskEventView(
+            at=event.at,
+            attempt=event.attempt,
+            kind=event.kind,
+            kind_label=KIND_LABELS.get(event.kind, event.kind),
+            message=event.message,
+            detail=event.detail,
+        )
         for event in api.events(job_id)
-    ]
-    return data
+    )
+    return TaskDetail(**vars(view), events=events)
 
 
 def active_count() -> int:
@@ -135,25 +329,23 @@ def active_count() -> int:
     return int(api.stats()["active"])
 
 
-def overview(*, group: str = "active", page: int = 1, size: int = 20) -> dict[str, Any]:
+def overview(*, group: str = "active", page: int = 1, size: int = 20) -> TaskOverview:
     """任务页一屏所需的数据（**服务端分页**）。
 
     为什么要分页：队列可能积几百条、历史可能上万条——"全查出来再切"既慢又没人看。
 
     "正在跑"**单独取、不分页**：它是"现在在干什么"的答案，无论筛选到哪一组都该看见；
-    而且它受泳道并发限制（cpu 1 + io 2），永远不会多到需要分页。
+    而且它受全局并发上限（默认 3）限制，永远不会多到需要分页。
 
     参数：
         group: 筛选分组（:data:`STATUS_GROUPS` 的 key）。
         page: 页码（1 基）。
         size: 每页条数。
-    返回：``{'stats', 'running', 'items', 'total', 'page', 'pages', 'group', 'paused',
-    'degraded', 'hint'}``。
     """
     from math import ceil
 
-    stats = api.stats()
-    running = [describe(job) for job in api.list_jobs(statuses=(RUNNING,), limit=50)]
+    stats = _stats()
+    running = tuple(TaskView.from_job(job) for job in api.list_jobs(statuses=(RUNNING,), limit=50))
     statuses = STATUS_GROUPS.get(group, STATUS_GROUPS["active"])
     total = api.count_jobs(statuses=statuses)
     size = max(1, int(size))
@@ -165,26 +357,33 @@ def overview(*, group: str = "active", page: int = 1, size: int = 20) -> dict[st
         offset=(current - 1) * size,
         newest_first=group in _NEWEST_FIRST_GROUPS,
     )
-    items = [describe(job) for job in jobs]
+    items = [TaskView.from_job(job) for job in jobs]
     if group == "active":
         # "进行中"里排队那几条要显示"前面还有几个"，位置按队列顺序算
-        for position, item in enumerate(items, start=1):
-            if item["status"] == PENDING:
-                item["queue_position"] = position
+        items = [
+            replace(item, queue_position=position) if item.status == PENDING else item
+            for position, item in enumerate(items, start=1)
+        ]
     runner = get_runner()
-    return {
-        "stats": stats,
-        "running": running,
-        "items": items,
-        "total": total,
-        "page": current,
-        "pages": pages,
-        "size": size,
-        "group": group if group in STATUS_GROUPS else "active",
-        "paused": api.is_paused(),
-        "degraded": bool(runner is not None and runner.lag_degraded),
-        "hint": last_error_hint(),
-    }
+    return TaskOverview(
+        stats=stats,
+        running=running,
+        items=tuple(items),
+        total=total,
+        page=current,
+        pages=pages,
+        size=size,
+        group=group if group in STATUS_GROUPS else "active",
+        paused=api.is_paused(),
+        concurrency=concurrency(),
+        degraded=bool(runner is not None and runner.lag_degraded),
+        hint=last_error_hint(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 动作（界面按钮直接调）
+# ---------------------------------------------------------------------------
 
 
 def cancel(job_id: int) -> bool:

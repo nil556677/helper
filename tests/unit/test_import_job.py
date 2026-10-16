@@ -64,8 +64,8 @@ def test_upload_goes_through_queue(library_db: None) -> None:
     jobs = api.list_jobs()
     assert jobs[0].status != PENDING
     items = knowledge.documents()
-    assert [item["name"] for item in items] == ["设备采购合同.md"]
-    assert items[0]["chunks"] >= 2
+    assert [item.name for item in items] == ["设备采购合同.md"]
+    assert items[0].chunks >= 2
     assert not list(paths.inbox_dir().glob("*")), "跑完要把 inbox 清干净"
 
 
@@ -89,8 +89,8 @@ def test_parse_failure_does_not_retry(library_db: None) -> None:
     assert "另存为" in str(job.error)
 
     items = knowledge.documents()
-    assert items and items[0]["status"] == "failed"
-    assert "另存为" in items[0]["detail"]
+    assert items and items[0].status == "failed"
+    assert "另存为" in items[0].detail
 
 
 def test_rebuild_goes_through_queue(library_db: None) -> None:
@@ -102,7 +102,7 @@ def test_rebuild_goes_through_queue(library_db: None) -> None:
 
     _enqueue("合同.md", SAMPLE.encode())
     Runner(inline=True).drain()
-    doc_id = knowledge.documents()[0]["id"]
+    doc_id = knowledge.documents()[0].id
     before = int(get_connection().execute("SELECT count(*) AS n FROM chunks").fetchone()["n"])
 
     job_id = tasks_app.enqueue_rebuild(doc_id)

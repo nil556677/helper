@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from app.core.db.connection import get_connection, transaction
+from app.core.llm import store as slot_store
 from app.core.llm.openai_compat import ProbeResult, probe_chat, probe_ocr
 from app.core.security import SecurityError, protect, unprotect
 
@@ -72,43 +72,64 @@ def _slot(slot_key: str) -> Slot:
 
 
 def _row(slot_key: str) -> Any:
-    return get_connection().execute(
-        "SELECT * FROM llm_slots WHERE slot = ?", (slot_key,)
-    ).fetchone()
+    return slot_store.get(slot_key)
 
 
-def load_all() -> list[dict[str, Any]]:
+@dataclass(frozen=True)
+class SlotView:
+    """一个槽位在界面上的样子（槽位元信息 + 已存配置）。
+
+    **绝不包含明文 key**：只有尾号 ``key_tail``——界面靠它告诉用户"存着的是哪一把"。
+    """
+
+    key: str
+    title: str
+    purpose: str
+    example: str
+    provider: str
+    base_url: str
+    model: str
+    key_tail: str
+    has_key: bool
+    configured: bool
+
+
+@dataclass(frozen=True)
+class ConnectionOutcome:
+    """一次「测试连接」的结果。"""
+
+    ok: bool
+    kind: str
+    detail: str
+    elapsed_ms: int
+
+
+def load_all() -> tuple[SlotView, ...]:
     """读出全部槽位（槽位元信息 + 已存配置）。
 
     **绝不返回明文 key**：只给尾号（``key_tail``）——界面就靠它告诉用户"存着的是哪一把"。
-
-    返回：每项含 ``key / title / purpose / example / provider / base_url / model /
-    key_tail / has_key / configured``。
     """
-    rows = {
-        str(row["slot"]): row
-        for row in get_connection().execute("SELECT * FROM llm_slots").fetchall()
-    }
-    items: list[dict[str, Any]] = []
+    rows = {str(row["slot"]): row for row in slot_store.list_all()}
+    items: list[SlotView] = []
     for slot in SLOTS:
         row = rows.get(slot.key)
         base_url = str(row["base_url"]) if row else ""
         model = str(row["model"]) if row else ""
         items.append(
-            {
-                "key": slot.key,
-                "title": slot.title,
-                "purpose": slot.purpose,
-                "example": slot.example,
-                "provider": str(row["provider"]) if row else "",
-                "base_url": base_url,
-                "model": model,
-                "key_tail": str(row["key_tail"] or "") if row else "",
-                "has_key": bool(row and row["api_key_cipher"]),
-                "configured": bool(base_url.strip() and model.strip()),
-            }
+            SlotView(
+                key=slot.key,
+                title=slot.title,
+                purpose=slot.purpose,
+                example=slot.example,
+                provider=str(row["provider"]) if row else "",
+                base_url=base_url,
+                model=model,
+                key_tail=str(row["key_tail"] or "") if row else "",
+                has_key=bool(row and row["api_key_cipher"]),
+                configured=bool(base_url.strip() and model.strip()),
+            )
         )
-    return items
+    return tuple(items)
 
 
 def _validate(provider: str, base_url: str, model: str) -> tuple[str, str, str]:
@@ -150,79 +171,61 @@ def save(
     if api_key is not None and api_key.strip() and len(api_key.strip()) < KEY_MIN_CHARS:
         raise ValueError(f"api key 太短（少于 {KEY_MIN_CHARS} 个字符），像是没粘全")
 
-    import time
+    if api_key is None:
+        # 不动密钥列：只更新手填的三项
+        slot_store.upsert_meta(slot.key, provider=provider, base_url=base_url, model=model)
+        return
 
-    now = time.time()
-    with transaction() as conn:
-        if api_key is None:
-            # 不动密钥列：只更新手填的三项
-            conn.execute(
-                "INSERT INTO llm_slots(slot, provider, base_url, model, updated_at)"
-                " VALUES (?, ?, ?, ?, ?)"
-                " ON CONFLICT(slot) DO UPDATE SET provider = excluded.provider,"
-                " base_url = excluded.base_url, model = excluded.model,"
-                " updated_at = excluded.updated_at",
-                (slot.key, provider, base_url, model, now),
-            )
-            return
+    key = api_key.strip()
+    if not key:
+        # 传空串 = 清掉 key（尾号也一起清）
+        slot_store.clear_key(slot.key, provider=provider, base_url=base_url, model=model)
+        return
 
-        key = api_key.strip()
-        if not key:
-            conn.execute(
-                "INSERT INTO llm_slots(slot, provider, base_url, model, api_key_cipher, key_tail,"
-                " updated_at) VALUES (?, ?, ?, ?, NULL, NULL, ?)"
-                " ON CONFLICT(slot) DO UPDATE SET provider = excluded.provider,"
-                " base_url = excluded.base_url, model = excluded.model,"
-                " api_key_cipher = NULL, key_tail = NULL, updated_at = excluded.updated_at",
-                (slot.key, provider, base_url, model, now),
-            )
-            return
-
-        cipher = protect(key.encode("utf-8"))
-        conn.execute(
-            "INSERT INTO llm_slots(slot, provider, base_url, model, api_key_cipher, key_tail,"
-            " updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-            " ON CONFLICT(slot) DO UPDATE SET provider = excluded.provider,"
-            " base_url = excluded.base_url, model = excluded.model,"
-            " api_key_cipher = excluded.api_key_cipher, key_tail = excluded.key_tail,"
-            " updated_at = excluded.updated_at",
-            (slot.key, provider, base_url, model, cipher, key[-KEY_TAIL_CHARS:], now),
-        )
+    slot_store.upsert_with_key(
+        slot.key,
+        provider=provider,
+        base_url=base_url,
+        model=model,
+        api_key_cipher=protect(key.encode("utf-8")),
+        key_tail=key[-KEY_TAIL_CHARS:],
+    )
 
 
-def test_connection(slot_key: str, *, timeout: float | None = None) -> dict[str, Any]:
+def test_connection(slot_key: str, *, timeout: float | None = None) -> ConnectionOutcome:
     """拿库里存着的配置**真发一次极小的请求**，把"通不通"验出来。
 
     参数：
         slot_key: 槽位名。
         timeout: 覆盖探测超时（测试用）。
-    返回：``{"ok": bool, "kind": str, "detail": str, "elapsed_ms": int}``。
-        ``kind`` 见 :data:`app.core.llm.openai_compat.KIND_LABELS`——**失败会分类**，
-        用户照着 detail 就能改。
+    ``kind`` 见 :data:`app.core.llm.openai_compat.KIND_LABELS`——**失败会分类**，
+    用户照着 ``detail`` 就能改。
     """
     slot = _slot(slot_key)
     row = _row(slot_key)
     if row is None or not str(row["base_url"]).strip() or not str(row["model"]).strip():
-        return {"ok": False, "kind": "config", "detail": "先填好接口地址与模型名并保存", "elapsed_ms": 0}
+        return ConnectionOutcome(
+            ok=False, kind="config", detail="先填好接口地址与模型名并保存", elapsed_ms=0
+        )
     if not row["api_key_cipher"]:
-        return {"ok": False, "kind": "config", "detail": "还没填 api key", "elapsed_ms": 0}
+        return ConnectionOutcome(ok=False, kind="config", detail="还没填 api key", elapsed_ms=0)
 
     try:
         api_key = unprotect(bytes(row["api_key_cipher"])).decode("utf-8")
     except SecurityError as exc:  # 换用户/换机器/密文损坏都会走到这里
-        return {
-            "ok": False,
-            "kind": "auth",
-            "detail": f"存着的密钥解不开：{exc}。请重新粘贴一次 key",
-            "elapsed_ms": 0,
-        }
+        return ConnectionOutcome(
+            ok=False,
+            kind="auth",
+            detail=f"存着的密钥解不开：{exc}。请重新粘贴一次 key",
+            elapsed_ms=0,
+        )
 
     probe = _PROBES[slot.probe]
     kwargs = {} if timeout is None else {"timeout": timeout}
     result: ProbeResult = probe(str(row["base_url"]), str(row["model"]), api_key, **kwargs)
-    return {
-        "ok": result.ok,
-        "kind": result.kind,
-        "detail": result.detail,
-        "elapsed_ms": result.elapsed_ms,
-    }
+    return ConnectionOutcome(
+        ok=result.ok,
+        kind=result.kind,
+        detail=result.detail,
+        elapsed_ms=result.elapsed_ms,
+    )

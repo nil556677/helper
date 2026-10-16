@@ -27,6 +27,7 @@ from nicegui import events, run, ui
 from app import tasks as tasks_app
 from app.services import knowledge as knowledge_service
 from app.ui.components.auto_refresh import AutoRefresh
+from app.ui.components.dialog import confirm, notify
 from app.ui.components.format import human_size, human_time
 from app.ui.components.pager import PAGE_SIZES, PageState, render_pager
 
@@ -112,32 +113,32 @@ def render() -> None:
             """重画概览与资料列表（导入 / 删除 / 重建 / 翻页之后调）。"""
             data = knowledge_service.stats()
             auto.touch()  # 记一次"刚查过库"：时间戳与"自动刷新已关"的提示都靠它
-            overview_mark = (data["documents"], data["chunks"], data["bytes"], data["updated_at"])
+            overview_mark = (data.documents, data.chunks, data.bytes, data.updated_at)
             if force or overview_mark != seen["overview"]:
                 seen["overview"] = overview_mark
                 overview.clear()
                 with overview:
                     _card_head("insights", "概览")
                     with ui.row().classes("gap-10 flex-wrap"):
-                        _stat(str(data["documents"]), "份资料")
-                        _stat(str(data["chunks"]), "个片段")
-                        _stat(human_size(int(data["bytes"])), "副本占用")
-                        _stat(human_time(data["updated_at"], empty="还没导过"), "最后更新")
+                        _stat(str(data.documents), "份资料")
+                        _stat(str(data.chunks), "个片段")
+                        _stat(human_size(int(data.bytes)), "副本占用")
+                        _stat(human_time(data.updated_at, empty="还没导过"), "最后更新")
 
             page = knowledge_service.documents_page(
                 page=state.page, size=state.size, query=filters["query"]
             )
-            state.total = int(page["total"])
-            state.page = int(page["page"])
+            state.total = int(page.total)
+            state.page = int(page.page)
             count_label.text = (
-                f"{len(page['items'])}/{page['total']} 份" if page["total"] else "0 份"
+                f"{len(page.items)}/{page.total} 份" if page.total else "0 份"
             )
             count_label.update()
             # 批量动作条 + 记住本页有哪些（"全选本页"要用）
             pick_label.text = f"已选 {len(picked)} 份"
             pick_label.update()
             pick_bar.set_visibility(bool(picked))
-            page_ids[:] = [item["id"] for item in page["items"]]
+            page_ids[:] = [item.id for item in page.items]
 
             # 分页控件：只有页码/总数/每页条数变了才重画（否则下拉会在用户点开时被抽走）
             pager_mark = (state.total, state.page, state.size)
@@ -145,7 +146,7 @@ def render() -> None:
                 seen["pager"] = pager_mark
                 pager_box.clear()
                 with pager_box:
-                    if page["total"]:
+                    if page.total:
                         render_pager(state, on_change=refresh, noun="份")
 
             rows_mark = (
@@ -154,8 +155,8 @@ def render() -> None:
                 filters["query"],
                 tuple(sorted(picked)),  # 选中态变了要重画（图标要跟着换）
                 tuple(
-                    (item["id"], item["chunks"], item["status"], item["detail"])
-                    for item in page["items"]
+                    (item.id, item.chunks, item.status, item.detail)
+                    for item in page.items
                 ),
             )
             if not force and rows_mark == seen["rows"]:
@@ -163,7 +164,7 @@ def render() -> None:
             seen["rows"] = rows_mark
             list_box.clear()
             with list_box:
-                if page["total"]:
+                if page.total:
                     with ui.row().classes("hp-row-head w-full items-center gap-3"):
                         ui.element("div").style("width: 28px")  # 选择列（和行里的图标按钮对齐）
                         ui.label("名称").classes("hp-col-name")
@@ -171,11 +172,11 @@ def render() -> None:
                         ui.label("片段").classes("hp-col")
                         ui.label("状态").classes("hp-col")
                         ui.label("操作").classes("hp-col")
-                for item in page["items"]:
+                for item in page.items:
                     _document_row(item, refresh, picked=picked, on_pick=_toggle_pick)
             empty.text = (
                 ""
-                if page["total"]
+                if page.total
                 else (
                     "没有名称匹配的资料。"
                     if filters["query"]
@@ -207,51 +208,50 @@ def render() -> None:
 
         def _batch_rebuild() -> None:
             count = tasks_app.enqueue_rebuild_many(sorted(picked))
-            ui.notify(f"已排队重建 {count} 份（任务页可见进度）", type="positive")
+            notify(f"已排队重建 {count} 份（任务页可见进度）", kind="positive")
             picked.clear()
             refresh(force=True)
 
         def _batch_delete() -> None:
             """批量删除：破坏性，确认一次（副本文件与片段一起删）。"""
             count = len(picked)
-            with ui.dialog() as dialog, ui.card().classes("hp-card gap-3"):
-                ui.label(f"删掉选中的 {count} 份资料？").classes("hp-card-title")
-                ui.label("它们的片段与索引会一起删掉，副本文件也会清掉。").classes("hp-field-help")
-                with ui.row().classes("hp-actions"):
-                    ui.button("取消", on_click=dialog.close).props("flat dense no-caps").classes(
-                        "hp-row-button w-auto"
-                    )
-                    ui.button(
-                        "删掉",
-                        on_click=lambda: (
-                            knowledge_service.delete(sorted(picked)),
-                            picked.clear(),
-                            dialog.close(),
-                            refresh(force=True),
-                        ),
-                    ).props("unelevated dense no-caps").classes("hp-send").mark("kb-batch-confirm")
-            dialog.open()
+            confirm(
+                f"删掉选中的 {count} 份资料？",
+                "它们的片段与索引会一起删掉，副本文件也会清掉。",
+                lambda: (
+                    knowledge_service.delete(sorted(picked)),
+                    picked.clear(),
+                    refresh(force=True),
+                ),
+                confirm_label="删掉",
+                danger=True,
+                confirm_mark="kb-batch-confirm",
+            )
 
         def _document_row(
-            item: dict[str, Any], reload_page: Any, *, picked: set[int], on_pick: Any
+            item: knowledge_service.DocumentView,
+            reload_page: Any,
+            *,
+            picked: set[int],
+            on_pick: Any,
         ) -> None:
             """列表里的一行：选择 + 名称（失败时带原因）+ 片段数 + 状态 + 重建/删除。"""
-            failed = item["status"] == "failed"
-            chosen = item["id"] in picked
+            failed = item.status == "failed"
+            chosen = item.id in picked
             with ui.row().classes("hp-row-item w-full items-center gap-3"):
                 ui.button(
                     icon="check_box" if chosen else "check_box_outline_blank",
-                    on_click=lambda doc_id=item["id"]: on_pick(doc_id),
+                    on_click=lambda doc_id=item.id: on_pick(doc_id),
                 ).props("flat dense round size=sm").classes("hp-pick").mark(
-                    f"kb-pick-{item['id']}"
+                    f"kb-pick-{item.id}"
                 ).tooltip("取消选中" if chosen else "选中")
                 with ui.column().classes("hp-col-name gap-0"):
-                    ui.label(item["name"]).classes("hp-col-name")
-                    if failed and item["detail"]:
+                    ui.label(item.name).classes("hp-col-name")
+                    if failed and item.detail:
                         # 完整原因 hover 可看（行里只放一句）
-                        ui.label(item["detail"]).classes("hp-field-help").tooltip(item["detail"])
-                ui.label(human_size(item["size"])).classes("hp-col")
-                ui.label("—" if failed else str(item["chunks"])).classes("hp-col")
+                        ui.label(item.detail).classes("hp-field-help").tooltip(item.detail)
+                ui.label(human_size(item.size)).classes("hp-col")
+                ui.label("—" if failed else str(item.chunks)).classes("hp-col")
                 status = ui.label("失败" if failed else "就绪").classes(
                     "hp-col hp-status " + ("hp-status-bad" if failed else "hp-status-ok")
                 )
@@ -260,37 +260,31 @@ def render() -> None:
                 with ui.row().classes("hp-col items-center gap-1 no-wrap justify-end"):
                     ui.button(icon="refresh", on_click=lambda: _rebuild(item, reload_page)).props(
                         "flat dense round size=sm"
-                    ).mark(f"kb-rebuild-{item['id']}").tooltip("重建：用副本重新解析与切分")
+                    ).mark(f"kb-rebuild-{item.id}").tooltip("重建：用副本重新解析与切分")
                     ui.button(
                         icon="delete_outline", on_click=lambda: _ask_delete(item, reload_page)
-                    ).props("flat dense round size=sm").mark(f"kb-delete-{item['id']}").tooltip(
+                    ).props("flat dense round size=sm").mark(f"kb-delete-{item.id}").tooltip(
                         "从知识库里删掉这一份"
                     )
 
-        def _rebuild(item: dict[str, Any], reload_page: Any) -> None:
+        def _rebuild(item: knowledge_service.DocumentView, reload_page: Any) -> None:
             """重建**走队列**：重新解析是重活，直接在界面线程里跑会卡住界面。"""
-            job_id = tasks_app.enqueue_rebuild(int(item["id"]))
-            ui.notify(f"「{item['name']}」已加入重建队列（任务 #{job_id}）", type="positive")
+            job_id = tasks_app.enqueue_rebuild(int(item.id))
+            notify(f"「{item.name}」已加入重建队列（任务 #{job_id}）", kind="positive")
             reload_page(force=True)
 
-        def _ask_delete(item: dict[str, Any], reload_page: Any) -> None:
-            """删除是破坏性操作——用一个小确认框，别让人误点一下就没了。"""
-            with ui.dialog() as dialog, ui.card().classes("hp-card gap-3"):
-                ui.label(f"删掉「{item['name']}」？").classes("hp-card-title")
-                ui.label("它的片段与索引会一起删掉，副本文件也会清掉。").classes("hp-field-help")
-                with ui.row().classes("hp-actions"):
-                    ui.button("取消", on_click=dialog.close).props("flat dense no-caps").classes(
-                        "hp-row-button w-auto"
-                    )
-                    ui.button(
-                        "删掉",
-                        on_click=lambda: (
-                            knowledge_service.delete([int(item["id"])]),
-                            dialog.close(),
-                            reload_page(force=True),
-                        ),
-                    ).props("unelevated dense no-caps").classes("hp-send")
-            dialog.open()
+        def _ask_delete(item: knowledge_service.DocumentView, reload_page: Any) -> None:
+            """删除是破坏性操作——用统一确认框，别让人误点一下就没了。"""
+            confirm(
+                f"删掉「{item.name}」？",
+                "它的片段与索引会一起删掉，副本文件也会清掉。",
+                lambda: (
+                    knowledge_service.delete([int(item.id)]),
+                    reload_page(force=True),
+                ),
+                confirm_label="删掉",
+                danger=True,
+            )
 
         # ---- 导入（这一块不随列表刷新而重建：上传控件要保持自己的状态）----
         async def on_upload(event: events.UploadEventArguments) -> None:
@@ -304,7 +298,7 @@ def render() -> None:
             job_id = tasks_app.enqueue_import(
                 payload, dedupe_key=knowledge_service.upload_dedupe_key(data)
             )
-            ui.notify(f"「{event.name}」已加入队列（任务 #{job_id}）", type="positive")
+            notify(f"「{event.name}」已加入队列（任务 #{job_id}）", kind="positive")
             refresh(force=True)
 
         with ui.column().classes("hp-card w-full gap-3"):
@@ -319,8 +313,8 @@ def render() -> None:
                 auto_upload=True,
                 max_file_size=MAX_UPLOAD_BYTES,
                 on_upload=on_upload,
-                on_rejected=lambda *_: ui.notify(
-                    f"单个文件不能超过 {MAX_UPLOAD_BYTES // 1024 // 1024} MB", type="negative"
+                on_rejected=lambda *_: notify(
+                    f"单个文件不能超过 {MAX_UPLOAD_BYTES // 1024 // 1024} MB", kind="negative"
                 ),
             ).props("flat dense color=primary").classes("hp-upload w-full").mark("kb-upload")
             ui.label(

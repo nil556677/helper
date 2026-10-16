@@ -21,6 +21,7 @@ from typing import Any
 from nicegui import run, ui
 
 from app.services import models as models_service
+from app.ui.components.dialog import notify
 
 #: 每个槽位的图标（卡片头用）
 _SLOT_ICONS = {"reasoning": "smart_toy", "ocr": "image"}
@@ -58,9 +59,9 @@ def _mask(tail: str) -> str:
     return ("•" * 8 + tail) if tail else ""
 
 
-def _slot_item(slot_key: str) -> dict[str, Any]:
+def _slot_item(slot_key: str) -> models_service.SlotView:
     """取某个槽位的最新状态（保存后要立刻反映到界面上）。"""
-    return next(item for item in models_service.load_all() if item["key"] == slot_key)
+    return next(item for item in models_service.load_all() if item.key == slot_key)
 
 
 def _field(name: str, help_text: str, value: str, marker: str) -> Any:
@@ -72,32 +73,32 @@ def _field(name: str, help_text: str, value: str, marker: str) -> Any:
         return ui.input(value=value).props("outlined dense").classes("hp-input").mark(marker)
 
 
-def _render_slot(item: dict[str, Any]) -> None:
+def _render_slot(item: models_service.SlotView) -> None:
     """一个模型槽位的卡片：手填三项 + api key（只显示尾号）+ 自己的「测试连接」与「保存」。"""
-    slot_key = str(item["key"])
-    state = {"tail": str(item["key_tail"]), "editing": False}
+    slot_key = str(item.key)
+    state = {"tail": str(item.key_tail), "editing": False}
 
     with ui.column().classes("hp-card hp-slot w-full gap-3"):
         with ui.row().classes("hp-card-head w-full"):
             ui.icon(_SLOT_ICONS.get(slot_key, "smart_toy")).classes("text-base hp-card-icon")
-            ui.label(str(item["title"])).classes("hp-card-title")
+            ui.label(str(item.title)).classes("hp-card-title")
             ui.icon("info").classes("text-xs hp-card-icon").tooltip(f"配置项名称：{slot_key}")
             ui.space()
             status = ui.label("").classes("hp-status")
-        ui.label(str(item["purpose"])).classes("hp-field-help")
+        ui.label(str(item.purpose)).classes("hp-field-help")
 
         with ui.column().classes("w-full gap-2"):
             provider = _field(
-                "服务商", "手填，例如 火山方舟 / DeepSeek / OpenAI", str(item["provider"]),
+                "服务商", "手填，例如 火山方舟 / DeepSeek / OpenAI", str(item.provider),
                 f"slot-{slot_key}-provider",
             )
             model = _field(
-                "模型名", f"手填，例如 {str(item['example']).split(' / ')[-1]}", str(item["model"]),
+                "模型名", f"手填，例如 {str(item.example).split(' / ')[-1]}", str(item.model),
                 f"slot-{slot_key}-model",
             )
             base_url = _field(
                 "接口地址", "手填，例如 https://ark.cn-beijing.volces.com/api/v3",
-                str(item["base_url"]), f"slot-{slot_key}-base_url",
+                str(item.base_url), f"slot-{slot_key}-base_url",
             )
             with ui.row().classes("hp-field-row"):
                 with ui.column().classes("hp-field-main gap-0"):
@@ -128,7 +129,7 @@ def _render_slot(item: dict[str, Any]) -> None:
 
     def refresh_status() -> None:
         fresh = _slot_item(slot_key)
-        configured = bool(fresh["configured"] and fresh["has_key"])
+        configured = bool(fresh.configured and fresh.has_key)
         status.text = "已配置" if configured else "未配置"
         status.classes(add="hp-status-ok") if configured else status.classes(remove="hp-status-ok")
         # 没配好就别让人点测试：点了只会得到一句"先填好…"，不如直接不给点
@@ -146,18 +147,18 @@ def _render_slot(item: dict[str, Any]) -> None:
                 api_key=api_key,
             )
         except (ValueError, models_service.SecurityError) as exc:
-            ui.notify(f"保存失败：{exc}", type="negative")
+            notify(f"保存失败：{exc}", kind="negative")
             return
 
         state["editing"] = False
-        state["tail"] = str(_slot_item(slot_key)["key_tail"])
+        state["tail"] = str(_slot_item(slot_key).key_tail)
         key_input.value = _mask(state["tail"])
         key_input.props("outlined dense readonly")
         key_input.props(remove="password")
         key_hint.text = "只显示尾号；点「更换」才能粘贴新的。"
         key_hint.update()
         refresh_status()
-        ui.notify(f"{item['title']}已保存", type="positive")
+        notify(f"{item.title}已保存", kind="positive")
 
     async def do_test() -> None:
         test_button.props("loading")
@@ -170,15 +171,15 @@ def _render_slot(item: dict[str, Any]) -> None:
         finally:
             test_button.props(remove="loading")
 
-        if outcome["ok"]:
-            result.text = f"测试通过 · {outcome['elapsed_ms']} ms"
+        if outcome.ok:
+            result.text = f"测试通过 · {outcome.elapsed_ms} ms"
             result.classes(add="hp-status-ok")
-            ui.notify(f"{item['title']}：{outcome['detail']}", type="positive")
+            notify(f"{item.title}：{outcome.detail}", kind="positive")
         else:
-            result.text = f"测试失败 · {outcome['detail']}"
+            result.text = f"测试失败 · {outcome.detail}"
             result.classes(add="hp-status-bad")
             result.classes(remove="hp-status-ok")
-            ui.notify(f"{item['title']}连接失败：{outcome['detail']}", type="negative")
+            notify(f"{item.title}连接失败：{outcome.detail}", kind="negative")
         result.update()
 
     save_button.on_click(do_save)

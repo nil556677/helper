@@ -11,6 +11,7 @@ from functools import partial
 from nicegui import ui
 
 from app.services import settings as settings_service
+from app.ui.components.dialog import notify
 
 
 def _card_head(icon: str, title: str) -> None:
@@ -27,7 +28,7 @@ def render() -> None:
     def open_it(target: str, what: str) -> None:
         """打开目录。失败要说出来——静默失败就是"点了按钮什么都没发生"。"""
         if not settings_service.open_folder(target):
-            ui.notify(f"打不开{what} —— 它可能已被删掉或移到别处", type="negative")
+            notify(f"打不开{what} —— 它可能已被删掉或移到别处", kind="negative")
 
     with ui.column().classes("w-full gap-4"):
         ui.label("通用").classes("hp-page-title")
@@ -45,7 +46,7 @@ def render() -> None:
                     ui.label(
                         "按天记录，只留最近 7 天；界面不提供级别设置（排障时改 config.json）。"
                     ).classes("hp-field-help")
-                ui.label(str(overview["paths"]["日志文件"])).classes("hp-path")
+                ui.label(overview.log_file).classes("hp-path")
 
         # ---- 数据 ----
         with ui.column().classes("hp-card w-full gap-3"):
@@ -56,25 +57,25 @@ def render() -> None:
                     ui.label("备份 = 复制这个目录：资料、数据库、设置都在里面。").classes(
                         "hp-field-help"
                     )
-                ui.label(str(overview["paths"]["数据目录"])).classes("hp-path")
+                ui.label(overview.data_dir).classes("hp-path")
             with ui.row().classes("hp-actions"):
                 ui.button(
                     "打开数据目录",
                     icon="folder_open",
-                    on_click=partial(open_it, str(overview["paths"]["数据目录"]), "数据目录"),
+                    on_click=partial(open_it, overview.data_dir, "数据目录"),
                 ).props("flat dense no-caps").classes("hp-row-button w-auto")
                 ui.button(
                     "打开日志目录",
                     icon="description",
-                    on_click=partial(open_it, str(overview["paths"]["日志文件"]), "日志目录"),
+                    on_click=partial(open_it, overview.log_file, "日志目录"),
                 ).props("flat dense no-caps").classes("hp-row-button w-auto")
             # 绝对路径与"数据结构版本"收进折叠区：排障有用，摆在正文里既像开发术语又撑窄屏
             with ui.expansion("详细信息（排查问题时用）", icon="bug_report").classes(
                 "w-full text-sm hp-sources"
             ), ui.column().classes("w-full gap-2 p-2"):
-                for name in ("安装目录", "数据库", "日志文件", "资料副本"):
-                    _detail_row(name, str(overview["paths"][name]))
-                _detail_row("数据结构版本", str(overview["schema_version"]))
+                for spot in overview.spots:
+                    _detail_row(spot.label, spot.path)
+                _detail_row("数据结构版本", str(overview.schema_version))
 
         # ---- 关于 ----
         with ui.column().classes("hp-card w-full gap-2"):

@@ -2,31 +2,97 @@
 
 界面只认这里返回的普通数据；解析、判重、切分全在 core（§5.1 红线 2）。
 
-**导入现在走任务队列**（`run_import_job`）：上传 → `stage_upload` 落 `data/inbox/` →
-排一条 `import` 任务 → 任务系统在后台解析入库。这样界面不需要等，关窗口也不丢
-（任务表 + inbox 暂存文件，见技术方案 §13）。
+**导入现在走任务队列**（任务入口在 `app/tasks/import_doc.py` 的 `ImportTask`）：上传 →
+`stage_upload` 落 `data/inbox/` → 排一条 `import` 任务 → 任务系统在后台解析入库。
+这样界面不需要等，关窗口也不丢（任务表 + inbox 暂存文件，见技术方案 §13）。
+
+本模块只提供**业务工具**（暂存、判重键、查询、删除、重建）；任务的声明与执行入口
+都在 `app/tasks/` 下（一个任务一个类，启动时自动发现注册）。
 """
 
 from __future__ import annotations
 
 import hashlib
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from loguru import logger
-
 from app.core import paths
-from app.core.db.connection import get_connection
-from app.core.features.rag.ingest import parsers, pipeline
+from app.core.features.rag.ingest import pipeline, store
 from app.core.features.rag.ingest.splitter import CHUNK_MAX_CHARS
-from app.core.jobs.model import JobContext, JobError
+from app.core.parse import supported_suffixes
+
+# ---------------------------------------------------------------------------
+# 视图模型（界面只读它们；`from_row` 是「行 → 视图」的唯一映射处）
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DocumentView:
+    """资料列表里的一行。"""
+
+    id: int
+    name: str
+    suffix: str
+    size: int
+    chunks: int
+    status: str
+    detail: str
+    updated_at: float
+
+    @classmethod
+    def from_row(cls, row: Any) -> DocumentView:
+        """一行 documents → 界面直接能画的字段（**唯一**映射处）。"""
+        name = str(row["name"])
+        suffix = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
+        return cls(
+            id=int(row["id"]),
+            name=name,
+            suffix=suffix.lstrip("."),
+            size=int(row["size"]),
+            chunks=int(row["chunks"]),
+            status=str(row["status"]),
+            detail=str(row["detail"] or ""),
+            updated_at=float(row["updated_at"]),
+        )
+
+
+@dataclass(frozen=True)
+class KnowledgeStats:
+    """概览：就绪份数 / 失败份数 / 片段数 / 副本占用 / 最后更新。"""
+
+    documents: int
+    failed: int
+    chunks: int
+    bytes: int
+    updated_at: float | None
+
+
+@dataclass(frozen=True)
+class DocumentPage:
+    """资料列表的一页（服务端分页的结果）。"""
+
+    items: tuple[DocumentView, ...]
+    total: int
+    page: int
+    pages: int
+    size: int
+
+
+@dataclass(frozen=True)
+class RebuildOutcome:
+    """重建一份资料的结果。"""
+
+    ok: bool
+    detail: str
+    chunks: int
 
 
 def supported_formats() -> str:
     """支持哪些格式（**从解析表生成**，避免界面文字与代码漂移）。"""
-    return "、".join(parsers.supported_suffixes())
+    return "、".join(supported_suffixes())
 
 
 def chunk_limit() -> int:
@@ -34,66 +100,25 @@ def chunk_limit() -> int:
     return CHUNK_MAX_CHARS
 
 
-def stats() -> dict[str, Any]:
-    """概览：就绪份数 / 片段数 / 副本占用 / 最后更新。
-
-    返回：``{"documents": n, "chunks": m, "bytes": b, "updated_at": ts|None, "failed": k}``。
-    """
-    conn = get_connection()
-    row = conn.execute(
-        """
-        SELECT
-          (SELECT count(*) FROM documents WHERE status = 'ready') AS documents,
-          (SELECT count(*) FROM documents WHERE status = 'failed') AS failed,
-          (SELECT count(*) FROM chunks) AS chunks,
-          (SELECT coalesce(sum(size), 0) FROM documents WHERE status = 'ready') AS bytes,
-          (SELECT max(updated_at) FROM documents WHERE status = 'ready') AS updated_at
-        """
-    ).fetchone()
-    return {
-        "documents": int(row["documents"]),
-        "failed": int(row["failed"]),
-        "chunks": int(row["chunks"]),
-        "bytes": int(row["bytes"]),
-        "updated_at": row["updated_at"],
-    }
+def stats() -> KnowledgeStats:
+    """概览：就绪份数 / 片段数 / 副本占用 / 最后更新（SQL 在 ingest store 里）。"""
+    row = store.counts()
+    return KnowledgeStats(
+        documents=int(row["documents"]),
+        failed=int(row["failed"]),
+        chunks=int(row["chunks"]),
+        bytes=int(row["bytes"]),
+        updated_at=row["updated_at"],
+    )
 
 
-def _document_row(row: Any) -> dict[str, Any]:
-    """把一行 documents 变成界面直接能画的字段。"""
-    name = str(row["name"])
-    suffix = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
-    return {
-        "id": int(row["id"]),
-        "name": name,
-        "suffix": suffix.lstrip("."),
-        "size": int(row["size"]),
-        "chunks": int(row["chunks"]),
-        "status": str(row["status"]),
-        "detail": str(row["detail"] or ""),
-        "updated_at": float(row["updated_at"]),
-    }
-
-
-#: 资料列表的查询（分页与"全都要"共用同一段 SELECT，避免两处漂移）
-_DOCUMENTS_SELECT = """
-        SELECT d.id AS id, d.source_name AS name, d.size AS size, d.status AS status,
-               d.detail AS detail, d.updated_at AS updated_at,
-               (SELECT count(*) FROM chunks c WHERE c.doc_id = d.id) AS chunks
-        FROM documents d
-"""
-
-
-def documents() -> list[dict[str, Any]]:
+def documents() -> tuple[DocumentView, ...]:
     """全部资料（新的在前）。**界面不用它**（列表走 :func:`documents_page` 分页），
     留着是给测试与"导出/统计"这类需要全量的地方用。"""
-    rows = get_connection().execute(
-        f"{_DOCUMENTS_SELECT} ORDER BY d.updated_at DESC, d.id DESC"
-    ).fetchall()
-    return [_document_row(row) for row in rows]
+    return tuple(DocumentView.from_row(row) for row in store.list_all())
 
 
-def documents_page(*, page: int = 1, size: int = 20, query: str = "") -> dict[str, Any]:
+def documents_page(*, page: int = 1, size: int = 20, query: str = "") -> DocumentPage:
     """一页资料（**服务端分页**：`LIMIT/OFFSET` + 一条 `count(*)`）。
 
     为什么必须服务端分页：资料可能几千份，"全查出来再切页"又慢又占内存，
@@ -103,29 +128,19 @@ def documents_page(*, page: int = 1, size: int = 20, query: str = "") -> dict[st
         page: 页码（1 基；越界会被收回合法范围）。
         size: 每页条数。
         query: 名称筛选（子串匹配，空表示不筛）。
-    返回：``{'items', 'total', 'page', 'pages', 'size'}``。
     """
-    keyword = query.strip()
-    where = "WHERE d.source_name LIKE ?" if keyword else ""
-    params: tuple[Any, ...] = (f"%{keyword}%",) if keyword else ()
-    conn = get_connection()
-    total = int(
-        conn.execute(f"SELECT count(*) AS n FROM documents d {where}", params).fetchone()["n"]
-    )
+    total = store.count(query)
     size = max(1, int(size))
     pages = max(1, -(-total // size))
     current = min(max(1, int(page)), pages)
-    rows = conn.execute(
-        f"{_DOCUMENTS_SELECT} {where} ORDER BY d.updated_at DESC, d.id DESC LIMIT ? OFFSET ?",
-        (*params, size, (current - 1) * size),
-    ).fetchall()
-    return {
-        "items": [_document_row(row) for row in rows],
-        "total": total,
-        "page": current,
-        "pages": pages,
-        "size": size,
-    }
+    rows = store.page(query, size=size, offset=(current - 1) * size)
+    return DocumentPage(
+        items=tuple(DocumentView.from_row(row) for row in rows),
+        total=total,
+        page=current,
+        pages=pages,
+        size=size,
+    )
 
 
 def delete(doc_ids: list[int]) -> int:
@@ -133,10 +148,14 @@ def delete(doc_ids: list[int]) -> int:
     return pipeline.delete_documents(doc_ids)
 
 
-def rebuild(doc_id: int) -> dict[str, Any]:
+def rebuild(doc_id: int) -> RebuildOutcome:
     """用副本重建某份资料的片段（换了切分参数或解析器升级后用）。"""
     result = pipeline.rebuild_document(doc_id)
-    return {"ok": result.status == "imported", "detail": result.reason, "chunks": result.chunks}
+    return RebuildOutcome(
+        ok=result.status == "imported",
+        detail=result.reason,
+        chunks=result.chunks,
+    )
 
 
 # ---------------- 走任务队列的导入（技术方案 §13） ----------------
@@ -161,63 +180,7 @@ def upload_dedupe_key(data: bytes) -> str:
     return "import:" + hashlib.sha256(data).hexdigest()[:32]
 
 
-def run_import_job(ctx: JobContext) -> str:
-    """导入任务的 handler（**幂等**：``import_bytes`` 内部三级判重，重跑不会重复入库）。
+#: 任务 handler 不在这里：导入/重建的入口搬到了 ``app/tasks/import_doc.py`` 与
+#: ``app/tasks/rebuild.py``（每个任务一个模块，自带 ``KIND`` 声明，启动时自动发现）。
+#: 本模块只留**业务工具**：暂存、判重键、查询、删除、重建。
 
-    参数：
-        ctx: 任务上下文（payload 里有 ``path`` 与 ``name``）。
-    返回：给用户看的一句话（写进任务的 note）。
-    异常：
-        JobError: 解析/入库失败——内容问题重试也一样，所以标成不可重试。
-    """
-    raw_path = str(ctx.payload.get("path") or "")
-    name = str(ctx.payload.get("name") or Path(raw_path).name)
-    path = Path(raw_path)
-    if not raw_path or not path.is_file():
-        raise JobError("找不到要导入的文件（可能已被清理），请重新导入", kind="not_found")
-
-    ctx.report(0, 1, "解析中…")
-    try:
-        data = path.read_bytes()
-    except OSError as exc:
-        raise JobError(f"读不到文件：{exc}", kind="network", retryable=False) from exc
-
-    result = pipeline.import_bytes(data, name)
-    _remove_inbox(path)
-
-    if result.status == "failed":
-        raise JobError(result.reason or "导入失败", retryable=False)
-    ctx.report(1, 1, "完成")
-    if result.status == "skipped":
-        return "内容已经在资料库里了，跳过"
-    note = f"切出 {result.chunks} 个片段"
-    if result.notes:
-        note = f"{note}（{result.notes[0]}）"
-    return note
-
-
-def _remove_inbox(path: Path) -> None:
-    """删掉 inbox 里的暂存文件（成功失败都删：留着只会越积越多）。"""
-    try:
-        path.unlink(missing_ok=True)
-    except OSError as exc:
-        logger.warning("清理暂存文件失败（{}）：{}", path, exc)
-
-
-def run_rebuild_job(ctx: JobContext) -> str:
-    """重建任务的 handler（**幂等**：先删这份资料的片段再写新的，重跑结果一致）。
-
-    以前重建是在界面回调里**同步**跑的——重新解析一份大 PDF 要好几秒，界面就卡住了；
-    现在它是一条任务：进度在任务页可见，关窗口也丢不了。
-    """
-    doc_id = int(ctx.payload.get("doc_id") or 0)
-    if not doc_id:
-        raise JobError("这条重建任务没有指明是哪份资料", retryable=False)
-
-    ctx.report(0, 1, "重新解析中…")
-    outcome = rebuild(doc_id)
-    if not outcome["ok"]:
-        # 副本丢了 / 解析不了：内容问题，重试也一样
-        raise JobError(str(outcome["detail"] or "重建失败"), retryable=False)
-    ctx.report(1, 1, "完成")
-    return f"重建完成（{outcome['chunks']} 个片段）"

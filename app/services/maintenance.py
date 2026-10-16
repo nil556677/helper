@@ -1,7 +1,8 @@
-"""维护任务（cleanup）：孤儿副本、inbox 残留、WAL、历史清理。
+"""维护工具（cleanup 用的那几件事）：孤儿副本、inbox 残留、WAL 合并。
 
-**为什么做成一条任务而不是"启动时顺手做"**：进度、取消、失败重试、关窗口不丢都是任务系统
-白送的；而且它是 **`priority=-10` 的维护类**任务，正好验证这一类（绝不和用户在等的活抢 CPU）。
+**任务入口不在这里**：``cleanup`` 的 handler 搬到了 ``app/tasks/cleanup.py``
+（每个任务一个模块，自带 ``KIND`` 声明，启动时自动发现）。本模块只留**可单独调用、可单测**
+的维护动作。
 
 **三条安全线**（都不是随手定的）：
 
@@ -10,7 +11,7 @@
 2. **inbox 里还被任务引用的文件绝不删**：那条任务马上就要读它；
 3. **WAL 用 TRUNCATE 合并回主库**：这样"备份 = 复制 data/"才是完整的（§9）。
 
-整个 action **幂等**：删的都是"没人认领"的东西，重跑结果一样。
+每个动作都**幂等**：处理的都是"没人认领"的东西，重跑结果一样。
 """
 
 from __future__ import annotations
@@ -24,9 +25,8 @@ from loguru import logger
 
 from app.core import paths
 from app.core.db.connection import get_connection
-from app.core.jobs import api, store
-from app.core.jobs.model import JobContext
-from app.core.logging import purge_old_logs
+from app.core.features.rag.ingest import store
+from app.core.jobs import api
 
 #: 孤儿副本的"最小年龄"：十分钟内动过的一律不碰（可能正在导入）
 ORPHAN_MIN_AGE_S = 600.0
@@ -34,18 +34,12 @@ ORPHAN_MIN_AGE_S = 600.0
 #: inbox 残留的"最小年龄"：一小时内写进来的一律不碰
 INBOX_MIN_AGE_S = 3600.0
 
-#: 清理分几步（进度按步报，界面上能看出卡在哪一步）
-STEPS = 5
-
 
 def known_copy_dirs() -> set[str]:
     """库里还引用着的副本目录名（`data/files/<hash12>/` 的第一段）。"""
-    rows = get_connection().execute(
-        "SELECT stored_path FROM documents WHERE stored_path IS NOT NULL AND stored_path != ''"
-    ).fetchall()
     names: set[str] = set()
-    for row in rows:
-        first = str(row["stored_path"]).replace("\\", "/").split("/")[0]
+    for stored in store.all_stored_paths():
+        first = stored.replace("\\", "/").split("/")[0]
         if first:
             names.add(first)
     return names
@@ -113,30 +107,3 @@ def checkpoint_wal() -> bool:
         logger.warning("WAL checkpoint 失败：{}", exc)
         return False
 
-
-def run_cleanup_job(ctx: JobContext) -> str:
-    """清理任务的 handler。"""
-    ctx.report(0, STEPS, "找孤儿副本…")
-    copies = remove_orphan_copies()
-
-    ctx.report(1, STEPS, "清 inbox 残留…")
-    leftovers = remove_inbox_leftovers()
-
-    ctx.report(2, STEPS, "合并 WAL…")
-    merged = checkpoint_wal()
-
-    ctx.report(3, STEPS, "清历史记录…")
-    purged = store.purge_finished()
-
-    ctx.report(4, STEPS, "清过期日志…")
-    logs = purge_old_logs()
-    ctx.report(STEPS, STEPS, "完成")
-
-    parts = [
-        f"孤儿副本 {copies} 个",
-        f"暂存 {leftovers} 个",
-        f"历史 {purged} 条",
-        f"过期日志 {logs} 个",
-    ]
-    parts.append("WAL 已合并" if merged else "WAL 跳过")
-    return " · ".join(parts)

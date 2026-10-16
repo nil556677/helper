@@ -36,3 +36,20 @@ def human_size(size: int | None) -> str:
     if value < 1024 * 1024:
         return f"{value / 1024:.0f} KB"
     return f"{value / 1024 / 1024:.1f} MB"
+
+
+def human_duration(seconds: float | None) -> str:
+    """时长 → 人看的写法（"0.8 秒 / 12 秒 / 3 分 05 秒 / 1 小时 02 分"）。
+
+    任务详情用它显示"这次跑了多久"；``None``（还没开始/没结束）显示 ``—``。
+    """
+    if seconds is None:
+        return "—"
+    value = max(0.0, float(seconds))
+    if value < 10:
+        return f"{value:.1f} 秒"
+    if value < 60:
+        return f"{value:.0f} 秒"
+    if value < 3600:
+        return f"{int(value // 60)} 分 {int(value % 60):02d} 秒"
+    return f"{int(value // 3600)} 小时 {int((value % 3600) // 60):02d} 分"

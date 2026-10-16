@@ -273,6 +273,21 @@ def fail(
         return FAILED
 
 
+def record_result(job_id: int, *, detail: str, now: float | None = None) -> None:
+    """把一次**成功**任务的结果详情记进事件时间线（界面"详情"里能看到）。
+
+    为什么要它：结果的一句话摘要走 ``jobs.note``（引擎统一写），但"这次到底做了什么"
+    往往还有一段更长的话（切了哪些片段、清理了哪些目录）。放进事件表既能展示，又不用改表结构。
+
+    只在 ``detail`` 非空时调用（多数任务只要一句 note，不必每次写一笔事件）。
+    """
+    if not detail:
+        return
+    stamp = time.time() if now is None else now
+    with transaction() as conn:
+        _insert_event(conn, job_id, kind="result", message="执行结果", detail=detail, now=stamp)
+
+
 def retry_row(job_id: int, *, now: float | None = None) -> bool:
     """手动重试：把 ``failed`` / ``cancelled`` 的任务重新排队。
 

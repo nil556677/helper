@@ -37,37 +37,37 @@ def ingest_db(fake_root: Path) -> Iterator[None]:
 
 def test_text_is_decoded_even_when_saved_as_gbk() -> None:
     """国内机器上"另存为 ANSI"很常见：GBK 也要读得出来，而不是抛解码错。"""
-    from app.core.features.rag.ingest import parsers
+    from app.core.parse import parse
 
-    parsed = parsers.parse("设备验收：合格。".encode("gbk"), "验收.txt")
+    parsed = parse("设备验收：合格。".encode("gbk"), "验收.txt")
     assert "合格" in parsed.text
 
 
 def test_csv_becomes_one_line_per_row() -> None:
     """表格按行展开比原样逗号文本好命中。"""
-    from app.core.features.rag.ingest import parsers
+    from app.core.parse import parse
 
-    parsed = parsers.parse("型号,数量\nA-1,3\nB-2,5\n".encode(), "清单.csv")
+    parsed = parse("型号,数量\nA-1,3\nB-2,5\n".encode(), "清单.csv")
     assert parsed.text.splitlines() == ["型号 | 数量", "A-1 | 3", "B-2 | 5"]
 
 
 def test_json_is_flattened_to_key_value_lines() -> None:
     """JSON 拍平成"键: 值"的行，键名也能命中。"""
-    from app.core.features.rag.ingest import parsers
+    from app.core.parse import parse
 
-    parsed = parsers.parse(b'{"contract": {"penalty": "0.05%"}}', "meta.json")
+    parsed = parse(b'{"contract": {"penalty": "0.05%"}}', "meta.json")
     assert "contract.penalty: 0.05%" in parsed.text
 
 
 def test_html_drops_tags_and_scripts() -> None:
     """HTML 只留能读的文字：script/style 里的东西不是内容。"""
-    from app.core.features.rag.ingest import parsers
+    from app.core.parse import parse
 
     html = (
         b"<html><head><style>p{color:red}</style></head>"
         b"<body><p>hello</p><script>x=1</script></body></html>"
     )
-    parsed = parsers.parse(html, "page.html")
+    parsed = parse(html, "page.html")
     assert "hello" in parsed.text
     assert "color:red" not in parsed.text
     assert "x=1" not in parsed.text
@@ -75,26 +75,26 @@ def test_html_drops_tags_and_scripts() -> None:
 
 def test_unsupported_suffix_says_what_to_do() -> None:
     """不支持就说不支持，并且告诉他怎么办（"另存为 .xlsx"）。"""
-    from app.core.features.rag.ingest import parsers
+    from app.core.parse import ParseError, parse
 
-    with pytest.raises(parsers.ParseError) as caught:
-        parsers.parse(b"\xd0\xcf\x11\xe0", "老表格.xls")
+    with pytest.raises(ParseError) as caught:
+        parse(b"\xd0\xcf\x11\xe0", "老表格.xls")
     assert "另存为 .xlsx" in str(caught.value)
 
 
 def test_broken_pdf_fails_with_a_readable_reason() -> None:
     """坏 PDF 不能把解析库的异常原样抛给用户。"""
-    from app.core.features.rag.ingest import parsers
+    from app.core.parse import ParseError, parse
 
-    with pytest.raises(parsers.ParseError) as caught:
-        parsers.parse(b"this is definitely not a pdf", "合同.pdf")
+    with pytest.raises(ParseError) as caught:
+        parse(b"this is definitely not a pdf", "合同.pdf")
     assert "PDF" in str(caught.value)
 
 
 def test_docx_round_trip() -> None:
     """自己造一份 Word → 解析器要能把段落与表格都抠出来。"""
     docx = pytest.importorskip("docx")
-    from app.core.features.rag.ingest import parsers
+    from app.core.parse import parse
 
     document = docx.Document()
     document.add_paragraph("第一条 乙方应在 30 日内交付。")
@@ -104,15 +104,15 @@ def test_docx_round_trip() -> None:
     buffer = io.BytesIO()
     document.save(buffer)
 
-    parsed = parsers.parse(buffer.getvalue(), "合同.docx")
+    parsed = parse(buffer.getvalue(), "合同.docx")
     assert "30 日内交付" in parsed.text
     assert "型号 | A-1" in parsed.text
 
 
 def test_xlsx_round_trip() -> None:
-    """Excel：每个工作表逐行展开，表名也要留着（不然不知道这几行是哪张表）。"""
+    """Excel：整份按"空行切表"成块，**sheet 名 + 行号进 table_ref**（引用要能定位到表）。"""
     openpyxl = pytest.importorskip("openpyxl")
-    from app.core.features.rag.ingest import parsers
+    from app.core.parse import parse
 
     workbook = openpyxl.Workbook()
     sheet = workbook.active
@@ -122,15 +122,18 @@ def test_xlsx_round_trip() -> None:
     buffer = io.BytesIO()
     workbook.save(buffer)
 
-    parsed = parsers.parse(buffer.getvalue(), "清单.xlsx")
-    assert "# 设备清单" in parsed.text
+    parsed = parse(buffer.getvalue(), "清单.xlsx")
     assert "A-1 | 3" in parsed.text
+    block = parsed.blocks[0]
+    assert block.content_type == "table"
+    assert block.table_ref == "sheet:设备清单#1", "表身份要能说清是哪张表"
+    assert (block.row_from, block.row_to) == (1, 2), "行区间是 sheet 绝对行号（跳转重读定位用）"
 
 
 def test_pptx_round_trip() -> None:
     """PPT：按页抠文本框，并记住页数。"""
     pptx = pytest.importorskip("pptx")
-    from app.core.features.rag.ingest import parsers
+    from app.core.parse import parse
 
     presentation = pptx.Presentation()
     slide = presentation.slides.add_slide(presentation.slide_layouts[5])
@@ -138,16 +141,16 @@ def test_pptx_round_trip() -> None:
     buffer = io.BytesIO()
     presentation.save(buffer)
 
-    parsed = parsers.parse(buffer.getvalue(), "汇报.pptx")
+    parsed = parse(buffer.getvalue(), "汇报.pptx")
     assert "验收结论" in parsed.text
     assert parsed.pages == 1
 
 
 def test_supported_suffixes_cover_the_common_formats() -> None:
     """界面上"支持哪些格式"是从这张表生成的——它必须真的覆盖常用格式。"""
-    from app.core.features.rag.ingest import parsers
+    from app.core.parse import supported_suffixes
 
-    supported = set(parsers.supported_suffixes())
+    supported = set(supported_suffixes())
     assert {".txt", ".md", ".csv", ".json", ".html", ".pdf", ".docx", ".xlsx", ".pptx"} <= supported
 
 
@@ -227,9 +230,9 @@ def test_failed_import_is_listed_with_reason(ingest_db: None) -> None:
 
     items = knowledge.documents()
     assert len(items) == 1
-    assert items[0]["status"] == "failed"
-    assert "另存为" in items[0]["detail"]
-    assert knowledge.stats()["failed"] == 1
+    assert items[0].status == "failed"
+    assert "另存为" in items[0].detail
+    assert knowledge.stats().failed == 1
 
 
 def test_copy_is_kept_so_rebuild_works(ingest_db: None) -> None:
@@ -248,10 +251,10 @@ def test_rebuild_regenerates_chunks(ingest_db: None) -> None:
     from app.services import knowledge
 
     _import("合同.md", SAMPLE.encode())
-    doc_id = knowledge.documents()[0]["id"]
+    doc_id = knowledge.documents()[0].id
     before = get_connection().execute("SELECT count(*) AS n FROM chunks").fetchone()["n"]
 
-    assert knowledge.rebuild(doc_id)["ok"] is True
+    assert knowledge.rebuild(doc_id).ok is True
     after = get_connection().execute("SELECT count(*) AS n FROM chunks").fetchone()["n"]
     assert after == before
 
@@ -263,10 +266,10 @@ def test_delete_removes_document_chunks_and_copy(ingest_db: None) -> None:
     from app.services import knowledge
 
     _import("合同.md", SAMPLE.encode())
-    doc_id = knowledge.documents()[0]["id"]
+    doc_id = knowledge.documents()[0].id
     assert knowledge.delete([doc_id]) == 1
 
-    assert knowledge.documents() == []
+    assert knowledge.documents() == ()
     assert get_connection().execute("SELECT count(*) AS n FROM chunks").fetchone()["n"] == 0
     assert get_connection().execute("SELECT count(*) AS n FROM chunks_fts").fetchone()["n"] == 0
     assert not list(paths.files_dir().glob("*/*")), "副本也该清掉"

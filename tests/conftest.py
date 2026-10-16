@@ -31,10 +31,50 @@ def _tests_tmp() -> Path:
     return paths.tmp_dir()
 
 
+def _pid_alive(pid: int) -> bool:
+    """这个进程还活着吗（用来判断临时目录是不是"另一个正在跑的会话"的）。
+
+    **Windows 上绝不能用 ``os.kill(pid, 0)``**：Windows 的 ``os.kill`` 对非
+    CTRL_C/CTRL_BREAK 的信号走的是 ``TerminateProcess``——用它做"存活探测"会把
+    另一个 pytest 会话**直接杀掉**（实测踩过这个坑：并发会话互相清理临时目录，
+    导致子进程写结果文件时 FileNotFoundError）。所以这里用 ``OpenProcess`` 只查询、不动手。
+    """
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        kernel32.CloseHandle(handle)
+        return True
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _dir_pid(name: str) -> int | None:
+    """从 ``<用例名>-<pid>`` 里取出 pid（取不到返回 None）。"""
+    tail = name.rsplit("-", 1)[-1]
+    return int(tail) if tail.isdigit() else None
+
+
 def _sweep_stale() -> int:
-    """扫掉 `.tmp/test_*-*`（上一轮遗留 / 被强杀留下的）。返回清掉几个。"""
+    """扫掉 `.tmp/test_*-*`（上一轮遗留 / 被强杀留下的）。返回清掉几个。
+
+    **跳过"还活着"的会话的目录**：多个 pytest 会话可能同时在跑（例如两个 agent 并行）。
+    以前无差别删除会把**别人正在用的**临时目录清掉，症状是子进程写结果文件时
+    ``FileNotFoundError``——看起来像随机失败，实际是会话互相踩。
+    """
     removed = 0
     for stale in _tests_tmp().glob("test_*-*"):
+        pid = _dir_pid(stale.name)
+        if pid is not None and pid != os.getpid() and _pid_alive(pid):
+            continue  # 另一个活着的会话正在用，别动
         shutil.rmtree(stale, ignore_errors=True)
         removed += 1
     return removed

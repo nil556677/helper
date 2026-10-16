@@ -407,7 +407,7 @@ async def test_bulk_delete_documents_from_the_page(user: User) -> None:
         user.find(marker='kb-batch-confirm').click()
         await asyncio.sleep(0.3)
 
-        assert knowledge_service.documents() == []
+        assert knowledge_service.documents() == ()
     finally:
         jobs_registry.clear()
 
@@ -500,12 +500,12 @@ async def test_saving_a_slot_writes_to_database(user: User) -> None:
     user.find(marker='slot-reasoning-save').click()
     await asyncio.sleep(0.2)
 
-    item = next(i for i in models_service.load_all() if i['key'] == 'reasoning')
-    assert item['provider'] == '火山方舟'
-    assert item['base_url'] == 'https://ark.example.com/api/v3'
-    assert item['model'] == 'doubao-seed-1.6'
-    assert item['key_tail'] == 'klmnop'[-4:]
-    assert item['has_key'] is True
+    item = next(i for i in models_service.load_all() if i.key == 'reasoning')
+    assert item.provider == '火山方舟'
+    assert item.base_url == 'https://ark.example.com/api/v3'
+    assert item.model == 'doubao-seed-1.6'
+    assert item.key_tail == 'klmnop'[-4:]
+    assert item.has_key is True
     assert 'sk-test-abcdefghijklmnop' not in repr(item)
 
     await user.should_see('已配置')

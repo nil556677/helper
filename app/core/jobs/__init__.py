@@ -26,6 +26,7 @@ from app.core.jobs.api import (
     list_jobs,
     pause,
     register,
+    register_all,
     resume,
     retry,
     stats,
@@ -41,6 +42,7 @@ from app.core.jobs.model import (
     JobInterrupted,
 )
 from app.core.jobs.registry import JobKind
+from app.core.jobs.task import Task, TaskResult, clear_kind_cache, key_from_class_name
 
 __all__ = [
     "PRIORITY_DEFAULT",
@@ -52,14 +54,19 @@ __all__ = [
     "JobError",
     "JobInterrupted",
     "JobKind",
+    "Task",
+    "TaskResult",
     "cancel",
+    "clear_kind_cache",
     "enqueue",
     "get",
     "is_paused",
+    "key_from_class_name",
     "kinds",
     "list_jobs",
     "pause",
     "register",
+    "register_all",
     "resume",
     "retry",
     "stats",

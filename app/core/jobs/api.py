@@ -40,6 +40,18 @@ def register(spec: JobKind) -> None:
     logger.debug("注册任务类型：{}（泳道 {}）", spec.key, spec.lane)
 
 
+def register_all(specs: list[JobKind] | tuple[JobKind, ...]) -> None:
+    """批量注册（**原子**：全部合规才登记）。
+
+    启动时的自动加载走这里——宁可一条都不注册、直接报错，
+    也不要留下"只注册了一半"的注册表（那会让一半任务凭空消失）。
+    """
+    batch = list(specs)
+    registry.register_all(batch)
+    for spec in batch:
+        logger.debug("注册任务类型：{}（泳道 {}）", spec.key, spec.lane)
+
+
 def kinds() -> tuple[JobKind, ...]:
     """所有已注册的任务类型（任务页显示标题用）。"""
     return registry.registered()
@@ -56,15 +68,19 @@ def enqueue(
     """把一件事排进队列，返回任务 id。
 
     - **同 dedupe_key 已在队列里（排队或在跑）时，返回那条已存在的任务**，不会排两次；
-    - `max_attempts` 在这一刻从 kind 快照进行，之后改 kind 的默认值不影响已排的任务。
+    - `max_attempts` 在这一刻从 kind 快照进行，之后改 kind 的默认值不影响已排的任务；
+    - **参数在这里统一校验/规范化**（任务类声明的 `normalize`）：非法参数在入队那一刻
+      就被拒（抛 ``ValueError``），而不是等任务跑起来才失败——排队半天再报"参数错"最气人。
 
     异常：
         KeyError: kind 没注册过（消息是人话）。
+        ValueError: 参数不合该任务的形状（消息里说明哪个字段错）。
     """
     spec = registry.get(kind)
+    normalized = spec.normalize(dict(payload or {})) if spec.normalize is not None else dict(payload or {})
     job_id, created = store.enqueue(
         kind,
-        payload or {},
+        normalized,
         dedupe_key=dedupe_key,
         priority=priority,
         delay_s=delay_s,

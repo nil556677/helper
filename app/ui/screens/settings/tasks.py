@@ -26,7 +26,8 @@ from nicegui import ui
 
 from app.services import tasks as tasks_service
 from app.ui.components.auto_refresh import AutoRefresh
-from app.ui.components.format import human_time
+from app.ui.components.dialog import confirm, custom, notify
+from app.ui.components.format import human_duration, human_time
 from app.ui.components.pager import PAGE_SIZES, PageState, render_pager
 
 #: 刷新间隔（秒）。进度写库有 0.2 秒节流，所以 0.5 秒够跟得上。
@@ -44,94 +45,100 @@ def _progress_bar(value: float, *, uncertain: bool) -> None:
             )
 
 
-def _metrics(job: dict[str, Any]) -> str:
+def _metrics(job: tasks_service.TaskView) -> str:
     """右侧那行小字：3/20 · 2 次失败 · 已完成 · 正在取消…"""
-    if job["status"] == "running":
-        if job["cancelling"]:
+    if job.status == "running":
+        if job.cancelling:
             return "正在取消…"
-        return f"{job['done']}/{job['total']}" if job["total"] else "进行中…"
-    if job["status"] == "pending":
-        position = job.get("queue_position")
-        return f"等待中（第 {position} 位）" if position else "等待中"
-    if job["status"] == "failed":
+        return f"{job.done}/{job.total}" if job.total else "进行中…"
+    if job.status == "pending":
+        return f"等待中（第 {job.queue_position} 位）" if job.queue_position else "等待中"
+    if job.status == "failed":
         parts = ["失败"]
-        if job["error_label"]:
-            parts.append(job["error_label"])  # 分类（§10.1 那套词汇）：一眼知道是哪类问题
-        if job["attempts"]:
-            parts.append(f"第 {job['attempts']} 次")
+        if job.error_label:
+            parts.append(job.error_label)  # 分类（§10.1 那套词汇）：一眼知道是哪类问题
+        if job.attempts:
+            parts.append(f"第 {job.attempts} 次")
         return " · ".join(parts)
-    if job["status"] == "cancelled":
+    if job.status == "cancelled":
         return "已取消"
     return "完成"
 
 
-def _row(job: dict[str, Any], *, picked: set[int], on_pick: Any) -> None:
+def _row(job: tasks_service.TaskView, *, picked: set[int], on_pick: Any) -> None:
     """一行任务（最前面是"选中"开关：批量动作用它）。"""
-    failed = job["status"] == "failed"
+    failed = job.status == "failed"
     metrics = _metrics(job)
-    chosen = job["id"] in picked
+    chosen = job.id in picked
     # 副标题别和状态列重复：失败时给原因，其余给 note——但"在跑且知道总数"时，
     # 状态列已经在报 3/20 了，再写一遍 3/20 批 只是噪音
-    hint = job["error"] if failed and job["error"] else job["note"]
-    if hint == metrics or (job["status"] == "running" and job["total"]):
+    hint = job.error if failed and job.error else job.note
+    if hint == metrics or (job.status == "running" and job.total):
         hint = ""
     with ui.row().classes("hp-row-item w-full items-center gap-3 no-wrap"):
         # 用图标按钮而不是 ui.checkbox：按钮在测试里点得动（checkbox 的 update:model-value 点不到）
         ui.button(
             icon="check_box" if chosen else "check_box_outline_blank",
-            on_click=lambda job_id=job["id"]: on_pick(job_id),
-        ).props("flat dense round size=sm").classes("hp-pick").mark(f"task-pick-{job['id']}").tooltip(
+            on_click=lambda job_id=job.id: on_pick(job_id),
+        ).props("flat dense round size=sm").classes("hp-pick").mark(f"task-pick-{job.id}").tooltip(
             "取消选中" if chosen else "选中"
         )
-        ui.icon(job["icon"]).classes("text-base hp-card-icon")
+        ui.icon(job.icon).classes("text-base hp-card-icon")
         with ui.column().classes("hp-col-name gap-0"):
-            title = job["title"] + (f" · {job['name']}" if job["name"] else "")
+            title = job.title + (f" · {job.name}" if job.name else "")
             ui.label(title).classes("hp-col-name")
             if hint:
                 # 行里只放一句话；**完整原因与每一次的经过**在"详情"里（hover 就能看全文）
                 ui.label(hint).classes("hp-field-help").tooltip(hint)
-        if job["status"] == "running":
+        if job.status == "running":
             with ui.element("div").classes("hp-progress-cell"):
-                _progress_bar(float(job["progress"]), uncertain=not job["total"])
+                _progress_bar(float(job.progress), uncertain=not job.total)
         ui.label(metrics).classes("hp-col").style("width: 132px")
-        ui.label(human_time(job["updated_at"])).classes("hp-col").style("width: 72px")
+        # 耗时：跑过的任务都显示（run 完看"这次花了多久"，排查慢任务最直接）
+        if job.duration_s is not None:
+            ui.label(human_duration(job.duration_s)).classes("hp-col").style(
+                "width: 76px"
+            ).tooltip("这次执行花了多久")
+        else:
+            ui.label("—").classes("hp-col").style("width: 76px")
+        ui.label(human_time(job.updated_at)).classes("hp-col").style("width: 72px")
         with ui.row().classes("hp-row-actions items-center gap-1 no-wrap"):
-            if job["status"] in ("running", "pending"):
-                ui.button(icon="close", on_click=lambda job_id=job["id"]: _cancel(job_id)).props(
+            if job.status in ("running", "pending"):
+                ui.button(icon="close", on_click=lambda job_id=job.id: _cancel(job_id)).props(
                     "flat dense round size=sm"
-                ).classes("hp-task-cancel").mark(f"task-cancel-{job['id']}").tooltip("取消")
-            elif failed or job["status"] == "cancelled":
-                ui.button(icon="replay", on_click=lambda job_id=job["id"]: _retry(job_id)).props(
+                ).classes("hp-task-cancel").mark(f"task-cancel-{job.id}").tooltip("取消")
+            elif failed or job.status == "cancelled":
+                ui.button(icon="replay", on_click=lambda job_id=job.id: _retry(job_id)).props(
                     "flat dense round size=sm"
-                ).mark(f"task-retry-{job['id']}").tooltip("重试")
-            if job["error"] or job["attempts"] or job["status"] == "cancelled":
-                # 详情：每一次失败/中断/取消的完整经过（含 traceback），不用去翻日志文件
-                ui.button(icon="info", on_click=lambda job_id=job["id"]: _show_details(job_id)).props(
-                    "flat dense round size=sm"
-                ).mark(f"task-details-{job['id']}").tooltip("详情：每一次尝试的原因")
+                ).mark(f"task-retry-{job.id}").tooltip("重试")
+            # 详情：**每个任务都有**（参数、结果、耗时、每一次失败/中断的完整经过都在里面，
+            # 不用去翻日志文件）。以前只在失败时才给，想看"这条到底带了什么参数"就没入口。
+            ui.button(icon="info", on_click=lambda job_id=job.id: _show_details(job_id)).props(
+                "flat dense round size=sm"
+            ).mark(f"task-details-{job.id}").tooltip("详情：参数、结果、耗时与每一次尝试")
 
 
 def _cancel(job_id: int) -> None:
     """取消（可恢复 → 不弹确认框，但给 3 秒可撤销）。"""
     if not tasks_service.cancel(job_id):
-        ui.notify("这个任务已经结束了", type="info")
+        notify("这个任务已经结束了", kind="info")
         return
 
     async def undo() -> None:
         tasks_service.retry(job_id)
-        ui.notify("已撤销取消", type="positive")
+        notify("已撤销取消", kind="positive")
 
-    ui.notify(
-        "已请求取消", type="warning", actions=[{"label": "撤销", "handler": undo}], timeout=3
+    notify(
+        "已请求取消", kind="warning", actions=[{"label": "撤销", "handler": undo}], timeout=3
     )
 
 
 def _retry(job_id: int) -> None:
     """重试（fails 归零 = 全新的机会）。"""
     if tasks_service.retry(job_id):
-        ui.notify("已重新排队", type="positive")
+        notify("已重新排队", kind="positive")
     else:
-        ui.notify("这个任务不能重试", type="info")
+        notify("这个任务不能重试", kind="info")
 
 
 def _show_details(job_id: int) -> None:
@@ -142,40 +149,62 @@ def _show_details(job_id: int) -> None:
     """
     job = tasks_service.detail(job_id)
     if job is None:
-        ui.notify("这个任务已经不在库里了", type="info")
+        notify("这个任务已经不在库里了", kind="info")
         return
 
-    with ui.dialog() as dialog, ui.card().classes("hp-card gap-2 hp-detail-card"):
-        ui.label(f"{job['title']} · {job['name'] or '（无名称）'}").classes("hp-card-title")
+    dialog, close = custom(title=f"{job.title} · 任务 #{job.id}")
+    with dialog:
         ui.label(
-            f"任务 #{job['id']} · {job['status_label']} · 失败 {job['attempts']}/{job['max_attempts']} 次"
-            f" · 入队 {human_time(job['created_at'])}"
+            f"{job.status_label} · 第 {job.attempts}/{job.max_attempts} 次尝试"
+            f" · 入队 {human_time(job.created_at)}"
         ).classes("hp-field-help")
-        if job["error"]:
-            ui.label(f"{job['error_label']}：{job['error']}" if job["error_label"] else job["error"]).classes(
+        # 时间三件套 + 耗时：排查"这条任务等了多久、跑了多久"最直接的一行
+        ui.label(
+            " · ".join(
+                [
+                    f"开始 {human_time(job.started_at, empty='还没开始')}",
+                    f"结束 {human_time(job.finished_at, empty='还没结束')}",
+                    f"耗时 {human_duration(job.duration_s)}",
+                ]
+            )
+        ).classes("hp-field-help")
+
+        # 参数：所有任务统一在这里展开（任务类声明的参数形状，入队时已校验过）
+        if job.params:
+            with ui.expansion("参数", icon="tune", value=True).classes("w-full hp-sources"):
+                for item in job.params:
+                    with ui.row().classes("w-full items-start gap-2 no-wrap"):
+                        ui.label(item.key).classes("hp-field-name").style("min-width: 96px;")
+                        ui.label(item.value).classes("hp-field-help").style(
+                            "word-break: break-all;"
+                        ).tooltip(item.full)
+
+        # 结果：任务跑完统一写进来的那句话（TaskResult.note）
+        if job.result:
+            ui.label(f"结果：{job.result}").classes("hp-field-name")
+        if job.error:
+            ui.label(f"{job.error_label}：{job.error}" if job.error_label else job.error).classes(
                 "hp-note-error"
             )
-        ui.separator()
 
-        events = job["events"]
-        if not events:
+        if not job.events:
             ui.label("这个任务没有失败或中断记录。").classes("hp-field-help")
-        for event in events:
+        for event in job.events:
             with ui.column().classes("w-full gap-0 hp-event"):
                 with ui.row().classes("items-center gap-2 no-wrap"):
-                    ui.label(event["kind_label"]).classes("hp-field-name")
-                    if event["attempt"]:
-                        ui.label(f"第 {event['attempt']} 次").classes("hp-field-help")
+                    ui.label(event.kind_label).classes("hp-field-name")
+                    if event.attempt:
+                        ui.label(f"第 {event.attempt} 次").classes("hp-field-help")
                     ui.space()
-                    ui.label(human_time(event["at"])).classes("hp-field-help")
-                if event["message"]:
-                    ui.label(event["message"]).classes("hp-field-help")
-                if event["detail"]:
+                    ui.label(human_time(event.at)).classes("hp-field-help")
+                if event.message:
+                    ui.label(event.message).classes("hp-field-help")
+                if event.detail:
                     with ui.expansion("完整信息（报错原文）").classes("w-full hp-sources"):
-                        ui.label(event["detail"]).classes("hp-detail-mono")
+                        ui.label(event.detail).classes("hp-detail-mono")
 
         with ui.row().classes("hp-actions w-full justify-end"):
-            ui.button("关闭", on_click=dialog.close).props("flat dense no-caps").classes(
+            ui.button("关闭", on_click=close).props("flat dense no-caps").classes(
                 "hp-row-button w-auto"
             )
     dialog.open()
@@ -266,14 +295,14 @@ def render() -> None:
 
     def _retry_all() -> None:
         count = tasks_service.retry_all_failed()
-        ui.notify(
-            f"已重新排队 {count} 条" if count else "没有失败的任务", type="positive" if count else "info"
+        notify(
+            f"已重新排队 {count} 条" if count else "没有失败的任务", kind="positive" if count else "info"
         )
         refresh(force=True)
 
     def _clear() -> None:
         count = tasks_service.clear_finished()
-        ui.notify(f"清理了 {count} 条历史记录", type="positive")
+        notify(f"清理了 {count} 条历史记录", kind="positive")
         refresh(force=True)
 
     def _cleanup_storage() -> None:
@@ -281,7 +310,7 @@ def render() -> None:
         from app import tasks as tasks_app
 
         job_id = tasks_app.enqueue_cleanup("manual")
-        ui.notify(f"已排队清理存储（任务 #{job_id}）", type="positive")
+        notify(f"已排队清理存储（任务 #{job_id}）", kind="positive")
         refresh(force=True)
 
     def toggle_pause() -> None:
@@ -309,43 +338,36 @@ def render() -> None:
 
     def _batch_cancel() -> None:
         count = tasks_service.cancel_many(picked)
-        ui.notify(
+        notify(
             f"已请求取消 {count} 条" if count else "选中的任务都不能取消",
-            type="warning" if count else "info",
+            kind="warning" if count else "info",
         )
         picked.clear()
         refresh(force=True)
 
     def _batch_retry() -> None:
         count = tasks_service.retry_many(picked)
-        ui.notify(
+        notify(
             f"已重新排队 {count} 条" if count else "选中的任务都不能重试",
-            type="positive" if count else "info",
+            kind="positive" if count else "info",
         )
         picked.clear()
         refresh(force=True)
 
     def _batch_delete() -> None:
         """删历史记录：破坏性操作，确认一次（在跑/排队的删不掉，服务层挡着）。"""
-        with ui.dialog() as dialog, ui.card().classes("hp-card gap-3"):
-            ui.label(f"删掉选中的 {len(picked)} 条记录？").classes("hp-card-title")
-            ui.label("只删已完成 / 失败 / 取消的记录（正在跑和排队的不动），事件记录一起删。").classes(
-                "hp-field-help"
-            )
-            with ui.row().classes("hp-actions"):
-                ui.button("取消", on_click=dialog.close).props("flat dense no-caps").classes(
-                    "hp-row-button w-auto"
-                )
-                ui.button(
-                    "删掉",
-                    on_click=lambda: (
-                        tasks_service.delete_many(picked),
-                        picked.clear(),
-                        dialog.close(),
-                        refresh(force=True),
-                    ),
-                ).props("unelevated dense no-caps").classes("hp-send").mark("task-batch-confirm")
-        dialog.open()
+        confirm(
+            f"删掉选中的 {len(picked)} 条记录？",
+            "只删已完成 / 失败 / 取消的记录（正在跑和排队的不动），事件记录一起删。",
+            lambda: (
+                tasks_service.delete_many(picked),
+                picked.clear(),
+                refresh(force=True),
+            ),
+            confirm_label="删掉",
+            danger=True,
+            confirm_mark="task-batch-confirm",
+        )
 
     pause_button.on_click(toggle_pause)
 
@@ -354,65 +376,74 @@ def render() -> None:
     paused = {"value": False}
     seen: dict[str, Any] = {"rows": None, "pager": None}
 
-    def rows_mark(data: dict[str, Any]) -> tuple[Any, ...]:
+    def rows_mark(data: tasks_service.TaskOverview) -> tuple[Any, ...]:
         return (
-            data["group"],
-            data["paused"],
-            data["degraded"],
+            data.group,
+            data.paused,
+            data.degraded,
             tuple(sorted(picked)),  # 选中态变了要重画（图标要跟着换）
             tuple(
-                (job["id"], job["status"], job["done"], job["total"], job["note"], job["error"])
-                for job in data["running"]
+                (job.id, job.status, job.done, job.total, job.note, job.error)
+                for job in data.running
             ),
             tuple(
-                (job["id"], job["status"], job["done"], job["total"], job["note"], job["error"])
-                for job in data["items"]
+                (job.id, job.status, job.done, job.total, job.note, job.error)
+                for job in data.items
             ),
         )
 
-    def pager_mark(data: dict[str, Any]) -> tuple[Any, ...]:
-        return (data["group"], data["total"], data["page"], data["size"])
+    def pager_mark(data: tasks_service.TaskOverview) -> tuple[Any, ...]:
+        return (data.group, data.total, data.page, data.size)
 
     def refresh(*, force: bool = False) -> None:
         data = tasks_service.overview(group=current["group"], page=state.page, size=state.size)
-        state.total = int(data["total"])
-        state.page = int(data["page"])
-        paused["value"] = bool(data["paused"])
+        state.total = int(data.total)
+        state.page = int(data.page)
+        paused["value"] = bool(data.paused)
         auto.touch()  # 记一次"刚查过库"：时间戳与"自动刷新已关"的提示都靠它
 
-        stats = data["stats"]
-        active = bool(stats["active"]) and not data["paused"]
-        status.text = "已暂停" if data["paused"] else ("运行中" if stats["active"] else "空闲")
+        active = bool(data.stats.active) and not data.paused
+        status.text = "已暂停" if data.paused else ("运行中" if data.stats.active else "空闲")
         status.classes(add="hp-status-ok") if active else status.classes(remove="hp-status-ok")
         status.update()
-        count_label.text = f"{data['total']} 条"
+        count_label.text = f"{data.total} 条"
         count_label.update()
         # 批量动作条：选中才算事情做（没选中就不占地方）
         pick_label.text = f"已选 {len(picked)} 项"
         pick_label.update()
         pick_bar.set_visibility(bool(picked))
-        page_ids[:] = [job["id"] for job in data["items"]]
-        pause_button.text = "恢复队列" if data["paused"] else "暂停队列"
+        page_ids[:] = [job.id for job in data.items]
+        pause_button.text = "恢复队列" if data.paused else "暂停队列"
         pause_button.update()
-        hint.text = data["hint"]
+        hint.text = data.hint
         hint.update()
         for key, button in filter_buttons.items():
             button.classes(add="hp-row-active") if key == current["group"] else button.classes(
                 remove="hp-row-active"
             )
 
-        # 正在跑：不分页（泳道并发就那么几条），内容变了才重画
-        running_mark = tuple((job["id"], job["done"], job["note"]) for job in data["running"])
+        # 正在跑：不分页（受全局并发上限约束就那么几条），内容变了才重画
+        # 并发数也要进重画判据：不然"并发 1/3 → 0/3"要等下一次内容变化才刷新
+        running_mark = (
+            tuple((job.id, job.done, job.note) for job in data.running),
+            data.concurrency.running,
+            data.concurrency.limit,
+        )
         if force or running_mark != seen.get("running"):
             seen["running"] = running_mark
             running_box.clear()
             with running_box:
-                ui.label(f"正在跑（{len(data['running'])}）").classes("hp-card-title")
-                if not data["running"]:
+                with ui.row().classes("w-full items-center gap-2"):
+                    ui.label(f"正在跑（{len(data.running)}）").classes("hp-card-title")
+                    ui.space()
+                    ui.label(
+                        f"并发 {data.concurrency.running}/{data.concurrency.limit}"
+                    ).classes("hp-field-help").mark("task-concurrency")
+                if not data.running:
                     ui.label("现在没有任务在跑。导入资料、重建索引时，这里会显示进度。").classes(
                         "hp-field-help"
                     )
-                for job in data["running"]:
+                for job in data.running:
                     _row(job, picked=picked, on_pick=_toggle_pick)
 
         # 分页控件：只有页码/总数/每页条数变了才重画（否则下拉框会在用户点开时被抽走）
@@ -429,9 +460,9 @@ def render() -> None:
             seen["rows"] = marker
             items_box.clear()
             with items_box:
-                for job in data["items"]:
+                for job in data.items:
                     _row(job, picked=picked, on_pick=_toggle_pick)
-            empty.text = "" if data["items"] else _empty_text(current["group"])
+            empty.text = "" if data.items else _empty_text(current["group"])
             empty.update()
 
     def _empty_text(group: str) -> str:

@@ -55,13 +55,13 @@ def test_save_then_load_keeps_tail_not_plaintext(slots_db: None) -> None:
         api_key=PLAIN_KEY,
     )
 
-    item = next(i for i in models.load_all() if i["key"] == "reasoning")
-    assert item["provider"] == "火山方舟"
-    assert item["base_url"] == "https://ark.example.com/api/v3"
-    assert item["model"] == "doubao-seed-1.6"
-    assert item["key_tail"] == PLAIN_KEY[-4:]
-    assert item["has_key"] is True
-    assert item["configured"] is True
+    item = next(i for i in models.load_all() if i.key == "reasoning")
+    assert item.provider == "火山方舟"
+    assert item.base_url == "https://ark.example.com/api/v3"
+    assert item.model == "doubao-seed-1.6"
+    assert item.key_tail == PLAIN_KEY[-4:]
+    assert item.has_key is True
+    assert item.configured is True
     assert PLAIN_KEY not in repr(item)  # 对外结构里绝不能带明文
 
     row = get_connection().execute("SELECT api_key_cipher FROM llm_slots").fetchone()
@@ -74,10 +74,10 @@ def test_save_without_key_keeps_existing_one(slots_db: None) -> None:
     models.save("reasoning", provider="A", base_url="https://a.example/v1", model="m1", api_key=PLAIN_KEY)
     models.save("reasoning", provider="B", base_url="https://b.example/v1", model="m2")
 
-    item = next(i for i in models.load_all() if i["key"] == "reasoning")
-    assert item["provider"] == "B"
-    assert item["key_tail"] == PLAIN_KEY[-4:]
-    assert item["has_key"] is True
+    item = next(i for i in models.load_all() if i.key == "reasoning")
+    assert item.provider == "B"
+    assert item.key_tail == PLAIN_KEY[-4:]
+    assert item.has_key is True
 
 
 def test_empty_key_clears_it(slots_db: None) -> None:
@@ -85,9 +85,9 @@ def test_empty_key_clears_it(slots_db: None) -> None:
     models.save("reasoning", provider="A", base_url="https://a.example/v1", model="m1", api_key=PLAIN_KEY)
     models.save("reasoning", provider="A", base_url="https://a.example/v1", model="m1", api_key="")
 
-    item = next(i for i in models.load_all() if i["key"] == "reasoning")
-    assert item["has_key"] is False
-    assert item["key_tail"] == ""
+    item = next(i for i in models.load_all() if i.key == "reasoning")
+    assert item.has_key is False
+    assert item.key_tail == ""
 
 
 def test_slots_are_independent(slots_db: None) -> None:
@@ -95,15 +95,15 @@ def test_slots_are_independent(slots_db: None) -> None:
     models.save("reasoning", provider="R", base_url="https://r.example/v1", model="m-r", api_key=PLAIN_KEY)
     models.save("ocr", provider="O", base_url="https://o.example/v1", model="m-o")  # 这个还没填 key
 
-    items = {i["key"]: i for i in models.load_all()}
-    assert items["reasoning"]["model"] == "m-r" and items["reasoning"]["has_key"] is True
-    assert items["ocr"]["model"] == "m-o" and items["ocr"]["has_key"] is False
+    items = {i.key: i for i in models.load_all()}
+    assert items["reasoning"].model == "m-r" and items["reasoning"].has_key is True
+    assert items["ocr"].model == "m-o" and items["ocr"].has_key is False
 
 
 def test_slot_list_is_the_two_we_agreed(slots_db: None) -> None:
     """现在只有两个槽位（推理 / OCR），顺序也固定——加槽位是显式动作。"""
     assert models.slot_keys() == ("reasoning", "ocr")
-    assert [i["title"] for i in models.load_all()] == ["推理模型", "OCR 模型"]
+    assert [i.title for i in models.load_all()] == ["推理模型", "OCR 模型"]
 
 
 def test_validation_rejects_obviously_wrong_input(slots_db: None) -> None:
@@ -122,12 +122,12 @@ def test_validation_rejects_obviously_wrong_input(slots_db: None) -> None:
 
 def test_test_connection_reports_missing_config(slots_db: None) -> None:
     """没填全就点测试：直接告诉缺什么，不发请求。"""
-    assert models.test_connection("reasoning")["kind"] == "config"
+    assert models.test_connection("reasoning").kind == "config"
 
     models.save("reasoning", provider="A", base_url="https://a.example/v1", model="m")
     result = models.test_connection("reasoning")
-    assert result["kind"] == "config"
-    assert "api key" in result["detail"]
+    assert result.kind == "config"
+    assert "api key" in result.detail
 
 
 def test_test_connection_ok(slots_db: None, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -139,9 +139,9 @@ def test_test_connection_ok(slots_db: None, monkeypatch: pytest.MonkeyPatch) -> 
 
     result = models.test_connection("reasoning")
 
-    assert result["ok"] is True
-    assert result["kind"] == "ok"
-    assert "推理模型" in result["detail"]
+    assert result.ok is True
+    assert result.kind == "ok"
+    assert "推理模型" in result.detail
 
 
 @pytest.mark.parametrize(
@@ -164,9 +164,9 @@ def test_failures_are_classified(slots_db: None, monkeypatch: pytest.MonkeyPatch
 
     result = models.test_connection("reasoning")
 
-    assert result["ok"] is False
-    assert result["kind"] == expected
-    assert result["detail"]
+    assert result.ok is False
+    assert result.kind == expected
+    assert result.detail
 
 
 def test_timeout_and_network_are_classified(slots_db: None, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -176,10 +176,10 @@ def test_timeout_and_network_are_classified(slots_db: None, monkeypatch: pytest.
     models.save("reasoning", provider="A", base_url="https://a.example/v1", model="m", api_key=PLAIN_KEY)
 
     monkeypatch.setattr(openai_compat, "_post", _fake_post(urllib.error.URLError(TimeoutError())))
-    assert models.test_connection("reasoning")["kind"] == "timeout"
+    assert models.test_connection("reasoning").kind == "timeout"
 
     monkeypatch.setattr(openai_compat, "_post", _fake_post(urllib.error.URLError("getaddrinfo failed")))
-    assert models.test_connection("reasoning")["kind"] == "network"
+    assert models.test_connection("reasoning").kind == "network"
 
 
 def test_unknown_key_failure_says_to_paste_again(slots_db: None) -> None:
@@ -192,8 +192,8 @@ def test_unknown_key_failure_says_to_paste_again(slots_db: None) -> None:
 
     result = models.test_connection("reasoning")
 
-    assert result["kind"] == "auth"
-    assert "重新粘贴" in result["detail"]
+    assert result.kind == "auth"
+    assert "重新粘贴" in result.detail
 
 
 def test_endpoint_accepts_both_base_url_shapes() -> None:

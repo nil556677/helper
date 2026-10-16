@@ -455,6 +455,28 @@ body {
 }
 .hp-pick { color: var(--hp-label-tertiary); }
 .hp-pick:hover { color: var(--hp-accent); }
+
+/* ============ 20. 统一弹窗（components/dialog.py） ============ */
+/* 弹窗卡片：比普通设置卡更稳一点，固定宽度、白底、明显的层级阴影与描边。 */
+.hp-dialog {
+  max-width: 440px;
+  width: auto;
+  background: var(--hp-bg-base);
+  border: .5px solid var(--hp-border-l3);
+  border-radius: var(--hp-radius-lg);
+  box-shadow: var(--hp-shadow-lv2), 0 12px 32px 0 #0000001f;
+}
+/* 弹窗里的"知道了/确定"主按钮：保持主色，但略强调 */
+.hp-dialog-ok { background: var(--hp-brand) !important; color: var(--hp-bg-base) !important; }
+.hp-dialog-ok:hover { opacity: .88; }
+/* 危险确认：删数据/清空这类，按钮用红（与状态点错误红一致） */
+.hp-confirm-danger {
+  background: #c0392b !important;
+  color: #ffffff !important;
+}
+.hp-confirm-danger:hover { opacity: .88; }
+/* 统一 toast：圆角、克制阴影、描边，不与默认 Quasar 角标打架 */
+.hp-toast { border-radius: var(--hp-radius-sm); box-shadow: var(--hp-shadow-lv2); }
 """
 
 
