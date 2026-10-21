@@ -7,6 +7,13 @@
 /logs/*
 !/logs/.gitkeep
 
+# ---------- 第三方二进制（不入库，用下载脚本获取） ----------
+/bin/qdrant/qdrant.exe
+/bin/qdrant/.qdrant-initialized
+/bin/qdrant/static/
+/bin/qdrant/snapshots/
+/bin/qdrant/*.zip
+
 # ---------- 可再生缓存（别进版本库） ----------
 # jieba 的分词前缀词典缓存：首次运行自动生成（约 9 MB），换机器/删掉都会自己重建
 jieba.cache
