@@ -39,9 +39,22 @@ pytest-asyncio>=1.2,<2
 # 搜"违约"一条都命不中。所以写入与查询都必须用 jieba 预分词（见 core/retrieval/tokenize.py）。
 jieba==0.42.1
 
-# 为什么要自己写解析而不上 langchain/unstructured：我们只要"文件字节 → 纯文本"，
-# 这几个库各自只做一件事、都是纯 Python；那套框架会带进来几十个依赖和一堆用不上的抽象。
-pypdf>=5.1,<7          # PDF 文字层（扫描件要 OCR，还没接）
-python-docx>=1.1,<2    # Word
+# 为什么要自己写解析而不上 langchain/unstructured：我们只要"文件字节 → 块列表"，每个格式用
+# 最成熟的单一库（P1.1 定稿）；那种框架会带进来几十个依赖和一堆用不上的抽象。
+PyMuPDF==1.26.5        # PDF：抽文字层 + 逐页探针（文字/图片/表格）+ 渲染原页（AGPL-3.0，已拍板）
+pdfplumber>=0.11,<0.12 # PDF：表格提取（fitz 抽文字/渲染、pdfplumber 抠表格，组合）
+python-docx>=1.1,<2    # Word（段落顺序 + 样式层级即原生结构）
 openpyxl>=3.1,<4       # Excel
 python-pptx>=1.0,<2    # PowerPoint
+# Markdown：CommonMark/GFM 解析（标题/列表/引用/表格/代码）。虽然经 rich 传递安装，
+# 但代码直接 import，必须显式声明，否则换环境可能缺。
+markdown-it-py>=3,<5
+# Markdown 扩展：任务列表 / 脚注 / 定义列表（front matter 由本项目手拆，不依赖它）
+mdit-py-plugins>=0.4,<1
+# Markdown front matter 的 YAML 解析（没装时退化成 key: value）
+PyYAML>=6,<7
+
+# ---------- 规则提取（动态字段）：自研提取器注册表，底层只用轻量库 ----------
+# 不上 spaCy/LAC/transformers（重）。regex 做模式，cn2an 做中文数字/金额/日期归一化。
+regex>=2024.5.15
+cn2an>=0.5.0

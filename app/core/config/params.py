@@ -25,8 +25,10 @@ class Aspect(StrEnum):
     **注意"影响什么"与"属于哪一类"是两件事**，所以 :class:`Param` 上既有 ``aspect``
     （它是什么参数、界面怎么分组）又有 ``into``（它进哪个指纹）。三个类型的区别：
 
-    - :attr:`CHUNKING` —— 影响**切出来的块本身**（parent/child 尺寸与重叠）。
-      它进**两个**指纹：块都变了，词法与向量都得重来。
+    - :attr:`CHUNKING` —— 影响**切出来的块边界**（语义兜底开关、标题前缀开关）。
+      它进**两个**指纹：块边界变了，词法与向量都得重来。
+      **注意**：parent/child 的**尺寸与重叠不在这里配**——它们由嵌入宽度推导，
+      见 ``app/core/features/rag/splitter/derived.py``。
     - :attr:`VECTOR` —— 影响**向量**（嵌入模型、维度、固定宽度、批量、线程）。
       它只进向量指纹；其中线程数只影响速度，所以 ``into`` 是空的（**不进指纹**）。
     - :attr:`LEXICAL` —— 影响**词法列**（jieba 词库）。只进词法指纹：
@@ -44,6 +46,10 @@ class Aspect(StrEnum):
 #: 两个指纹（存进 ``index_meta``）的键名。**改名字等于让所有老库都"指纹缺失"**，会提示重建。
 KEY_VECTOR_FINGERPRINT = "fingerprint.vector"
 KEY_LEXICAL_FINGERPRINT = "fingerprint.lexical"
+
+#: ``index_meta`` 里记录的**动态字段提取版本**（不是参数，是代码常量；见 app/core/attrs/version.py）。
+#: 改字段字典/提取器/归一化 → 版本变 → 界面提示"回填动态字段"（不重嵌入）。
+KEY_ATTRS_VERSION = "attrs.version"
 
 #: ``index_meta`` 里逐项留痕的前缀（排查"到底哪个参数变了"用）。
 PER_ITEM_PREFIX = "fingerprint.item."
@@ -63,6 +69,8 @@ class Param:
         help_text: 给用户看的一句话（界面的 tooltip）。
         minimum / maximum: 允许范围；``None`` 表示不限制。
         cast: 从 settings 读出来时的转换（int / float / str / bool）。
+        secret: 是不是凭证类参数。``True`` 时**落库前用 DPAPI 加密**（与 LLM key 一致），
+            读取时自动解密；界面上应当只回显尾号。
     """
 
     key: str
@@ -74,6 +82,7 @@ class Param:
     minimum: float | None = None
     maximum: float | None = None
     cast: type = int
+    secret: bool = False
 
     def coerce(self, value: object) -> object:
         """把外部值转成正确类型；超范围就夹回范围（**不抛异常**）。
@@ -109,6 +118,7 @@ def _p(
     minimum: float | None = None,
     maximum: float | None = None,
     cast: type = int,
+    secret: bool = False,
 ) -> Param:
     return Param(
         key=key,
@@ -120,6 +130,7 @@ def _p(
         minimum=minimum,
         maximum=maximum,
         cast=cast,
+        secret=secret,
     )
 
 
@@ -127,57 +138,53 @@ def _p(
 _BOTH = (Aspect.VECTOR, Aspect.LEXICAL)
 #: 只进向量指纹。
 _VEC = (Aspect.VECTOR,)
-#: 只进词法指纹。
-_LEX = (Aspect.LEXICAL,)
 
 
-#: **切片**（技术方案 §9.6 定稿：parent 1500 / child 300，overlap 10%~15%）。
-#: 换算用 0.69 token/字符（§7）：1500 token ≈ 2170 字符、300 token ≈ 430 字符。
-#: 这四个都进**两个**指纹：块本身变了，词法与向量都得重来。
+#: **切片**（只保留"开关"；尺寸与重叠已改为**由嵌入宽度推导**，不再是配置项）。
+#:
+#: 为什么尺寸不在这里配：parent/child 的尺寸与重叠不是"用户偏好"，而是由向量模型
+#: 决定的——子块必须塞得进模型的固定输入宽度（``embed.model.PAD_TO``），其余都是围绕它的固定比例。
+#: 让用户手填会出现"``child_size > pad_to`` → 尾部静默截断"这类静默错误。
+#: 推导处（唯一）：``app/core/features/rag/splitter/derived.py``。
+#:
+#: 保留下来的两个开关都**影响块边界**，所以进两个指纹：只改一个开关，块就变了，
+#: 词法与向量都得重来。
 CHUNKING: tuple[Param, ...] = (
     _p(
-        "chunk.parent_size",
-        "父块大小（token）",
-        1500,
+        "chunk.semantic_fallback",
+        "无结构文档启用语义兜底",
+        True,
         Aspect.CHUNKING,
         into=_BOTH,
-        help_text="送给模型的证据块。改它必须全量重建（块本身变了）。",
-        minimum=200,
-        maximum=8000,
+        cast=bool,
+        help_text="没有标题树的文档里、连标点都不够断句的长段落，用嵌入算相邻语义骤降处断开"
+        "（自适应百分位，不用固定阈值）。会临时加载嵌入模型；加载失败就退回硬切。"
+        "块边界会变，所以进两个指纹。",
     ),
     _p(
-        "chunk.parent_overlap",
-        "父块重叠（token）",
-        150,
-        Aspect.CHUNKING,
+        "chunk.prepend_section",
+        "嵌入时带上章节标题",
+        True,
+        Aspect.VECTOR,
+        # **进两个指纹**（选项 1B）：标题开销算进 child 预算 → 开关一改，块的边界就变了，
+        # 所以既要重切（词法）也要重算向量。切分是秒级的，重算向量才贵。
         into=_BOTH,
-        help_text="约 10%：让跨段落的句子不会正好被切断。",
-        minimum=0,
-        maximum=2000,
-    ),
-    _p(
-        "chunk.child_size",
-        "子块大小（token）",
-        300,
-        Aspect.CHUNKING,
-        into=_BOTH,
-        help_text="检索的最小单位。必须 ≤ 嵌入的固定填充宽度（否则尾部会被截掉、入不了向量）。",
-        minimum=50,
-        maximum=2000,
-    ),
-    _p(
-        "chunk.child_overlap",
-        "子块重叠（token）",
-        45,
-        Aspect.CHUNKING,
-        into=_BOTH,
-        help_text="约 15%：边界句在两个块里都出现，避免「答案正好在缝里」。",
-        minimum=0,
-        maximum=1000,
+        cast=bool,
+        help_text="嵌入/精排的**输入**前面拼上最内层章节标题（正文与引用仍是原文）。"
+        "解决「向量看不见标题」：正文没写「违约金」三个字、但挂在那一节下的块，"
+        "之前只有词法能召回。标题开销会占用 child 预算，所以它进两个指纹。",
     ),
 )
 
 #: **向量**（P0.2 的实装口径 —— 形状变了就等于换语义，所以这些必须进指纹）。
+#:
+#: ⚠ 这里只配 ``embed.dims``（**输出维度**）。**输入宽度 ``pad_to`` 不在这里配**——
+#: 它是**模型自己的固定常量**（``app/core/embed/model.py:PAD_TO``），由嵌入实现决定：
+#: 每段文本先按 token 填/截到那个宽度再喂模型，超出尾部会被截掉。之所以不让用户改：
+#: 实测模型输出会随输入宽度漂移（宽度差 1 token → 向量最大差 1.4%、余弦 0.992），
+#: 它属于"模型形状"而不是"偏好"，改了等于换了一个向量空间。
+#: 子块尺寸也由它推导（见 ``app/core/features/rag/splitter/derived.py``），
+#: 所以它仍会通过 :func:`app.core.config.store.aspect_extra` 进两个指纹。
 VECTOR: tuple[Param, ...] = (
     _p(
         "embed.model",
@@ -187,19 +194,6 @@ VECTOR: tuple[Param, ...] = (
         into=_VEC,
         help_text="换模型 = 换向量空间，必须全量重建。",
         cast=str,
-    ),
-    _p(
-        "embed.pad_to",
-        "嵌入固定宽度（token）",
-        320,
-        Aspect.VECTOR,
-        into=_VEC,
-        help_text=(
-            "每批都填到这个宽度。实测宽度差 1 个 token 向量就差 1.4%，"
-            "所以它进指纹：改了必须全量重建。"
-        ),
-        minimum=64,
-        maximum=512,
     ),
     _p(
         "embed.batch_size",
@@ -217,7 +211,11 @@ VECTOR: tuple[Param, ...] = (
         768,
         Aspect.VECTOR,
         into=_VEC,
-        help_text="截前 N 维后再归一。改它必须全量重建。",
+        help_text=(
+            "【输出维度】向量的长度（bge-m3 为 768）：取前 N 维后再归一。"
+            "与「嵌入固定宽度」无关——那个管输入能塞多少 token；这个管输出是几维。"
+            "改它必须全量重建。"
+        ),
         minimum=64,
         maximum=1024,
     ),
@@ -285,28 +283,40 @@ RETRIEVAL: tuple[Param, ...] = (
     ),
 )
 
-#: **词法**（进词法指纹：改了只需重算词法列）。
-LEXICAL: tuple[Param, ...] = (
-    _p(
-        "tokenize.userdict",
-        "自定义词库文件",
-        "data/userdict.txt",
-        Aspect.LEXICAL,
-        into=_LEX,
-        help_text="一行一词。词库内容变了只需重算词法（秒级），不用动向量。",
-        cast=str,
-    ),
-)
+#: **词法**：全局领域词已改为存 ``token_dict`` 表（后台 CRUD 见
+#: :mod:`app.core.retrieval.terms`），不再有"词库文件路径"这类可调参数。
+#: 留空元组是为了保持 ``Aspect.LEXICAL`` 与指纹分区的结构不变：词条内容哈希由
+#: ``config.store.aspect_extra()`` 作为额外项注入词法指纹。
+LEXICAL: tuple[Param, ...] = ()
 
-#: **存储**（后端切换不进指纹：向量内容不变，只是存在哪）。
+#: **存储**（连接方式不进指纹：向量内容不变，只是存在哪）。
+#: 注意：``vector.backend`` 已删除——向量层重构后只有 Qdrant 一个后端（见 `app/core/vector/api.py`），
+#: 那个配置项已经没有读者，留着只会让人以为还有 matrix-only 模式。
 STORAGE: tuple[Param, ...] = (
     _p(
-        "vector.backend",
-        "向量后端",
-        "qdrant",
+        "vector.url",
+        "Qdrant 服务地址",
+        "",
         Aspect.VECTOR,
-        help_text="qdrant（默认，事实来源）/ matrix-only（只用矩阵缓存，丢了要重建）。",
+        help_text="留空＝本地嵌入式（path=data/qdrant）；填如 http://127.0.0.1:6333＝连服务端（HNSW 生效）。",
         cast=str,
+    ),
+    _p(
+        "vector.api_key",
+        "Qdrant API Key",
+        "",
+        Aspect.VECTOR,
+        help_text="连服务端需要鉴权时填写；本地模式忽略。**落库前加密**（DPAPI），界面上只回显尾号。",
+        cast=str,
+        secret=True,
+    ),
+    _p(
+        "vector.timeout",
+        "Qdrant 连接超时(秒)",
+        30.0,
+        Aspect.VECTOR,
+        help_text="连服务端时的请求超时；本地模式忽略。",
+        cast=float,
     ),
 )
 
@@ -320,7 +330,6 @@ GROUPS: tuple[tuple[str, tuple[Param, ...]], ...] = (
     ("切片", CHUNKING),
     ("向量", VECTOR),
     ("检索与精排", RETRIEVAL),
-    ("词法", LEXICAL),
     ("存储", STORAGE),
 )
 
@@ -367,8 +376,14 @@ class Config:
     values: dict[str, object] = field(default_factory=defaults)
 
     def __post_init__(self) -> None:
-        # 允许用 dict 构造：补齐缺失项 + 逐个 coerce，越界的夹回范围
+        # 允许用 dict 构造：补齐缺失项 + 逐个 coerce，越界的夹回范围。
+        # **默认值也要过一遍 coerce**：否则 `Config()`（values 就是默认值字典，会被全量 coerce）
+        # 与 `Config(values={某一项})`（其余项保持未 coerce 的原值）会得到**类型不同**的同一项
+        # ——布尔默认 True 一边是 1、一边是 True，指纹随构造方式漂移（实测踩过：
+        # 两个等价配置算出不同指纹 → 界面莫名提示"要重建全库"）。
         merged = defaults()
+        for key, param in BY_KEY.items():
+            merged[key] = param.coerce(merged[key])
         for key, value in self.values.items():
             param = BY_KEY.get(key)
             if param is not None:

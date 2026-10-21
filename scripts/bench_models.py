@@ -38,6 +38,12 @@ VOCAB = 250_000  # tokenizer.json 词表（探针实测 25 万）
 EMBED_NAME = "bge-m3.int8.onnx"
 RERANK_NAME = "bge-reranker-v2-m3.int8.onnx"
 
+# **把仓库根放进 sys.path**：P0 门禁要 import `app.core.embed/rerank/vector`
+# （它们才是"实装口径"），而直接 `python scripts/bench_models.py` 时仓库根不在路径里
+# ——实测漏了这一步，三项门禁全报 "No module named 'app'"。
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 #: 中文样例段（探针沿用），用来构造可控 token 长度的输入
 SAMPLE = (
     "第二条 乙方应当在合同签订之日起三十日内交付全部设备，并保证设备为全新原厂正品。"
@@ -193,19 +199,34 @@ def _encode(tokenizer, texts: list[str], limit: int) -> dict[str, object]:
 
 def _session(name: str, threads: int):
     ort = _module("onnxruntime")
+    path = MODELS / name
+    if not path.is_file():
+        raise FileNotFoundError(f"模型文件缺失：{path}")
     options = ort.SessionOptions()
     options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     options.intra_op_num_threads = threads
     return ort.InferenceSession(
-        str(MODELS / name), sess_options=options, providers=["CPUExecutionProvider"]
+        str(path), sess_options=options, providers=["CPUExecutionProvider"]
     )
+
+
+def _graceful_embed(result: BenchResult) -> bool:
+    """嵌入跑分缺前置（模型文件 / 依赖）时统一降级，返回 False 表示本次跳过。"""
+    if _module("onnxruntime") is None:
+        result.add("模型", "嵌入跑分", _missing("onnxruntime"))
+        result.mark_degraded("嵌入：未装 onnxruntime")
+        return False
+    for name in (EMBED_NAME, "tokenizer.json"):
+        if not (MODELS / name).is_file():
+            result.add("模型", "嵌入跑分", f"n/a（缺 {name}）")
+            result.mark_degraded(f"嵌入：缺模型文件 {name}")
+            return False
+    return True
 
 
 def bench_embed(result: BenchResult, quick: bool) -> None:
     """模型加载（冷/热）+ 嵌入单条 vs 批量。"""
-    if _module("onnxruntime") is None:
-        result.add("模型", "嵌入加载 / 精排加载", _missing("onnxruntime"))
-        result.mark_degraded("嵌入：未装 onnxruntime")
+    if not _graceful_embed(result):
         return
     # 嵌入加载（冷/热）
     cold = time.perf_counter()
@@ -267,6 +288,11 @@ def bench_rerank(result: BenchResult, quick: bool) -> None:
         result.add("精排", "加载 或 跑分", _missing("onnxruntime"))
         result.mark_degraded("精排：未装 onnxruntime")
         return
+    for name in (RERANK_NAME, "tokenizer.json"):
+        if not (MODELS / name).is_file():
+            result.add("精排", "跑分", f"n/a（缺 {name}）")
+            result.mark_degraded(f"精排：缺模型文件 {name}")
+            return
     tokenizers = _module("tokenizers")
     if tokenizers is None:
         result.add("精排", "跑分", _missing("tokenizers"))
@@ -352,6 +378,213 @@ def bench_search(result: BenchResult) -> None:
         del matrix
 
 
+def bench_p0_gates(result: BenchResult, quick: bool) -> None:
+    """**P0 交付门禁**：把"验收数字"变成可复跑的检查（P0.2 / P0.3 / P0.4）。
+
+    为什么这些门禁放在**脚本**里而不是单元测试里：同一句 ``score_pairs`` 在空载机器上
+    268 ms、在跑满测试的机器上 4.9 s（实测）。把墙钟时间写进测试只会得到"随机红"，
+    而随机红的门禁最后一定被人删掉——那就等于没有门禁。
+
+    判定口径：
+        - **嵌入**：查"固定宽度 + 至少 2 行"这条形状约束是否生效（P0.2 的根因发现）；
+        - **精排**：10 对 ×256（交付计划目标 <2.5 s）；
+        - **矩阵**：10 万条查询含掩码（目标 <15 ms）、载入（目标 <1.5 s）、内存（<350 MB）；
+        - **Qdrant**：写入吞吐（10 万条目标 <10 分钟）——**这一项默认不跑**，
+          它要写几万个点到磁盘（几十秒到几分钟）。加 ``--qdrant`` 才跑。
+    """
+    np = _module("numpy")
+    if np is None:
+        result.add("P0", "交付门禁", _missing("numpy"))
+        result.mark_degraded("P0 门禁：未装 numpy")
+        return
+
+    # ---- 嵌入：可复现性（**口径要准**，别写成"单条与批量必须相同"）----
+    try:
+        from app.core.embed import embed_text, embed_texts
+    except ImportError as exc:
+        result.add("P0", "嵌入可复现性", f"n/a（{exc}）")
+    else:
+        try:
+            text = "违约金怎么算：逾期交货的，每逾期一日按合同总额的千分之三支付违约金。"
+            # ① **同一批组成重复调用**必须逐位相同（这是能承诺的口径，也是入库的前提）
+            first = embed_texts([text, "另一条完全不同的内容。"])
+            second = embed_texts([text, "另一条完全不同的内容。"])
+            repeatable = bool(np.array_equal(first, second))
+            result.add(
+                "P0",
+                "嵌入可复现（同批重复）",
+                f"{'逐位相同 ✅' if repeatable else '不一致 ❌'}",
+            )
+
+            # ② 单条与"1 条批"要走同一条路（都是 2 行）——这是查询与语料同形状的保证
+            alone = embed_text(text)
+            single_batch = embed_texts([text])[0]
+            same_path = bool(np.array_equal(alone, single_batch))
+            result.add(
+                "P0",
+                "嵌入形状（单条 == 1 条批）",
+                f"{'逐位相同 ✅' if same_path else '不一致 ❌'}",
+            )
+
+            # ③ 跨批组成本来就会差一点（int8 量化的形状敏感性）——**只报数字，不判定**：
+            # 实测余弦 ~0.988。它说明"批组成影响分数"，所以真实路径必须每查询一个批次。
+            pair = embed_texts([text, "另一条完全不同的内容。"])[0]
+            result.add(
+                "P0",
+                "嵌入跨批组成差（仅记录，不作判定）",
+                f"余弦 {float(np.dot(alone, pair)):.4f}（预期 ~0.988）",
+            )
+
+            vector = embed_texts([text])[0]
+            result.add("P0", "嵌入范数（单位向量）", f"{float(np.linalg.norm(vector)):.6f}")
+        except Exception as exc:  # 模型缺失等
+            result.add("P0", "嵌入可复现性", f"n/a（{type(exc).__name__}: {exc}）")
+            result.mark_degraded("P0：嵌入不可用")
+
+    # ---- 精排：10 对 ×256（目标 <2.5 s）----
+    try:
+        from app.core.rerank import score_pairs
+    except ImportError as exc:
+        result.add("P0", "精排 10 对 ×256", f"n/a（{exc}）")
+    else:
+        docs = [
+            "第七条 违约责任：乙方逾期交货的，每逾期一日按合同总额的千分之三向甲方支付违约金。",
+            "付款节奏分三段：预付款 30%、到货款 60%、质保金 10%，验收合格后 30 天内退还质保金。",
+            "设备参数对照表：A-100 交付周期 30 天，质保期 12 个月，单价 12800 元。",
+            "甲方应在收到发票后 15 个工作日内完成付款，逾期付款按同期贷款利率计息。",
+            "因不可抗力导致不能履行的，根据不可抗力的影响，部分或者全部免除责任。",
+            "本合同自双方签字盖章之日起生效，有效期为三年。",
+            "争议解决方式：提交合同签订地有管辖权的人民法院诉讼解决。",
+            "验收标准：按附件一的技术规格逐项核对，全部合格后方可签署验收单。",
+            "保密条款：双方对合同内容及履行过程中知悉的商业秘密负有保密义务。",
+            "本次验收共 3 个批次，其中第 2 批次延迟 6 天到货。",
+        ]
+        try:
+            elapsed = _best(lambda: score_pairs("违约金怎么算", docs, max_tokens=256), repeat=3)
+            ms = _milli(elapsed)
+            verdict = "达标 ✅" if ms < 2500 else "超标 ❌"
+            result.add("P0", "精排 10 对 ×256（目标 2500 ms）", f"{ms:.0f} ms {verdict}")
+
+            # 质量：无歧义问题要把对的那条排第一（精排存在的全部理由）
+            scores = score_pairs("保密条款要不要保密", docs)
+            top = int(np.argmax(scores))
+            result.add(
+                "P0",
+                "精排质量（无歧义问题 top1）",
+                f"第 {top} 条（期望 8）{'✅' if top == 8 else '❌'}"
+                f" · 分差 {float(scores.max() - scores.min()):.1f}",
+            )
+        except Exception as exc:
+            result.add("P0", "精排 10 对 ×256", f"n/a（{type(exc).__name__}: {exc}）")
+            result.mark_degraded("P0：精排不可用")
+
+    # ---- 矩阵：10 万条查询 / 载入 / 内存（P0.4 验收）----
+    try:
+        from app.core.vector import matrix as matrices
+    except ImportError as exc:
+        result.add("P0", "矩阵打分", f"n/a（{exc}）")
+    else:
+        rows_count, dims = (20_000, 768) if quick else (100_000, 768)
+        rng = np.random.default_rng(20261015)
+        vectors = rng.standard_normal((rows_count, dims)).astype(np.float32)
+        vectors /= np.linalg.norm(vectors, axis=-1, keepdims=True)
+        keys = [f"{i // 10}:1:{i}" for i in range(rows_count)]
+        payloads = [{"status": "active", "doc_id": i // 10} for i in range(rows_count)]
+        matrix = matrices.Matrix("bench", "bench", dims, vectors, keys, payloads)
+
+        mask = np.ones(rows_count, dtype=bool)
+        mask[::10] = False
+        query = rng.standard_normal(dims).astype(np.float32)
+        query /= np.linalg.norm(query)
+        matrices.search(matrix, query, top_k=50, mask=mask)  # 预热
+        score_ms = _milli(_best(lambda: matrices.search(matrix, query, top_k=50, mask=mask), repeat=5))
+        budget = 3.0 if quick else 15.0  # 2 万条按 1/5 线性折
+        result.add(
+            "P0",
+            f"矩阵查询 {rows_count:,} 条 ×768（含掩码）",
+            f"{score_ms:.1f} ms（目标 <{budget:.0f}）{'✅' if score_ms < budget else '❌'}"
+            f" · 内存 {matrix.nbytes / 1048576:.0f} MB",
+        )
+        if not quick:
+            memory_ok = matrix.nbytes < 350 * 1048576
+            result.add(
+                "P0",
+                "矩阵内存（目标 <350 MB）",
+                f"{matrix.nbytes / 1048576:.0f} MB {'✅' if memory_ok else '❌'}",
+            )
+        del matrix, vectors
+
+    # ---- Qdrant 写入吞吐（可选，见 docstring）----
+    if _qdrant_enabled() and not quick:
+        try:
+            _bench_qdrant_write(result)
+        except Exception as exc:
+            result.add("P0", "Qdrant 写入", f"n/a（{type(exc).__name__}: {exc}）")
+            result.mark_degraded("P0：Qdrant 不可用")
+
+
+def _qdrant_enabled() -> bool:
+    """`--qdrant` 才跑写入吞吐（它要真写几万个点到磁盘）。"""
+    import sys
+
+    return "--qdrant" in sys.argv
+
+
+def _bench_qdrant_write(result: BenchResult) -> None:
+    """Qdrant 本地模式的写入吞吐（10 万条目标 <10 分钟）。
+
+    **单独脚本进程**跑：它要在一个临时目录里建集合、写几万条点，
+    与"当前数据目录"隔开（不然会动到真实向量库）。
+    """
+    import json
+    import subprocess
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    with tempfile.TemporaryDirectory(dir=str(root / ".tmp")) as folder:
+        script = (
+            "import json,sys,time,numpy as np\n"
+            "from qdrant_client import QdrantClient, models\n"
+            f"client = QdrantClient(path=r'{folder}')\n"
+            "client.create_collection('bench', vectors_config=models.VectorParams(size=768,"
+            " distance=models.Distance.COSINE))\n"
+            "rng = np.random.default_rng(1)\n"
+            "total, batch = 20000, 5000\n"
+            "started = time.perf_counter()\n"
+            "for start in range(0, total, batch):\n"
+            "    raw = rng.standard_normal((batch, 768)).astype(np.float32)\n"
+            "    raw /= np.linalg.norm(raw, axis=1, keepdims=True)\n"
+            "    client.upload_collection(collection_name='bench', vectors=raw,\n"
+            "        payload=[{'i': start + i} for i in range(batch)],\n"
+            "        ids=list(range(start, start + batch)))\n"
+            "elapsed = time.perf_counter() - started\n"
+            "print(json.dumps({'elapsed': elapsed, 'total': total}))\n"
+            "client.close()\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            cwd=str(root),
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr.strip().splitlines()[-1] if proc.stderr else "子进程失败")
+        payload = json.loads(proc.stdout.strip().splitlines()[-1])
+        elapsed = float(payload["elapsed"])
+        total = int(payload["total"])
+        rate = total / elapsed
+        projected = 100_000 / rate
+        verdict = "达标 ✅" if projected < 600 else "超标 ❌"
+        result.add(
+            "P0",
+            "Qdrant 写入吞吐（10 万条目标 <10 分钟）",
+            f"{rate:.0f} 条/秒 → 10 万约 {projected / 60:.1f} 分钟 {verdict}",
+        )
+
+
 def bench_pdf(result: BenchResult) -> None:
     """PDF 解析（PyMuPDF，页/秒）。"""
     fitz = _module("fitz")
@@ -398,6 +631,9 @@ def run(quick: bool) -> BenchResult:
     bench_tokenizer(result, quick)
     bench_embed(result, quick)
     bench_rerank(result, quick)
+    # **P0 交付门禁**：走的是实装代码（app/core/embed、rerank、vector），
+    # 与上面几项"探针式"测量的区别是——它检查"验收数字还在不在"。
+    bench_p0_gates(result, quick)
     if not quick:
         bench_search(result)
         bench_pdf(result)
@@ -476,12 +712,25 @@ def main() -> int:
     parser.add_argument(
         "--no-append-doc", action="store_true", help="全量跑也不追加到 docs §9.9"
     )
+    parser.add_argument(
+        "--qdrant",
+        action="store_true",
+        help="加跑 Qdrant 写入吞吐（要真写 2 万个点到临时目录，几十秒）",
+    )
     args = parser.parse_args()
 
     with contextlib.suppress(AttributeError, OSError):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-    result = run(quick=args.quick)
+    try:
+        result = run(quick=args.quick)
+    except FileNotFoundError as exc:
+        # 模型文件缺失（一次性工具不该因为缺文件就裸 traceback）
+        print(f"无法跑（缺前置）：{exc}")
+        return 1
+    except Exception as exc:  # 一次性工具，报清楚即可
+        print(f"无法跑（异常）：{type(exc).__name__}: {exc}")
+        return 1
 
     if args.json:
         print(_json_output(result))
@@ -516,7 +765,8 @@ def main() -> int:
         elif not args.json:
             print("docs/技术方案.md 没有 §9.9，未追加（首次可手动补个小节）")
 
-    return 0
+    # 有降级项（缺依赖/缺模型文件）说明这次基准不完整 → 退出码 1，与文档契约一致
+    return 1 if result.degraded else 0
 
 
 if __name__ == "__main__":

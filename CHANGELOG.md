@@ -17,6 +17,8 @@
 - 依赖锁定：`requirements.lock.txt` + `scripts/freeze_lock.py --check`，超 `requirements.txt` 的锁，复现以 lock 为准
 - 生产级日志：主日志按天命名、只留最近 7 天，原生（Qt/Chromium）输出单独成文件，`log_level` 可调
 - 配置文件 `config.json`（监听地址等"打开数据库之前就要知道"的设置），密钥用 Windows DPAPI 加密后存本地库，界面只显示尾号
+- **启动 / 退出加固**：后台服务（Qdrant / worker）启动失败时落文件并弹窗；退出时**先等所有子进程真正退出，
+  确认不了的（still-running）会弹窗提醒**，不留下孤儿后台进程（多进程模式下"先关子进程、再关主进程"）
 
 > 说明：本版聊天页仍使用预置的模拟数据（`app/ui/screens/_chat_mock.py`）——版式、多会话与内容格式都是真的，
 > 但检索与"接大模型出真实答案"还在落地中（见 [README.md 的「当前状态」](#当前状态)）。

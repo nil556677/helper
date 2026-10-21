@@ -27,8 +27,8 @@ from math import ceil
 
 from nicegui import ui
 
-#: 可选的每页条数（20 是默认：一屏刚好，不用滚）
-PAGE_SIZES: tuple[int, ...] = (20, 50, 100)
+#: 可选的每页条数（20 是默认：一屏刚好，不用滚；500 给"上万条历史想快速翻完"的场景）
+PAGE_SIZES: tuple[int, ...] = (20, 50, 100, 500)
 
 
 @dataclass
@@ -77,7 +77,8 @@ def render_pager(state: PageState, *, on_change: Callable[[], None], noun: str =
     "我在数据的哪一段、这段有多少条"，"第 2/7 页"回答不了这个。
     """
     def go(page: int) -> None:
-        state.page = min(max(1, page), state.pages)
+        state.page = page
+        state.clamp()  # 边界规则只在 PageState.clamp() 一处（不要这里再写一份 min/max）
         on_change()
 
     first = 0 if not state.total else state.offset + 1
@@ -87,14 +88,15 @@ def render_pager(state: PageState, *, on_change: Callable[[], None], noun: str =
     with ui.row().classes("hp-pager w-full items-center gap-3 no-wrap"):
         ui.label(summary).classes("hp-field-help").mark("page-summary")
         ui.space()
-        if state.pages > 1:
-            ui.pagination(
-                min=1,
-                max=state.pages,
-                value=state.page,
-                direction_links=True,
-                on_change=lambda event: go(int(event.value)),
-            ).props("gutter=sm max-pages=7 boundary-numbers").classes("hp-pagination")
+        # **永远渲染**分页控件（只有 1 页时 Quasar 自己灰化）：控件出现/消失会让页脚高度
+        # 跳动，下方内容跟着跳——稳定比"省一个控件"重要。
+        ui.pagination(
+            min=1,
+            max=state.pages,
+            value=state.page,
+            direction_links=True,
+            on_change=lambda event: go(int(event.value)),
+        ).props("gutter=sm max-pages=7 boundary-numbers").classes("hp-pagination")
 
         def change_size(event: object) -> None:
             size = int(getattr(event, "value", PAGE_SIZES[0]) or PAGE_SIZES[0])
@@ -103,8 +105,11 @@ def render_pager(state: PageState, *, on_change: Callable[[], None], noun: str =
                 state.reset()  # 换每页条数等于换了一套页，从第一页看起
                 on_change()
 
+        # borderless：页脚里视觉最重的控件不该是最不重要的那个（"每页"二字交给 summary 语境）
         ui.select(
-            {size: f"每页 {size} 条" for size in PAGE_SIZES},
+            {size: str(size) for size in PAGE_SIZES},
             value=state.size,
             on_change=change_size,
-        ).props("outline dense options-dense").classes("hp-page-size")
+        ).props("borderless dense options-dense").classes("hp-page-size").tooltip(
+            "每页条数"
+        )

@@ -14,7 +14,8 @@
 - 左栏 264–420px、默认 280px，收起保留 56px 控制栏；窗口宽度 < 1024px 自动收起；
 - 右栏是"贴边面板的轨道"：首次打开用视口宽 45%、上限 70%，中栏至少留 400px。
 
-右栏宽度现在是按窗口宽度算好写死的；随窗口尺寸动态钳制那套规则等真正的面板管理落地时再补。
+右栏宽度默认按窗口宽度算（视口 45%、下限 300px、中栏至少留 400px）；用户可**拖动左缘**
+改宽，宽度存在浏览器 localStorage（`hp.rightbar.width`），刷新/重开窗口仍生效。
 """
 
 from __future__ import annotations
@@ -49,6 +50,20 @@ WINDOW_SIZE = (1440, 900)
 _window_width = WINDOW_SIZE[0]
 
 
+def _apply_brand_colors() -> None:
+    """Quasar 全局品牌色（所有内置组件跟随：按钮/进度/开关/分页…）。"""
+    ui.colors(
+        primary="#2f6fed",
+        secondary="#5b6570",
+        accent="#2f6fed",
+        positive="#2e9e63",
+        negative="#d14343",
+        warning="#c98a1e",
+        info="#2f6fed",
+        dark="#1b1f24",
+    )
+
+
 def set_window_width(width: int) -> None:
     """告诉外壳真正的窗口宽度（入口在建好窗口、恢复完几何之后调一次）。
 
@@ -67,6 +82,78 @@ def _rightbar_width() -> int:
     return max(RIGHTBAR_MIN_WIDTH, min(wanted, keep_for_main))
 
 
+#: 右栏左缘拖动改宽（纯前端：pointer 拖动 + localStorage 记忆，刷新/重开仍生效）。
+#: 命中带 8px，与 theme 的 `.hp-panel::before` 对齐；宽度钳制在 [300, 视口宽-400]。
+#: 用 ``add_body_html`` 注入：它在**首次响应构建时**写进初始 HTML，页面加载即执行。
+_RIGHTBAR_RESIZER_JS = r"""
+(function () {
+  if (window.__hpPanelResize) { return; }
+  window.__hpPanelResize = true;
+  var KEY = 'hp.rightbar.width';
+  var MIN = __MIN__;
+  var MAIN_MIN = __MAIN_MIN__;
+  function drawer() {
+    var list = document.querySelectorAll('.q-drawer--right');
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].offsetWidth > 0) { return list[i]; }
+    }
+    return list.length ? list[0] : null;
+  }
+  function clamp(w) {
+    var max = Math.max(MIN, window.innerWidth - MAIN_MIN);
+    return Math.min(Math.max(MIN, Math.round(w)), max);
+  }
+  function setWidth(el, w) { el.style.width = clamp(w) + 'px'; }
+  function restore() {
+    var el = drawer();
+    if (!el) { return; }
+    var saved = localStorage.getItem(KEY);
+    if (saved) { setWidth(el, parseInt(saved, 10)); }
+  }
+  window.addEventListener('resize', function () {
+    var el = drawer();
+    if (el && el.style.width) { setWidth(el, parseFloat(el.style.width)); }
+  });
+  document.addEventListener('pointerdown', function (e) {
+    var el = drawer();
+    if (!el || e.button !== 0) { return; }
+    var rect = el.getBoundingClientRect();
+    if (e.clientX < rect.left - 2 || e.clientX > rect.left + 8) { return; }
+    e.preventDefault();
+    var startX = e.clientX;
+    var startW = rect.width;
+    document.body.classList.add('hp-panel-dragging');
+    function onMove(ev) { setWidth(el, startW + (startX - ev.clientX)); }
+    function onUp() {
+      document.body.classList.remove('hp-panel-dragging');
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      localStorage.setItem(KEY, String(Math.round(el.getBoundingClientRect().width)));
+    }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  });
+  var queued = false;
+  function scheduleRestore() {
+    if (queued) { return; }
+    queued = true;
+    requestAnimationFrame(function () {
+      queued = false;
+      if (!document.body.classList.contains('hp-panel-dragging')) { restore(); }
+    });
+  }
+  setTimeout(restore, 60);
+  setTimeout(restore, 400);
+  new MutationObserver(scheduleRestore).observe(document.body, { childList: true, subtree: true });
+})();
+"""
+_RIGHTBAR_RESIZER_JS = (
+    _RIGHTBAR_RESIZER_JS.replace("__MIN__", str(RIGHTBAR_MIN_WIDTH))
+    .replace("__MAIN_MIN__", str(MAIN_MIN_WIDTH))
+)
+
+
+
 def _toggle_sidebar(drawer: object, state: dict[str, bool]) -> None:
     """在 280px 与 56px 之间切换左栏。
 
@@ -82,6 +169,7 @@ def _toggle_sidebar(drawer: object, state: dict[str, bool]) -> None:
 
 def build_shell() -> None:
     """搭出两种模式的骨架（每个窗口调一次）。"""
+    _apply_brand_colors()  # Quasar 全局品牌色（一次，所有组件跟随）
     apply_theme()
     # 浏览器侧（页内）异常必须**自己接**：NiceGUI 的 ``Client.handle_exception`` 只遍历注册过的钩子
     # （nicegui/client.py），**没人注册就静默丢掉** —— 界面上"点了没反应、日志里什么都没有"
@@ -110,10 +198,15 @@ def build_shell() -> None:
         .classes('p-0 hp-panel')
     )
     with right:
-        right_panel = ui.column().classes('w-full gap-0')
+        right_panel = ui.column().classes('w-full h-full gap-0 hp-panel-body-wrap')
 
     shell.right = right
     shell.right_panel = right_panel
+
+    # 右栏左缘可拖动改宽：宽度存在浏览器 localStorage，重开仍生效。
+    # 为什么用 add_body_html：它在**首次响应构建时**写进初始 HTML（模板 `{{ body_html | safe }}`），
+    # 页面加载即执行；而客户端连上之后 NiceGUI 才用 insertAdjacentHTML（脚本不会执行）。
+    ui.add_body_html(f'<script>{_RIGHTBAR_RESIZER_JS}</script>')
 
     # ---- 切换逻辑（先定义：下面的按钮要引用它们；它们引用到的容器稍后才建，
     #      但闭包在"被调用时"才解析名字，所以顺序没问题） ----
@@ -198,7 +291,7 @@ def build_shell() -> None:
             # 聊天模式：品牌 / 新建对话 / 会话列表 / 底部钉住的入口
             with ui.column().classes('w-full flex-1 min-h-0 gap-2'):
                 with ui.row().classes('items-center gap-2 px-1'):
-                    ui.icon('hub').classes('text-lg')
+                    ui.icon('hub').classes('text-lg hp-brand-icon')
                     ui.label('helper').classes('hp-brand text-sm')
                 ui.button('新建对话', icon='add', on_click=new_conversation).props(
                     'flat dense no-caps align=left'
@@ -307,3 +400,6 @@ def build_shell() -> None:
     # （DOM 探针就是这么发现的：HTTP 预检建了一个客户端，WebView 又建了一个）
     refresh_conversations()
     open_page(str(state['key']))
+
+    # 右栏（原件预览）可按 Esc 收起：贴边面板没有遮罩，键盘是第二个退出路径
+    ui.keyboard(on_key=lambda event: shell.close_right() if event.key == 'Escape' else None)

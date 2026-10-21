@@ -15,15 +15,18 @@ jieba.cache
 # config.json 只放引导项（日志级别、数据目录）；api key 加密后存在数据库里，不属于这个文件
 /config.json
 /config.bad-*.json
+/config.migrated-*.json
+
+# ---------- 运行/诊断残留（不允许进版本库） ----------
+/debug.log
+/app/debug.log
+/.qdrant-initialized
+/snapshots/
 
 # ---------- 内部文档：整个 docs/ 不进版本控制（按用户要求） ----------
 # 技术方案、开发计划、命名规范都只在本机维护；clone 到别的机器不会带上 docs/ 下的任何文件
 /docs/
 
-# ---------- 第三方往当前目录写的日志 ----------
-# 搜狗输入法会在我们进程的 CWD 里写 debug.log（不是本项目的日志，本项目的在 logs/ 下）；
-# 不带前导斜杠：仓库根和任何子目录（比如 app/）里出现都要忽略
-debug.log
 
 # ---------- Python ----------
 __pycache__/
@@ -51,3 +54,6 @@ dist/
 .vscode/
 Thumbs.db
 desktop.ini
+AGENTS.md
+CHANGELOG.md
+debug.log

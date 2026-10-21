@@ -3,23 +3,24 @@
 写法（一个任务一个模块，模块里就这一个类）：
 
 ```python
-class ImportTask(Task):
+class Ingest(Task):
     title = "导入资料"          # 界面显示名
-    lane = "cpu"
+    lane = "io"
 
     class Params(BaseModel):    # 参数形状（统一校验；不需要参数就不写）
         path: str
         name: str = ""
 
-    def run(self, ctx: JobContext, params: "ImportTask.Params") -> TaskResult:
+    def run(self, ctx: JobContext, params: "Ingest.Params") -> TaskResult:
         ...
         return TaskResult(note="切出 12 个片段")
 ```
 
 四条约定（都能在启动校验或运行期兜住）：
 
-1. **任务标识 = 类名**：`ImportTask` → ``import``、`OCRCleanupTask` → ``ocr_cleanup``
-   （去掉结尾的 ``Task``、驼峰转下划线）。**不用手写 key**，少一处能写错的地方。
+1. **任务标识 = 类名**：`Ingest` → ``ingest``、`OCRCleanup` → ``ocr_cleanup``
+   （类名驼峰转下划线，**类名要与文件名一致**，不要带 ``Task`` 后缀）。
+   外部入队一律用 :meth:`Task.key()`，不要手写 key 字符串——类名改了它自动跟着变。
 2. **执行方法必须实现**：``run`` 是 ``@abstractmethod``，没实现就实例化不了（``TypeError`` 直接点名）。
 3. **返回值统一**：``run`` 必须返回 :class:`TaskResult`（一句话结果 + 可选详情）。
    返回别的东西 = 任务失败并明确报错——"结果格式统一"才有意义，否则界面没法统一展示。
@@ -50,16 +51,33 @@ from app.core.jobs.registry import JobKind, validate
 
 
 @dataclass(frozen=True)
+class TaskEvent:
+    """任务执行过程中要写进时间线的一条（诊断/告警）。
+
+    参数：
+        kind: 事件分类（写进 ``job_events.kind``，界面按它显示中文标签）。
+        message: 一句话（界面直接显示）。
+        detail: 可选细节（折叠显示）。
+    """
+
+    kind: str
+    message: str
+    detail: str = ""
+
+
+@dataclass(frozen=True)
 class TaskResult:
     """任务执行结果（**统一格式**：每个任务的 ``run`` 都返回它）。
 
     参数：
         note: 一句话结果（进 ``jobs.note``，任务页直接显示）。
         detail: 可选：更详细的一段说明（进事件时间线，界面"详情"里折叠展示）。
+        events: 可选的诊断/告警（逐条写进事件时间线，**错误不静默**）。
     """
 
     note: str = ""
     detail: str = ""
+    events: tuple[TaskEvent, ...] = ()
 
 
 #: 类名 → 任务标识的分词：小写/数字后面跟大写处断开，或一串大写后面跟小写处断开。
@@ -67,9 +85,8 @@ _KEY_SPLIT = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 
 
 def key_from_class_name(name: str) -> str:
-    """类名 → 任务标识（``ImportTask`` → ``import``；``OCRSyncTask`` → ``ocr_sync``）。"""
-    base = name[:-4] if name.endswith("Task") and len(name) > 4 else name
-    return _KEY_SPLIT.sub("_", base).lower()
+    """类名 → 任务标识（``Ingest`` → ``ingest``；``OCRSync`` → ``ocr_sync``）。"""
+    return _KEY_SPLIT.sub("_", name).lower()
 
 
 def _format_validation_error(exc: ValidationError) -> str:
@@ -153,6 +170,17 @@ class Task(ABC):
         ``ctx.payload`` 推出来——不要依赖运行期实例上的临时状态。
         """
 
+    # ---------------- 标识：类名派生，只读 ----------------
+
+    @classmethod
+    def key(cls) -> str:
+        """本任务的队列标识（**类名派生，只读**）：``Ingest.key()`` → ``"ingest"``。
+
+        外部入队一律用它（``api.enqueue(Ingest.key(), ...)``），不要手写 key 字符串：
+        类名一改它自动跟着变，不会出现"手写的 key 静默指向不存在的类型"。
+        """
+        return key_from_class_name(cls.__name__)
+
     # ---------------- 参数：入队时校验、执行时解析 ----------------
 
     @classmethod
@@ -209,10 +237,17 @@ class Task(ABC):
             if inspect.isawaitable(outcome):
                 outcome = _run_coroutine(outcome)
             result = _require_result(cls, outcome)
-            if result.detail:
-                from app.core.jobs import store
+            from app.core.jobs import store
 
+            if result.detail:
                 store.record_result(ctx.job_id, detail=result.detail)
+            for event in result.events:
+                store.add_event(
+                    ctx.job_id,
+                    kind=event.kind,
+                    message=event.message,
+                    detail=event.detail,
+                )
             return result.note
 
         # 起个带类名的名字：日志与异常栈里能一眼看出是哪个任务（否则只有 `<locals>.call`）
@@ -259,7 +294,7 @@ class Task(ABC):
             )
 
         kind = JobKind(
-            key=key_from_class_name(cls.__name__),
+            key=cls.key(),
             title=cls.title,
             lane=cls.lane,
             handler=cls.as_handler(),

@@ -20,7 +20,7 @@ def _wake_runner() -> None:
 
     **为什么放在这一层**：调度器在空闲时会"睡到下一条该跑的时刻"（最长 5 秒），
     如果投递时不叫醒它，用户点了按钮最多要等 5 秒才看到动静。以前只有
-    `app/tasks.enqueue_import` 记得唤醒，别处直接调 `enqueue` 就会漏——现在收进这里，
+    `app/services/knowledge/queue.enqueue_import` 记得唤醒，别处直接调 `enqueue` 就会漏——现在收进这里，
     谁投递都不会忘。跨进程投递没有这个便利（唤醒事件在别的进程里），靠轮询兜底。
     """
     from app.core.jobs.runner import get_runner
@@ -64,6 +64,7 @@ def enqueue(
     dedupe_key: str | None = None,
     priority: int = PRIORITY_DEFAULT,
     delay_s: float = 0.0,
+    run_id: str | None = None,
 ) -> int:
     """把一件事排进队列，返回任务 id。
 
@@ -87,6 +88,7 @@ def enqueue(
         max_attempts=spec.max_attempts,
         resource=spec.resource,
         payload_version=spec.payload_version,
+        run_id=run_id,
     )
     if created:
         logger.info("任务入队：{} #{}（优先级 {}）", spec.title, job_id, priority)

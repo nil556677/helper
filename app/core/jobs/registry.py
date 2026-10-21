@@ -4,8 +4,8 @@
 
 ```python
 jobs.register(JobKind(
-    key="import", title="导入资料", lane="cpu",
-    handler=import_handler, idempotent=True, max_attempts=3, lease_s=120,
+    key="ingest", title="导入资料", lane="io",
+    handler=ingest_handler, idempotent=True, max_attempts=3, lease_s=600,
 ))
 ```
 

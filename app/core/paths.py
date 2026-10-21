@@ -9,12 +9,21 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
 #: 数据目录名。**写死在安装目录旁**：配置里不再有 data_dir，也没有环境变量能改道
 #: （改动记录见技术方案 §12；2026-10 用户拍板「几个文件地址直接写死」）。
 DATA_DIR_NAME = "data"
+
+
+def file_size(path: Path) -> int:
+    """文件大小（字节）；读不到算 0（用于统计与日志，失败不该打断流程）。"""
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
 
 #: SQLite 主库文件名。
 DB_FILENAME = "helper.db"
@@ -43,16 +52,8 @@ def project_root() -> Path:
 
 
 def config_file() -> Path:
-    """config.json 的位置（紧挨安装目录）。
-
-    为什么放在这里而不是数据目录里：它自己决定数据目录在哪，不能反过来依赖数据目录。
-    """
+    """老 ``config.json`` 的位置（**只用于一次性迁移/隔离**，运行时配置在数据库）。"""
     return project_root() / "config.json"
-
-
-def config_example_file() -> Path:
-    """默认配置模板的位置（随代码发布，不随手改）。"""
-    return project_root() / "config.example.json"
 
 
 def data_dir() -> Path:
@@ -87,6 +88,68 @@ def inbox_dir() -> Path:
     任务读 inbox → 副本进 ``files/`` → 删 inbox 文件。
     """
     return data_dir() / "inbox"
+
+
+#: 文件名里不能出现的字符（Windows 保留字符 + 路径分隔符 + 控制字符）
+_UNSAFE_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+#: Windows 设备保留名（这些名字做文件名会打开设备而不是文件）
+_RESERVED_FILENAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
+def safe_filename(name: str, *, max_len: int = 120) -> str:
+    """把用户给的文件名净化成**可落盘**的形状（保留中文，去掉路径与非法字符）。
+
+    三条都踩过：
+    - 路径分隔符 / ``..``：``Path(name).name`` 只取最后一段，杜绝目录逃逸；
+    - **Windows 保留名**（``CON`` / ``NUL`` / ``COM1``…）：直接落盘会写进设备；
+    - **超长名**：NTFS 单段上限 255 字符，inbox 前缀还要占 13 个——超了就永远导不进去。
+      截断时**保后缀**（扩展名决定用哪个解析器）。
+
+    参数：
+        name: 原始文件名。
+        max_len: 净化后主名的最大长度（不含后缀的余量在内）。
+    """
+    base = Path(str(name)).name
+    base = _UNSAFE_FILENAME.sub("_", base).strip(" .")
+    if not base:
+        return "unnamed"
+    stem, dot, suffix = base.rpartition(".")
+    keep_suffix = f".{suffix}"[:16] if dot and suffix else ""
+    stem = (stem or "unnamed")[: max(1, max_len - len(keep_suffix))]
+    base = f"{stem}{keep_suffix}"
+    if base.split(".", 1)[0].upper() in _RESERVED_FILENAMES:
+        base = f"_{base}"
+    return base or "unnamed"
+
+
+def resolve_stored_path(stored: str | None) -> Path | None:
+    """把库里的 ``stored_path`` 解析成 ``files/`` 下的绝对路径；越界返回 None。
+
+    **纵深防御**：入库时已经 sanitize 过（``<file_hash12>/<safe_name>``），但库可能被外部
+    工具改过、或带着老数据。这里统一校验"解析后必须仍在 ``files/`` 内"——
+    绝对路径、``..``、指向外部的符号链接都会被拒绝。读文件的地方都该走它。
+    """
+    text = str(stored or "").strip()
+    if not text:
+        return None
+    base = files_dir().resolve()
+    try:
+        candidate = (base / text).resolve()
+    except OSError:
+        return None
+    try:
+        candidate.relative_to(base)
+    except ValueError:
+        from loguru import logger
+
+        logger.warning("拒绝越界的资料副本路径（不在 files/ 内）：{}", text)
+        return None
+    return candidate
 
 
 def logs_dir() -> Path:
@@ -134,7 +197,7 @@ def describe() -> dict[str, str]:
     """
     return {
         "安装目录": str(project_root()),
-        "配置文件": str(config_file()),
+        "旧配置文件": str(config_file()),
         "数据目录": str(data_dir()),
         "数据库": str(db_file()),
         "资料副本": str(files_dir()),

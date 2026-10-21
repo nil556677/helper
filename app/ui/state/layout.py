@@ -34,17 +34,27 @@ class Layout:
         if self.right is not None:
             self.right.value = False
 
-    def show_right(self, build_content: Any) -> None:
-        """清空右栏 → 用 ``build_content`` 重新填 → 展开。
+    def show_right(self, build_content: Any, *, title: str = "预览") -> None:
+        """清空右栏 → 画**头行（标题 + 关闭 ×）** + 可滚动内容 → 展开。
 
         参数：
             build_content: 一个无参可调用对象，内部用 ``ui.*`` 建内容（在右栏上下文里执行）。
+            title: 头行标题（默认「预览」）。
         """
         if self.right_panel is None:
             return
+        from nicegui import ui
+
         self.right_panel.clear()
         with self.right_panel:
-            build_content()
+            with ui.row().classes("w-full items-center gap-2 no-wrap hp-panel-head"):
+                ui.label(title).classes("hp-card-title")
+                ui.space()
+                ui.button(icon="close", on_click=self.close_right).props(
+                    "flat dense round size=sm"
+                ).classes("hp-panel-close").mark("panel-close").tooltip("关闭（Esc）")
+            with ui.column().classes("w-full gap-2 hp-panel-body"):
+                build_content()
         self.open_right()
 
 

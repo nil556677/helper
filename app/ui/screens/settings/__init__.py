@@ -5,9 +5,12 @@
 
     settings/
     ├─ __init__.py   分区清单 SECTIONS + build()（外壳用的接缝）
-    ├─ general.py    通用
+    ├─ general.py    通用（日志 / 调试 / 本机服务 / 关于）
+    ├─ data.py       数据与存储（数据目录备份 + 向量子区）
     ├─ models.py     模型配置
-    └─ knowledge.py  知识库（**界面草图**，等定稿后才接真逻辑）
+    ├─ terms.py      领域词（全局自定义关键词）
+    ├─ knowledge.py  知识库
+    └─ tasks.py      任务
 
 **加一个分区 = 新写一个文件 + 这里加一行**，不碰别的分区，也不碰外壳。
 
@@ -24,24 +27,30 @@ from collections.abc import Callable
 
 from nicegui import ui
 
+from app.ui.screens.settings.data import render as render_data
 from app.ui.screens.settings.general import render as render_general
 from app.ui.screens.settings.knowledge import render as render_knowledge
 from app.ui.screens.settings.models import render as render_models
 from app.ui.screens.settings.tasks import render as render_tasks
+from app.ui.screens.settings.terms import render as render_terms
 
 #: (分区 key, 标题, 图标)。顺序就是左栏里的顺序：模型配置排第二，因为不配它什么都跑不起来。
 SECTIONS: tuple[tuple[str, str, str], ...] = (
-    ("general", "通用", "tune"),
-    ("models", "模型配置", "smart_toy"),
     ("knowledge", "知识库", "library_books"),
+    ("terms", "领域词", "sell"),
     ("tasks", "任务", "pending_actions"),
+    ("models", "模型配置", "smart_toy"),
+    ("data", "数据与存储", "folder_open"),
+    ("general", "通用", "tune"),
 )
 
 #: 分区 key → 渲染函数。加分区就加一行。
 RENDERERS: dict[str, Callable[[], None]] = {
     "general": render_general,
+    "data": render_data,
     "models": render_models,
     "knowledge": render_knowledge,
+    "terms": render_terms,
     "tasks": render_tasks,
 }
 
@@ -58,7 +67,7 @@ def build() -> Callable[[str], None]:
     # 结果那个空 column 带 h-full 把高度吃光，滚动区被挤成 0 高——用户看到的就是白板。
     with ui.column().classes("w-full h-full gap-0 hp-settings-body"):
         scroll = ui.scroll_area().classes("w-full flex-1 min-h-0 hp-settings-scroll")
-        with scroll, ui.column().classes("w-full hp-measure gap-10 px-4 py-6"):
+        with scroll, ui.column().classes("w-full hp-page gap-5 pt-3 pb-8"):
             for key, _title, _icon in SECTIONS:
                 panel = ui.column().classes("w-full gap-4")
                 panels[key] = panel

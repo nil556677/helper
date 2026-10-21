@@ -67,7 +67,7 @@ CHECKS: dict[str, Callable[[str], bool]] = {
     "没落地的分区不摆出来": lambda t: not any(s in t for s in ("词库", "追踪")),
     "知识库有导入控件": lambda t: "q-uploader" in t,
     "模型配置两个测试连接": lambda t: t.count("测试连接") >= 2,
-    "知识库概览四格": lambda t: all(s in t for s in ("份资料", "个片段", "副本占用", "最后更新")),
+    "知识库概览四格": lambda t: all(s in t for s in ("份资料", "个片段", "副本占用", "向量占用")),
     "知识库有全选本页": lambda t: "全选本页" in t,
     "任务页有正在跑面板": lambda t: "正在跑（" in t,
     "任务页有队列控制": lambda t: all(s in t for s in ("暂停队列", "重试全部失败", "清理已完成")),
@@ -75,7 +75,8 @@ CHECKS: dict[str, Callable[[str], bool]] = {
     "任务页有全选本页": lambda t: "全选本页" in t,
     "列表卡骨架（工具栏 + 页脚）": lambda t: "hp-toolbar" in t and "hp-list-footer" in t,
     "自动刷新三件套": lambda t: all(s in t for s in ("自动刷新", "立即刷新")),
-    "分页页脚有每页条数": lambda t: "每页 20 条" in t and "hp-pager" in t,
+    # 空库时列表是空态、分页控件不渲染；分页的"真的有高度"交给下面量高度（会点开「资料列表」）
+    "知识库三页签": lambda t: all(s in t for s in ("总览", "资料列表", "导入")),
     "高级参数不上界面": lambda t: "温度" not in t and "最大输出" not in t,
     "写明配置进数据库": lambda t: "llm_slots" in t,
     "模拟数据已明确标注": lambda t: "示例数据" in t,
@@ -125,9 +126,21 @@ MEASURE_SCRIPT = r"""
     const knowledge = [...document.querySelectorAll('button')]
         .find((b) => (b.innerText || '').includes('知识库'));
     if (knowledge) knowledge.click();
-    await sleep(800);
-    out['设置 · 知识库导入控件'] = height('.hp-upload');
-    out['设置 · 知识库页脚'] = height('.hp-kb-list .hp-list-footer');
+    await sleep(1000);
+    // 知识库页签是 Quasar 的 q-tab（div，不是 button）：按文字找 tab 再点
+    const tab = (text) => [...document.querySelectorAll('.q-tab, [role="tab"]')]
+        .find((t) => (t.innerText || '').includes(text));
+    const listTab = tab('资料列表');
+    if (listTab) listTab.click();
+    await sleep(1000);
+    out['设置 · 知识库列表卡'] = height('.hp-kb-list');
+    out['设置 · 知识库工具栏'] = height('.hp-kb-list .hp-toolbar');
+    out['设置 · 知识库列表页脚'] = height('.hp-kb-list .hp-list-footer');
+    out['设置 · 知识库分页节点'] = document.querySelectorAll('.hp-kb-list .hp-pager').length;
+    const importTab = tab('导入');
+    if (importTab) importTab.click();
+    await sleep(1000);
+    out['设置 · 知识库导入控件节点'] = document.querySelectorAll('.q-uploader').length;
 
     const tasks = [...document.querySelectorAll('button')]
         .find((b) => (b.innerText || '').includes('任务'));
@@ -243,7 +256,7 @@ def main() -> int:
                 failed.append(name)
         # 接着量可见高度：只查 HTML 会漏掉"元素在、但被挤成 0 高"这种白板问题
         view.page().runJavaScript(MEASURE_SCRIPT)
-        QTimer.singleShot(4500, fetch_measure)
+        QTimer.singleShot(9000, fetch_measure)
 
     def probe() -> None:
         view.page().toHtml(on_html)

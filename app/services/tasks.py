@@ -61,6 +61,20 @@ KIND_LABELS: dict[str, str] = {
     "cancelled": "用户取消",
     "unsupported": "类型已不存在",
     "result": "执行结果",
+    # 切分诊断（chunk 层写进 job_events，界面按这些名字显示）
+    "chunking": "切分失败",
+    "hard_cut_used": "硬切（无标点长段）",
+    "atomic_line_over_budget": "表格/代码单行超长",
+    "image_skipped": "图片未 OCR",
+    "child_over_budget": "片段超预算",
+    "min_child_violated": "片段低于下限",
+    "heading_too_long": "标题超预算",
+    "empty_blocks": "没有可切内容",
+    "no_sentence_boundary": "整段无句末标点",
+    "heading_without_body": "标题没有正文",
+    "embed_budget_exceeded": "切片超嵌入预算",
+    "doc_title_multi_h1": "多个一级标题",
+    "byline_detected": "识别到作者行",
 }
 
 #: 参数值在界面上最多显示多少个字符（长路径/长文本截断，完整值靠 tooltip）
@@ -68,8 +82,7 @@ PARAM_MAX_CHARS = 120
 
 #: 任务类型 → 图标（界面用；不认识的就给个通用图标）
 _KIND_ICONS = {
-    "import": "upload_file",
-    "embed": "scatter_plot",
+    "ingest": "upload_file",
     "ocr": "image",
     "rebuild": "refresh",
     "cleanup": "cleaning_services",
@@ -121,6 +134,8 @@ class Concurrency:
     running: int
     limit: int
     degraded: bool
+    serialized: bool = False
+    """是否被资源锁串行（如 ONNX）：limit 是全局上限，但实际同时只能跑 1 条。"""
 
 
 @dataclass(frozen=True)
@@ -282,12 +297,27 @@ def kind_icon(kind: str) -> str:
 
 
 def concurrency() -> Concurrency:
-    """当前并发情况（界面显示"并发 x/y"）：在跑几个、上限几个、是不是被让路了。"""
+    """当前并发情况（界面显示"并发 x/y"）：在跑几个、上限几个、是不是被让路了。
+
+    **worker 模式**下任务跑在独立 worker 进程，主进程没有 Runner；不能用
+    ``get_runner()`` 判断在跑数（会永远显示 0）。改为从数据库查 running 条数，
+    并标注"ONNX 串行"——ingest/rebuild 等 kind 声明了 ``resource="onnx"``，
+    同名资源同时只允许一条，所以即使全局上限 3 也只会跑 1 条。
+    """
     from app.core.jobs.runner import MAX_CONCURRENT_TASKS
 
     runner = get_runner()
     if runner is None:
-        return Concurrency(running=0, limit=MAX_CONCURRENT_TASKS, degraded=False)
+        try:
+            running = int(api.count_jobs(statuses=("running",)))
+        except Exception:
+            running = 0
+        return Concurrency(
+            running=running,
+            limit=MAX_CONCURRENT_TASKS,
+            degraded=False,
+            serialized=True,
+        )
     return Concurrency(
         running=runner.running_count,
         limit=runner.max_concurrent,
@@ -386,9 +416,91 @@ def overview(*, group: str = "active", page: int = 1, size: int = 20) -> TaskOve
 # ---------------------------------------------------------------------------
 
 
+def _cleanup_unstarted_import(job: object) -> None:
+    """取消一个**从未开始**的导入任务时，清掉它的占位行与暂存文件。
+
+    为什么需要：上传时就落了 ``documents`` 占位行（``stored_path=''``），副本要等
+    任务真正开始才写。任务排队时被取消 → 留下一个"没有副本"的占位行：重建会报
+    "找不到副本"，同文件重新上传还会被当成重复。这里把它清掉，使"取消"和"删除资料"
+    两种操作先后顺序都成立。
+
+    参数：
+        job: 取消前的任务对象（需要 ``payload``）。
+    """
+    from pathlib import Path
+
+    from loguru import logger
+
+    from app.core import paths
+    from app.rag import store
+
+    payload = dict(getattr(job, "payload", None) or {})
+    doc_id = payload.get("doc_id")
+    raw = str(payload.get("path") or "")
+
+    # 先看还有没有别的活任务引用同一个 doc / 同一个 inbox 文件：
+    # 有的话不能删，否则会把正在跑的导入的输入/占位行一起清掉。
+    active_docs: set[int] = set()
+    active_paths: set[str] = set()
+    current_id = getattr(job, "id", None)
+    try:
+        for other in api.list_jobs(statuses=("pending", "running"), limit=500):
+            if current_id is not None and getattr(other, "id", None) == current_id:
+                continue
+            other_payload = getattr(other, "payload", None) or {}
+            if not isinstance(other_payload, dict):
+                continue
+            try:
+                if other_payload.get("doc_id") is not None:
+                    active_docs.add(int(other_payload["doc_id"]))
+            except (TypeError, ValueError):
+                pass
+            if other_payload.get("path"):
+                active_paths.add(str(other_payload["path"]))
+    except Exception:
+        pass
+
+    if doc_id is not None:
+        try:
+            row = store.get(int(doc_id))
+        except Exception as exc:
+            logger.warning("取消导入时读占位行失败（doc {}）：{}", doc_id, exc)
+            row = None
+        if row is not None:
+            stored = str(dict(row).get("stored_path") or "")
+            status = str(dict(row).get("status") or "")
+            if status == "pending" and not stored and int(doc_id) not in active_docs:
+                from app.rag.ingest import importer
+
+                importer.delete_documents([int(doc_id)])
+    # 暂存文件只删 inbox 里的那一个（防止 payload 被手工改成任意路径）
+    if raw and raw not in active_paths:
+        candidate = Path(raw)
+        try:
+            inbox = paths.inbox_dir().resolve()
+            if candidate.is_file() and candidate.resolve().parent == inbox:
+                candidate.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning("删除暂存文件失败（{}）：{}", candidate, exc)
+
+
 def cancel(job_id: int) -> bool:
-    """取消一个任务（排队中的立刻取消；在跑的等它到批次边界）。"""
-    return api.cancel(job_id)
+    """取消一个任务（排队中的立刻取消；在跑的等它到批次边界）。
+
+    对**从未开始的导入**：取消成功后顺手清掉占位行与暂存文件（否则会留下
+    "没有副本、重建必失败、重新上传又被判重复"的孤儿行）。
+    """
+    job = api.get(job_id)
+    was_unstarted_import = bool(
+        job is not None
+        and job.kind == "ingest"
+        and job.status == "pending"
+        and job.started_at is None
+    )
+    ok = api.cancel(job_id)
+    if ok and was_unstarted_import and job is not None:
+        _cleanup_unstarted_import(job)
+    return ok
 
 
 def retry(job_id: int) -> bool:
@@ -407,7 +519,7 @@ def retry_all_failed() -> int:
 
 def cancel_many(job_ids: Iterable[int]) -> int:
     """批量取消（排队中的立刻取消，在跑的等批次边界）。返回实际处理的条数。"""
-    return sum(1 for job_id in job_ids if api.cancel(int(job_id)))
+    return sum(1 for job_id in job_ids if cancel(int(job_id)))
 
 
 def retry_many(job_ids: Iterable[int]) -> int:

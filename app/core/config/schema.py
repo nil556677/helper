@@ -37,15 +37,19 @@ def is_loopback(host: str) -> bool:
 
 
 class BootstrapConfig(BaseModel):
-    """``config.json`` 的全部内容：只有日志级别与监听地址两项。
+    """引导配置：日志级别 / 调试模式 / 监听地址（存 ``settings.bootstrap.*``）。
 
     ``extra="forbid"``：键名拼错要立刻报错。"用户以为改了、其实没生效"是最难查的一类问题。
-    ````_`` 开头的键由加载器当注释剥掉（见 access._strip_notes），不参与校验。
+    老 ``config.json`` 里的 ``_`` 注释键在迁移时会被剥掉，不参与校验。
     """
 
     model_config = ConfigDict(extra="forbid")
 
     log_level: LogLevel = "INFO"
+
+    #: **调试模式**（界面「通用」里的开关）：打开后文件与控制台都降到 DEBUG 级，
+    #: 错误与每一步细节都会打到控制台（``logs/console-<日期>.log`` 与真实 stderr）。
+    log_debug: bool = False
 
     #: 界面服务的监听地址。默认回环；**填非回环会告警**（界面没有认证，绑出去等于给整个局域网看）。
     #: 只填地址，不要带 ``http://`` 或路径。留空视为默认值。

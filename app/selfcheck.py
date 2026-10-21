@@ -86,17 +86,16 @@ def _check(level: str, name: str, detail: str, hint: str = "") -> CheckResult:
 
 def _directories() -> list[CheckResult]:
     results: list[CheckResult] = []
+    import os
+
     for label, directory in (("数据目录", paths.data_dir()), ("日志目录", paths.logs_dir()), ("模型目录", paths.models_dir())):
         if not directory.is_dir():
             results.append(_check("ERROR", "目录", f"{label} 不存在：{directory}"))
             continue
-        # 真写一个临时文件再删：验证"可写"，不是"存在"
-        try:
-            probe = directory / f".selfcheck-{id(directory)}.tmp"
-            probe.write_text("ok", encoding="utf-8")
-            probe.unlink(missing_ok=True)
-        except OSError as exc:
-            results.append(_check("ERROR", "目录", f"{label} 不可写：{directory}（{exc}）"))
+        # 只读判据：不写文件（自检铁律"不改状态"）。`os.access` 在本机受限令牌下
+        # 对"能建文件但 fstat 说可写"的目录会保守一点，但对"只读位置"能可靠报 ERROR。
+        if not os.access(directory, os.W_OK):
+            results.append(_check("ERROR", "目录", f"{label} 不可写（os.access 拒绝）：{directory}"))
             continue
     if not any(item.level == "ERROR" for item in results):
         results.append(_check("OK", "目录", "data/、logs/、models/ 存在且可写"))
@@ -108,10 +107,10 @@ def _config(check_config: bool) -> list[CheckResult]:
         return []
     try:
         config = access.load_fresh()
-        # 坏文件被隔离时 access 会退回默认值并隔离 config.bad-*；这里把隔离了的事实报告出来
+        # 引导配置在数据库里；库还没建时按默认值报告。老 config.bad-* 只作迁移线索。
         bad = sorted(paths.project_root().glob("config.bad-*.json"))
         detail = (
-            f"配置可加载（日志级别 {config.log_level}）"
+            f"引导配置可加载（数据库 settings / 日志级别 {config.log_level}）"
             + (f"；检测到已隔离的坏配置 {bad[0].name}" if bad else "")
         )
         return [_check("WARNING" if bad else "OK", "配置", detail)]

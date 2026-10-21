@@ -67,12 +67,25 @@ class JobInterrupted(RuntimeError):
 
 
 def _payload_from_json(raw: str) -> dict[str, Any]:
-    """解析 payload（坏 JSON 不让整个任务页崩掉）。"""
+    """解析 payload（坏 JSON 不让整个任务页崩掉，但要留下痕迹）。
+
+    **为什么记 warning**：坏 payload 以前会静默变成 ``{}``，任务带着空参数继续跑，
+    表现是「参数莫名其妙都没了」。留一条日志，排查时能直接看到是哪条任务、什么内容坏了。
+    """
     try:
         value = json.loads(raw or "{}")
-    except ValueError:
+    except ValueError as exc:
+        logger = _logger()
+        logger.warning("任务 payload 不是合法 JSON（按空参数处理）：{}…（{}）", str(raw)[:200], exc)
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _logger() -> Any:
+    """惰性拿 loguru（模块顶层 import 会拖慢 jobs 包加载，且测试里可能换 sink）。"""
+    from loguru import logger
+
+    return logger
 
 
 @dataclass(frozen=True)
@@ -194,6 +207,8 @@ class JobContext:
         kind: 任务类型。
         payload: 任务参数（只放引用，不放 bytes）。
         cursor: 断点续跑位置（长任务用；没有就是 None）。
+        worker: 认领者令牌（``泳道@进程-随机串``）——写进度/收尾时用它校验归属，
+            防止任务被回收后旧线程覆盖新一轮的状态。
         write_progress: 引擎注入：``(done, total, note) -> None``。
         write_cursor: 引擎注入：``(value) -> None``。
         is_cancelled: 引擎注入：用户是否请求取消。
@@ -209,6 +224,7 @@ class JobContext:
     write_cursor: Callable[[str], None]
     is_cancelled: Callable[[], bool]
     should_stop: Callable[[], bool]
+    worker: str = ""
     is_paused: Callable[[], bool] = lambda: False
     throttle_s: float = 0.2
     pause_poll_s: float = 0.2
@@ -240,9 +256,16 @@ class JobContext:
             JobInterrupted: 应用要退出（任务回到 pending，下次接着做）。
         """
         self._check()
+        previous = self._latest
         self._latest = (done, total, note)
-        # 节流：进度按批写，不逐条写（10 万次写库是不可接受的）
-        if time.monotonic() - self._last_write >= self.throttle_s:
+        # 阶段/总量变化必须立刻落库：否则"解析第 1 个单元 → 第 2 个单元 → 向量化"
+        # 这种关键阶段切换会被 0.2s 节流吞掉，界面看起来像卡在第一步。
+        if (
+            previous is None
+            or note != previous[2]
+            or total != previous[1]
+            or time.monotonic() - self._last_write >= self.throttle_s
+        ):
             self.flush()
         while self.is_paused():
             self._check()
@@ -259,6 +282,16 @@ class JobContext:
         now = time.monotonic()
         self._last_write = now
         self._last_renew = now
+
+    def add_event(self, kind: str, message: str, detail: str = "") -> None:
+        """往任务时间线写一条**诊断/告警**（界面任务详情里可见）。
+
+        与 ``report`` 的区别：进度写的是"做到哪了"，事件写的是"发生了什么"
+        （硬切、跳过图片、单行超预算……）。诊断**不许静默**，都走这里。
+        """
+        from app.core.jobs import store
+
+        store.add_event(self.job_id, kind=kind, message=message, detail=detail)
 
     def _check(self) -> None:
         """取消与退出：每到一个批次边界都要看。"""

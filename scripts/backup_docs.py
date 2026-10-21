@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import re
 import shutil
 import sys
@@ -121,6 +122,8 @@ def backup_docs(
     - 仅当 ``dry_run`` 为真时只计算/打印、不写盘不删目录；
     - 保留最近 ``keep`` 份（含本轮新快照），更旧的只在名称为备份快照时才删除。
     """
+    if keep < 1:
+        raise ValueError(f"--keep 必须 >=1（收到 {keep}），否则会把全部旧快照删光")
     if not source.is_dir():
         raise FileNotFoundError(f"源目录不存在：{source}")
 
@@ -150,13 +153,14 @@ def backup_docs(
 
 def main(argv: list[str] | None = None) -> int:
     # Windows 默认 stdout 是 GBK，中文会爆 UnicodeEncodeError；统一按 UTF-8 输出。
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    with contextlib.suppress(AttributeError, OSError):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
     parser = argparse.ArgumentParser(
         description="把 docs/ 备份到仓库之外，保留最近若干份快照。"
     )
     parser.add_argument("--to", type=Path, default=DEFAULT_TO, help="目标目录（默认仓库之外的 helper-docs-backup）")
-    parser.add_argument("--keep", type=int, default=10, help="保留最近几份快照")
+    parser.add_argument("--keep", type=int, default=10, help="保留最近几份快照（>=1）")
     parser.add_argument("--dry-run", action="store_true", help="只打印会做什么，不写盘不删除")
     args = parser.parse_args(argv)
 

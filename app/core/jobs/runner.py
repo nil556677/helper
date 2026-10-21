@@ -63,6 +63,12 @@ LAG_DEBOUNCE = 2
 #: 有任务排了这么久还没轮到 → 在日志里喊一声（队列卡住时用户只会觉得"没反应"）
 STUCK_WARN_S = 300.0
 
+#: 心跳续租间隔（秒）。**与 handler 的 report() 无关**：有些 handler 一步就要跑几分钟
+#: （解析大 PDF、全量重建），期间没有批次边界可调 report()——只靠 handler 续租，租约必然
+#: 过期、任务被误判"卡死"回收，然后双跑。续租只看"线程还活着"，由调度线程按本节拍统一做
+#: （见 :meth:`Runner._renew_leases`），不再单独养一条心跳线程。
+HEARTBEAT_S = 5.0
+
 
 class Runner:
     """任务执行器（**一个进程里只有一个**）。
@@ -74,6 +80,30 @@ class Runner:
         lane_limits: 覆盖默认并发上限（测试用）。
     """
 
+    #: 进程级唯一实例（见 :meth:`singleton`）：所有启动路径共用它。
+    _singleton: Runner | None = None
+    #: 保护"判空 + 创建"（不加锁时两个线程会各建一个，各自起一条调度线程——后写的覆盖先写的，
+    #: 而先写的线程还在跑，它的 recover_on_start 还会把对方在跑的任务打回 pending）。
+    #: **RLock**：:meth:`singleton` 持锁调用构造器，而构造器里的"只许一个实例"检查也要这把锁。
+    _singleton_lock = threading.RLock()
+
+    @classmethod
+    def singleton(cls, **kwargs: object) -> Runner:
+        """取/建**进程级唯一**的执行器（线程安全）。
+
+        为什么需要它：``start()`` 以前靠"调用约定"保证只调一次；一旦两个线程同时走到
+        "读全局 → 判 None → 创建"，就会各建一个实例，后写的把先写的从 ``get_runner()``
+        的视野里覆盖掉，而先写的调度线程仍在跑（还会把对方在跑的任务判成中断）。
+        这里把"判空 + 创建"放进锁里，从机制上保证一个进程只有一个实例。
+
+        参数：与 :meth:`__init__` 相同；**只有真正创建的那一次生效**（之后传入的参数被忽略）。
+        返回：进程级唯一实例。
+        """
+        with cls._singleton_lock:
+            if cls._singleton is None:
+                cls._singleton = cls(**kwargs)  # type: ignore[arg-type]
+            return cls._singleton
+
     def __init__(
         self,
         *,
@@ -82,6 +112,17 @@ class Runner:
         lane_limits: dict[str, int] | None = None,
         max_concurrent: int | None = None,
     ) -> None:
+        if not inline:
+            # **机制**（而不是"请用 singleton() 的约定"）：非 inline 执行器一个进程只许有一个。
+            # 直接构造第二个实例在这里就失败，而不是等两条调度线程都跑起来、互相把对方在跑的
+            # 任务按"崩溃中断"打回 pending 才暴露（那种双跑很难排查）。
+            # 用 RLock 是因为 :meth:`singleton` 会持锁再调 ``cls(...)``，同一线程需要可重入。
+            with Runner._singleton_lock:
+                if Runner._singleton is not None:
+                    raise RuntimeError(
+                        "进程内已有一个 Runner 实例：请用 Runner.singleton() 复用，"
+                        "不要直接构造第二个（会导致双调度、任务双跑）"
+                    )
         self.inline = inline
         self._lag_provider = lag_provider
         self._lane_limits = dict(lane_limits or LANE_LIMITS)
@@ -96,7 +137,11 @@ class Runner:
         self._workers: list[threading.Thread] = []
         #: 本执行器正在跑的 job id（退出收尾时要区分"线程还活着"与"线程已经死了"）
         self._inflight: set[int] = set()
+        #: 正在跑的 job → (worker 令牌, 租约秒数)：心跳线程据此续租
+        self._leases: dict[int, tuple[str, float]] = {}
         self._lock = threading.Lock()
+        #: 保护 :meth:`start` 的"判线程存活 → 建线程"整段（见那里的说明）。
+        self._start_lock = threading.Lock()
         self._last_maintenance = 0.0
         self._last_purge = 0.0
         self._last_lag_check = 0.0
@@ -121,21 +166,32 @@ class Runner:
         """启动：先做崩溃恢复（**无条件**回收 running），再起调度线程。
 
         inline 模式只做恢复，不起线程（测试自己调 :meth:`tick`）。
+
+        **顺序很关键**：非 inline 模式下先判"调度线程还活着就 return"，**再**做崩溃恢复。
+        反过来（旧实现）会让重复调用 ``start()`` 把正在跑的任务改回 pending——它们的 worker
+        线程还在写数据，随后又被认领一遍，就是双跑。
+
+        **整段加锁**：判线程存活与建线程之间不能被切走，否则两个线程可能都判到"还没启动"、
+        各起一条调度线程（多一条在后台跑，且 ``recover_on_start`` 会把对方在跑的任务打回 pending）。
         """
-        outcome = store.recover_on_start()
-        if outcome["recovered"] or outcome["failed"]:
-            logger.info(
-                "任务恢复：{} 条接着做，{} 条判为反复崩溃", outcome["recovered"], outcome["failed"]
-            )
-        store.purge_finished()
-        self._stop.clear()
-        if self.inline:
-            return
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._thread = threading.Thread(target=self._loop, name="jobs-scheduler", daemon=True)
-        self._thread.start()
-        logger.info("任务调度已启动（泳道并发 {}）", self._lane_limits)
+        with self._start_lock:
+            if not self.inline and self._thread is not None and self._thread.is_alive():
+                return
+            outcome = store.recover_on_start()
+            if outcome["recovered"] or outcome["failed"] or outcome.get("cancelled"):
+                logger.info(
+                    "任务恢复：{} 条接着做，{} 条判为反复崩溃，{} 条取消了",
+                    outcome["recovered"],
+                    outcome["failed"],
+                    outcome.get("cancelled", 0),
+                )
+            store.purge_finished()
+            self._stop.clear()
+            if self.inline:
+                return
+            self._thread = threading.Thread(target=self._loop, name="jobs-scheduler", daemon=True)
+            self._thread.start()
+            logger.info("任务调度已启动（泳道并发 {}）", self._lane_limits)
 
     def request_stop(self) -> None:
         """只通知"要收了"：handler 在下一个批次边界抛 `JobInterrupted`（任务回队列，不算失败）。"""
@@ -159,6 +215,13 @@ class Runner:
         if still_running:
             logger.warning("还有 {} 条任务没收尾（已放回队列或交给下次启动回收）", still_running)
         self._requeue_stragglers()
+        # 收尾时尽量让 worker 线程结束：它们的**线程本地数据库连接**还开着，退出路径的
+        # WAL checkpoint 会因为"还有连接在用库"而 busy（主库不完整）。这里只多等一小会儿；
+        # 真卡在长操作里的线程是 daemon，进程退出时会被系统收走。
+        with self._lock:
+            stragglers = list(self._workers)
+        for thread in stragglers:
+            thread.join(timeout=0.5)
         logger.info("任务调度已停止（{}）", "队列空闲" if not still_running else f"在跑 {still_running} 条")
 
     def wake(self) -> None:
@@ -177,6 +240,22 @@ class Runner:
             return sum(self._busy.values())
 
     # ---------------- 调度 ----------------
+
+    def _renew_leases(self) -> None:
+        """给本执行器正在跑的任务续租（不依赖 handler 调 ``report()``）。
+
+        由调度线程按 :data:`HEARTBEAT_S` 节拍调用（见 :meth:`_loop`）。
+        为什么不单独养一条心跳线程：``_wait_next()`` 的睡眠上限就是 :data:`IDLE_SLEEP_S`
+        （= 5s，与心跳间隔一致），调度线程每次醒来顺手做一次续租节拍完全够用，无需为这一件事
+        再占用一条常驻线程；两种运行模式（同进程 / 独立 worker）都跟随 Runner 一起生效。
+        """
+        with self._lock:
+            leases = dict(self._leases)
+        for job_id, (worker, lease_s) in leases.items():
+            try:
+                store.renew_lease(job_id, lease_s=lease_s, worker=worker)
+            except Exception:  # 续租失败不该拖垮调度（下一拍再试）
+                logger.warning("任务 #{} 心跳续租失败", job_id)
 
     def tick(self, *, now: float | None = None) -> list[Job]:
         """认领一轮：每条泳道在有空位时把能跑的任务认领并派发。
@@ -231,7 +310,11 @@ class Runner:
     def maintenance(self, *, now: float | None = None) -> dict[str, int | bool]:
         """维护动作：回收过期租约 + 收拾"类型已不存在"的孤儿 + 保留清理 + 量界面延迟并按需让路。"""
         stamp = time.time() if now is None else now
-        outcome: dict[str, int | bool] = dict(store.reclaim_expired(now=stamp))
+        # 线程还活着的任务即使租约过期也不回收（它们可能正卡在一段没有 report 的长操作里，
+        # 回收会让另一轮再认领它 → 双跑）。心跳线程会持续给它们续租。
+        with self._lock:
+            alive = tuple(self._inflight)
+        outcome: dict[str, int | bool] = dict(store.reclaim_expired(now=stamp, alive=alive))
         outcome["orphans"] = self._fail_orphans()
         if stamp - self._last_purge >= PURGE_EVERY_S:
             outcome["purged"] = store.purge_finished(now=stamp)
@@ -365,17 +448,21 @@ class Runner:
 
     def _dispatch(self, job: Job, kind: registry.JobKind) -> None:
         """派发到一个工作线程（泳道并发靠 `_busy` 计数控制）。"""
+        worker = self._worker_name(kind.lane)
         with self._lock:
             self._busy[kind.lane] = self._busy.get(kind.lane, 0) + 1
             self._inflight.add(job.id)
+            # 心跳线程据此续租：间隔与 handler 是否 report() 无关
+            self._leases[job.id] = (worker, kind.lease_s)
 
         def work() -> None:
             try:
-                self._run_job(job, kind)
+                self._run_job(job, kind, worker=worker)
             finally:
                 with self._lock:
                     self._busy[kind.lane] = max(0, self._busy.get(kind.lane, 1) - 1)
                     self._inflight.discard(job.id)
+                    self._leases.pop(job.id, None)
                     if threading.current_thread() in self._workers:
                         self._workers.remove(threading.current_thread())
                 # 空出一个位置就**立刻叫醒调度器**去认领下一条：不然它要等到下一次轮询
@@ -387,17 +474,22 @@ class Runner:
             self._workers.append(thread)
         thread.start()
 
-    def _run_job(self, job: Job, kind: registry.JobKind) -> None:
-        """跑一个任务并**把结果落到状态里**（成功 / 取消 / 中断 / 失败四条路）。"""
+    def _run_job(self, job: Job, kind: registry.JobKind, *, worker: str = "") -> None:
+        """跑一个任务并**把结果落到状态里**（成功 / 取消 / 中断 / 失败四条路）。
+
+        ``worker``：认领者令牌；所有收尾写入都带上它——任务被回收后旧线程的写入会被忽略。
+        """
+        worker_token = worker or None
         context = JobContext(
             job_id=job.id,
             kind=job.kind,
             payload=job.payload,
             cursor=job.cursor,
+            worker=worker,
             write_progress=lambda done, total, note: store.write_progress(
-                job.id, done, total, note, lease_s=kind.lease_s
+                job.id, done, total, note, lease_s=kind.lease_s, worker=worker_token
             ),
-            write_cursor=lambda value: store.set_cursor(job.id, value),
+            write_cursor=lambda value: store.set_cursor(job.id, value, worker=worker_token),
             is_cancelled=lambda: store.is_cancelled(job.id),
             should_stop=lambda: self._stop.is_set(),
             is_paused=store.get_paused,
@@ -412,14 +504,17 @@ class Runner:
                     kind.on_cancel(context)
                 except Exception:
                     logger.exception("任务 #{} 的 on_cancel 清理失败", job.id)
-            store.settle_cancelled(job.id)
+            store.settle_cancelled(job.id, worker=worker_token)
             logger.info("任务 #{}（{}）已取消", job.id, kind.key)
         except JobInterrupted:
             context.flush()
-            store.requeue_interrupted(job.id)
+            store.requeue_interrupted(job.id, worker=worker_token)
             logger.info("任务 #{}（{}）因退出中断，已放回队列", job.id, kind.key)
         except JobError as exc:
-            self._fail(job, kind, error=str(exc), retryable=exc.retryable, error_kind=exc.kind)
+            self._fail(
+                job, kind, error=str(exc), retryable=exc.retryable,
+                error_kind=exc.kind, worker=worker_token,
+            )
         except Exception as exc:
             logger.exception("任务 #{}（{}）崩了", job.id, kind.key)
             # 没预料到的异常：**把 traceback 也存下来**（只进日志的话，用户从界面上找不到它）
@@ -430,10 +525,11 @@ class Runner:
                 retryable=True,
                 error_kind="unknown",
                 detail=traceback.format_exc(),
+                worker=worker_token,
             )
         else:
             context.flush()
-            store.finish(job.id, note=str(note))
+            store.finish(job.id, note=str(note), worker=worker_token)
             logger.info(
                 "任务 #{}（{}）完成，用时 {:.2f}s", job.id, kind.key, time.perf_counter() - started
             )
@@ -447,12 +543,21 @@ class Runner:
         retryable: bool,
         error_kind: str = "unknown",
         detail: str = "",
+        worker: str | None = None,
     ) -> None:
         """落失败状态。**不幂等的 kind 一律不重试**（重跑会造成重复副作用）。"""
         allowed = retryable and kind.idempotent
         new_status = store.fail(
-            job.id, error=error, retryable=allowed, kind=error_kind, detail=detail
+            job.id,
+            error=error,
+            retryable=allowed,
+            kind=error_kind,
+            detail=detail,
+            worker=worker,
         )
+        if new_status == "stale":
+            logger.warning("任务 #{}（{}）的失败写入被忽略（这一轮已被回收）", job.id, kind.key)
+            return
         logger.info(
             "任务 #{}（{}）失败：{}（{} · {}）",
             job.id,
@@ -499,6 +604,7 @@ class Runner:
 
     def _loop(self) -> None:
         """调度线程主循环。"""
+        last_renew = 0.0
         while not self._stop.is_set():
             try:
                 if not store.get_paused():
@@ -508,21 +614,16 @@ class Runner:
                 if time.time() - self._last_lag_check >= LAG_CHECK_EVERY_S:
                     self._last_lag_check = time.time()
                     self.check_lag()
+                # 续租与暂停/忙碌无关：在跑的任务无论队列状态如何都要保活（独立线程已被并入这里）。
+                now = time.time()
+                if now - last_renew >= HEARTBEAT_S:
+                    self._renew_leases()
+                    last_renew = now
             except Exception:
                 logger.exception("调度循环出错（继续跑）")
             self._wait_next()
 
 
-#: 进程级的执行器（`app` 层启动一次）
-_runner: Runner | None = None
-
-
 def get_runner() -> Runner | None:
-    """当前的执行器（没启动过就是 None）。"""
-    return _runner
-
-
-def set_runner(runner: Runner | None) -> None:
-    """设置进程级执行器（启动/退出时用；测试也可以装一个 inline 的）。"""
-    global _runner
-    _runner = runner
+    """当前的进程级执行器（没创建过就是 None）。"""
+    return Runner._singleton

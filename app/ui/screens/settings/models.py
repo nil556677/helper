@@ -31,9 +31,6 @@ def render() -> None:
     """画「模型配置」分区的内容（每个槽位一张卡）。"""
     with ui.column().classes("w-full gap-4"):
         ui.label("模型配置").classes("hp-page-title")
-        ui.label("两个槽位，各自保存、各自测试连接；api key 加密后只存密文，界面只显示尾号。").classes(
-            "hp-hint"
-        )
         for item in models_service.load_all():
             _render_slot(item)
 
@@ -47,7 +44,7 @@ def render() -> None:
                 "配置写进**数据库**的 llm_slots 表（每个槽位一行）；api key 只存 DPAPI 密文，明文不落盘。"
             ).classes("hp-field-help")
             ui.label(
-                "config.json 只留「打开数据库之前就必须知道」的两项：日志级别与数据目录。"
+                "引导项（日志级别 / 调试模式 / 监听地址）也已存进数据库的设置表，不再使用 config.json。"
             ).classes("hp-field-help")
             ui.label(
                 "采样参数、超时、输出上限这些高级项不在界面上暴露，统一用数据库里的默认值。"
@@ -74,7 +71,12 @@ def _field(name: str, help_text: str, value: str, marker: str) -> Any:
 
 
 def _render_slot(item: models_service.SlotView) -> None:
-    """一个模型槽位的卡片：手填三项 + api key（只显示尾号）+ 自己的「测试连接」与「保存」。"""
+    """一个模型槽位的卡片：手填三项 + api key（只显示尾号）+ 自己的「测试连接」与「保存」。
+
+    R2 例外（函数偏长）：它要**一次性**把这张卡的所有控件搭出来并接好回调
+    （保存/测试/换 key 三个回调共享卡内的输入框引用，拆成独立函数得传 5+ 个参数反而难读）。
+    ``` 内部的 `refresh_status`/`do_save`/`do_test` 各自已是单一职责的小函数。
+    """
     slot_key = str(item.key)
     state = {"tail": str(item.key_tail), "editing": False}
 
@@ -118,9 +120,9 @@ def _render_slot(item: models_service.SlotView) -> None:
                     )
 
         with ui.row().classes("hp-actions w-full"):
-            test_button = ui.button("测试连接", icon="bolt").props("unelevated dense no-caps").classes(
-                "hp-send"
-            ).mark(f"slot-{slot_key}-test")
+            test_button = ui.button("测试连接", icon="bolt").props(
+                "unelevated dense no-caps"
+            ).classes("hp-send").mark(f"slot-{slot_key}-test")
             save_button = ui.button("保存", icon="save").props("flat dense no-caps").classes(
                 "hp-row-button w-auto"
             ).mark(f"slot-{slot_key}-save")

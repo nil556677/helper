@@ -1,4 +1,4 @@
-"""SQLite 表结构与迁移（**schema v2**）。
+"""SQLite 表结构与迁移（**schema v5**）。
 
 设计取舍写在代码里，避免后来者"顺手换个方案"：
 
@@ -8,15 +8,24 @@
   **写入口只能有一个函数**，否则一定会出现"改了正文忘了改索引"。
 - **FTS5 用外部内容表 + 触发器**：因为 ``tokens`` 已经是切好的文本，触发器只需搬运，
   **不需要分词能力**——这是"预分词列"能安全用触发器的前提。正文只存一份。
+  ``codes_fts``（v5）是例外：它用 ``trigram`` 分词器，**必须**由 SQLite 自己切，才能做子串匹配。
 - **``llm_slots.api_key_cipher`` 只存密文**（Windows DPAPI），明文 key 绝不入库；
   ``key_tail`` 只给界面显示尾号，不参与解密。
 - **失败只记错误码**：``documents.error_code`` 是机器判据（中文文案会改，子串匹配会静默失效），
   ``detail`` 是给人看的说明（写库前要过路径脱敏）。
-- **``jobs``（v2 新增）**：任务队列自己就是一张表（见技术方案 §13）。要点——``runs``（认领次数）
+- **``jobs``（v2）**：任务队列自己就是一张表（见技术方案 §13）。要点——``runs``（认领次数）
   与 ``fails``（业务失败次数）**分开**（崩溃不该耗掉重试机会）；``cursor`` 支持长任务断点续跑；
   ``dedupe_key`` 用**部分唯一索引**保证"活跃期不重复排队、历史仍留得住"；认领索引必须带
   ``priority DESC``，否则 SQLite 会为整个 pending 队列建临时 B 树（实测：队列 10000 条时
   认领从 1.02ms 变成 2.14ms）。迁移脚本见 :data:`MIGRATIONS`。
+- **``chunks`` 父子两层同表（v4）**：parent 是送给模型的证据，child 是检索的单位；父子回填靠
+  ``parent_id``。``version`` + ``status`` 让"同一份资料的新版本"能先写后台、再原子切换
+  （检索永远只看 ``status='active'``）。
+- **向量不在这个库里做事实来源（v5）**：Qdrant 存向量，``matrices`` 只是**可重建的打分缓存**
+  （整块 float32，读一次全载进内存算分）。主键带 ``model``/``dims``，换模型后新旧两份能并存，
+  不会互相覆盖；``vector_keys`` 是 ``key → 矩阵行号`` 的对照表（幂等 upsert 靠它找位置）。
+- **索引指纹复用 v1 就有的 ``index_meta``**（``key/value/updated_at`` 正好就是分项指纹的形状），
+  v5 不再建第二张同义表。
 """
 
 from __future__ import annotations
@@ -32,7 +41,7 @@ from app.core import paths
 from app.core.db.connection import get_connection
 
 #: 当前 schema 版本。改表结构就 +1，并在 MIGRATIONS 里补一条。
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 18
 
 #: 建表语句（幂等：全用 IF NOT EXISTS，重复执行是安全的）。
 SCHEMA_SQL = """
@@ -132,7 +141,7 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at REAL NOT NULL
 );
 
--- 索引指纹：**分项**存（embed_model / chunk_params / userdict_hash…），
+-- 索引指纹：**分项**存（embed_model / chunk_params / terms_hash…），
 -- 才能区分"只重算词法列"与"必须全量重建"
 CREATE TABLE IF NOT EXISTS index_meta (
     key        TEXT PRIMARY KEY,
@@ -200,11 +209,302 @@ CREATE TABLE IF NOT EXISTS job_events (
 CREATE INDEX IF NOT EXISTS idx_job_events_job ON job_events(job_id, id);
 """
 
+#: v4：RAG 第一半——文档版本链、解析信息、父子两层块（技术方案 §6 的 v5 块，拆两半好回滚）。
+#: **为什么拆**：documents/chunks 的 ALTER 一旦跑下去就没法简单回退，而向量/精确查找那几张新表
+#: 是纯新增；拆开之后"迁移失败时到底改了哪一半"是看得出来的。
+RAG_DOCUMENTS_SQL = """
+-- 一份文件的多个版本共享 doc_key；superseded_at 非空 = 已被新版本取代（延迟 6 小时才物理删）
+ALTER TABLE documents ADD COLUMN doc_key TEXT;
+ALTER TABLE documents ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE documents ADD COLUMN superseded_at REAL;
+ALTER TABLE documents ADD COLUMN index_fingerprint TEXT;
+-- 解析摘要：知识库列表要能说清"这份到底是什么内容"（老库回填 NULL，界面按"未知"显示）
+ALTER TABLE documents ADD COLUMN pages INTEGER;
+ALTER TABLE documents ADD COLUMN ocr_pages TEXT;
+ALTER TABLE documents ADD COLUMN chars INTEGER;
+
+-- 父子两层同表：parent 是给模型的证据，child 是检索的最小单位
+ALTER TABLE chunks ADD COLUMN parent_id INTEGER REFERENCES chunks(id) ON DELETE CASCADE;
+ALTER TABLE chunks ADD COLUMN is_parent INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE chunks ADD COLUMN content_type TEXT NOT NULL DEFAULT 'text';
+ALTER TABLE chunks ADD COLUMN section_path TEXT;
+ALTER TABLE chunks ADD COLUMN level INTEGER;
+ALTER TABLE chunks ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE chunks ADD COLUMN text_hash TEXT;
+ALTER TABLE chunks ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+
+-- 版本化 upsert 的锚点。**故意不建 UNIQUE**：老库的 chunks 只有 (doc_id, seq)，
+-- version 一律 DEFAULT 1，与既有的 idx_chunks_doc_seq 是同一组值；这里再建一个 UNIQUE
+-- 只是把同一条约束写两遍，却会在"老库里同一 doc 有重复 seq"时让整个迁移起不来。
+CREATE INDEX IF NOT EXISTS idx_chunks_doc_ver_seq ON chunks(doc_id, version, seq);
+-- 检索只找 active：先按状态掩码，再算分（技术方案 §9.1 第 8 条）
+CREATE INDEX IF NOT EXISTS idx_chunks_status ON chunks(status);
+-- 按父块回填：命中 child 后要取它的 parent
+CREATE INDEX IF NOT EXISTS idx_chunks_parent ON chunks(parent_id);
+"""
+
+#: v5：RAG 第二半——向量打分缓存、精确查找、精排缓存（全部是新表，失败可直接重跑 v5）。
+RAG_VECTOR_SQL = """
+-- 精确查找：从正文里抽出来的编号/日期/金额/条款号（零 LLM，正则抽）
+CREATE TABLE IF NOT EXISTS codes (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    chunk_id INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+    kind     TEXT    NOT NULL,
+    value    TEXT    NOT NULL,
+    at       REAL    NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_codes_value ON codes(value);
+CREATE INDEX IF NOT EXISTS idx_codes_chunk ON codes(chunk_id);
+
+-- 子串查找（"只记得编号一半"）：trigram 分词器要 SQLite ≥3.34，启动自检会探它。
+-- 用外部内容表跟着 codes 走，省一份存储；触发器由下面的 codes_* 三条维护。
+CREATE VIRTUAL TABLE IF NOT EXISTS codes_fts USING fts5(
+    value,
+    content='codes',
+    content_rowid='id',
+    tokenize='trigram'
+);
+CREATE TRIGGER IF NOT EXISTS codes_ai AFTER INSERT ON codes BEGIN
+    INSERT INTO codes_fts(rowid, value) VALUES (new.id, new.value);
+END;
+CREATE TRIGGER IF NOT EXISTS codes_ad AFTER DELETE ON codes BEGIN
+    INSERT INTO codes_fts(codes_fts, rowid, value) VALUES ('delete', old.id, old.value);
+END;
+CREATE TRIGGER IF NOT EXISTS codes_au AFTER UPDATE ON codes BEGIN
+    INSERT INTO codes_fts(codes_fts, rowid, value) VALUES ('delete', old.id, old.value);
+    INSERT INTO codes_fts(rowid, value) VALUES (new.id, new.value);
+END;
+
+-- 向量：Qdrant 是事实来源，这里是**可重建的打分缓存**（整块 float32）。
+-- 主键含 model/dims：同一个集合将来可能并存多种嵌入（换模型后重建期间两种都要能打分），
+-- 只按 collection 做键会把新旧两份互相覆盖掉。
+CREATE TABLE IF NOT EXISTS matrices (
+    collection TEXT    NOT NULL,
+    model      TEXT    NOT NULL,
+    dims       INTEGER NOT NULL,
+    count      INTEGER NOT NULL DEFAULT 0,
+    meta_json  TEXT,
+    data       BLOB,
+    updated_at REAL    NOT NULL,
+    PRIMARY KEY (collection, model, dims)
+);
+
+-- key → 矩阵行号（幂等 upsert 要按它找位置；row 是**那个 model 的矩阵里**的行号）
+CREATE TABLE IF NOT EXISTS vector_keys (
+    collection TEXT    NOT NULL,
+    model      TEXT    NOT NULL,
+    key        TEXT    NOT NULL,
+    row        INTEGER NOT NULL,
+    PRIMARY KEY (collection, model, key)
+);
+
+-- 精排缓存：同一 (query, chunk) 不重复算（精排一次 2 s，缓存命中 <50 ms）
+CREATE TABLE IF NOT EXISTS rerank_cache (
+    query_hash TEXT NOT NULL,
+    chunk_id   INTEGER NOT NULL,
+    score      REAL NOT NULL,
+    at         REAL NOT NULL,
+    PRIMARY KEY (query_hash, chunk_id)
+);
+CREATE INDEX IF NOT EXISTS idx_rerank_cache_at ON rerank_cache(at);
+"""
+
+#: v6：给键表补 payload（JSON），好让**矩阵打分那条路也能过滤**。
+#: 为什么必须补：矩阵打分要比 Qdrant 查询快 10 倍以上，所以检索默认走矩阵；
+#: 而"只找 status=active"这类过滤必须**在算分前生效**（技术方案 §9.1 第 8 条，
+#: 实现上先算分再掩码）。掩码得知道每一行是什么状态——没有这一列就只能退化成
+#: "先全算分、不过滤"，那会把已删/旧版本的块也排在前面。
+#: 只存**过滤要用的少数几个字段**（不是整份 payload）：10 万行 × 小 JSON 才是可接受的开销。
+VECTOR_PAYLOAD_SQL = """
+ALTER TABLE vector_keys ADD COLUMN payload TEXT;
+CREATE INDEX IF NOT EXISTS idx_vector_keys_collection ON vector_keys(collection, model);
+"""
+
+#: v7：给 chunks 补 ``loc_json``——**引用定位信息**（文件哪一页、哪一行、哪张表的行区间）。
+#: 为什么单独一列 JSON 而不是分列：loc 只用于展示/跳转（"点引用 → 看原文位置"），
+#: **不参与检索过滤**（检索过滤用 status/content_type/page 那些既有分列），
+#: 所以整包存一个 JSON 列最省事，也避免给一张 10 万行的表再堆 7 个列。
+#: 形状见 `app/core/parse/model.py` 的 ``Block.loc_json()``。
+CHUNK_LOC_SQL = """
+ALTER TABLE chunks ADD COLUMN loc_json TEXT;
+"""
+
+#: v8：给 ``vector_keys`` 加一个**能覆盖排序的索引**（``collection, model, row``）。
+#: 为什么必须：读回键表/payload 要 ``ORDER BY row``（行号即位置，顺序不能乱）。
+#: 没有这个索引时，10 万行排序会让 SQLite 去**临时目录**建临时 B 树——而临时目录默认是
+#: 系统 TEMP；TEMP 不可写时报的是 ``unable to open database file``（SQLITE_CANTOPEN），
+#: **看起来像库坏了，实际只是排序没地方落临时文件**（本机受限环境下必现，实测）。
+#: 有了这个索引，这个查询变成索引顺序扫描，既不再依赖临时目录、也快。
+VECTOR_KEYS_ORDER_SQL = """
+CREATE INDEX IF NOT EXISTS idx_vector_keys_order ON vector_keys(collection, model, row);
+"""
+
+#: v9：同一份资料的版本号唯一（**部分索引**：``doc_key IS NULL`` 的老数据不参与，
+#: SQLite 里 NULL 彼此不相等，所以这些行不受影响）。
+#: 这是 P1.7 版本链的最后一道保险：并发同名导入若真算出同一个版本号，宁可**当场失败**，
+#: 也不要悄悄出现"两条 v2"——那会让切换、回填、统计全部失去意义。
+DOC_KEY_VERSION_UNIQUE_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_key_version
+    ON documents(doc_key, version) WHERE doc_key IS NOT NULL;
+"""
+
+#: v11：移除进程内矩阵打分缓存。向量只存在 Qdrant（见 docs/向量层重构设计.md）。
+#: ``matrices`` / ``vector_keys`` 都是**可重建的缓存**，删掉不丢数据；之后统计/对账改走 Qdrant。
+MATRIX_DROP_SQL = """
+DROP TABLE IF EXISTS vector_keys;
+DROP TABLE IF EXISTS matrices;
+"""
+
+#: v12：片段/精确字段不再入 SQLite（config 3，见 docs/向量层重构设计.md）。
+#: child/parent 正文与结构只存 Qdrant；词法用 sparse；精确字段进 attrs_flat。
+#: documents 补 doc_title / index_text_hash；jobs 补 doc_id；rerank_cache 补 chunk_key。
+VECTOR_ONLY_SQL = """
+-- 先删触发器：它们引用被删的 FTS 表，先删表会让 DROP TABLE chunks 报 no such table。
+DROP TRIGGER IF EXISTS chunks_ai;
+DROP TRIGGER IF EXISTS chunks_ad;
+DROP TRIGGER IF EXISTS chunks_au;
+DROP TRIGGER IF EXISTS codes_ai;
+DROP TRIGGER IF EXISTS codes_ad;
+DROP TRIGGER IF EXISTS codes_au;
+
+DROP TABLE IF EXISTS codes_fts;
+DROP TABLE IF EXISTS codes;
+DROP TABLE IF EXISTS chunks_fts;
+DROP TABLE IF EXISTS chunks;
+
+ALTER TABLE documents ADD COLUMN doc_title TEXT;
+ALTER TABLE documents ADD COLUMN index_text_hash TEXT;
+
+ALTER TABLE jobs ADD COLUMN doc_id INTEGER;
+CREATE INDEX IF NOT EXISTS idx_jobs_doc ON jobs(doc_id);
+
+ALTER TABLE rerank_cache ADD COLUMN chunk_key TEXT;
+CREATE INDEX IF NOT EXISTS idx_rerank_key ON rerank_cache(chunk_key);
+"""
+
+#: v10：给 ``codes``（v5 已建）**补上归属与原文**，并加唯一约束（P1.10 要用）。
+#:
+#: 为什么是"补列"不是"重建表"：v5 就把表、值索引、trigram 子串索引与三条触发器都建好了。
+#: 重建会让老库里的数据凭空消失——而这次只需要 ``doc_id``/``version``（按资料查、版本链对齐）、
+#: ``raw``（引用要展示原文）、``page``（引用跳转）。
+#: 唯一索引用 ``NULLS distinct`` 的默认语义：老行 ``doc_id IS NULL`` 不会互相冲突。
+CODES_SQL = """
+ALTER TABLE codes ADD COLUMN doc_id INTEGER;
+ALTER TABLE codes ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE codes ADD COLUMN raw TEXT;
+ALTER TABLE codes ADD COLUMN page INTEGER;
+CREATE INDEX IF NOT EXISTS idx_codes_doc ON codes(doc_id, version);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_codes_unique
+    ON codes(doc_id, version, chunk_id, kind, value);
+"""
+
+
+
+#: v13：认领索引带上 ``kind``。
+#: 原来的 ``idx_jobs_claim(status, priority, next_run_at)`` 不含 kind，而 `claim_next` 要按
+#: 「本泳道的 kind」过滤——队列大时只能先扫一批 pending 再过滤。补上 kind 让过滤与排序
+#: 都能走索引；再加一条 ``(status, kind)`` 给 `pending_of_unknown_kinds`（每 10 秒一次）。
+JOBS_CLAIM_KIND_SQL = """
+CREATE INDEX IF NOT EXISTS idx_jobs_claim_kind
+    ON jobs(status, kind, priority DESC, next_run_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_status_kind ON jobs(status, kind);
+"""
+
+
+#: **迁移完的收尾清理**（每次启动都在 :func:`init_schema` 末尾跑，幂等）。
+#:
+#: 为什么需要：``SCHEMA_SQL`` 是 v1 的形状，每次启动都会 ``CREATE TABLE IF NOT EXISTS``；
+#: 而 v11/v12 已经把这些表 DROP 了——于是"删掉又建回一个空表"，库里长期躺着幽灵
+#: chunks/codes（还是缺列的旧结构），迁移意图被悄悄破坏。这里在"已到 v12+"的库上再删一次，
+#: 保证最终状态与迁移声明一致。
+DEPRECATED_TABLES_SQL = """
+DROP TRIGGER IF EXISTS chunks_ai;
+DROP TRIGGER IF EXISTS chunks_ad;
+DROP TRIGGER IF EXISTS chunks_au;
+DROP TRIGGER IF EXISTS codes_ai;
+DROP TRIGGER IF EXISTS codes_ad;
+DROP TRIGGER IF EXISTS codes_au;
+DROP TABLE IF EXISTS codes_fts;
+DROP TABLE IF EXISTS codes;
+DROP TABLE IF EXISTS chunks_fts;
+DROP TABLE IF EXISTS chunks;
+DROP TABLE IF EXISTS matrices;
+DROP TABLE IF EXISTS vector_keys;
+"""
+
+
+#: v14：pipeline 版本血缘 + 写入校验时间。
+#: 为什么补列：换了解析器/切分策略/嵌入模型后，要能识别"这份资料是哪套 pipeline 产的"，
+#: 从而决定是否需要重跑；``verified_at`` 记录"写入后校验通过"的时间（没校验过为 NULL）。
+PIPELINE_VERSIONS_SQL = """
+ALTER TABLE documents ADD COLUMN parser_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE documents ADD COLUMN chunk_policy INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE documents ADD COLUMN embedding_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE documents ADD COLUMN verified_at REAL;
+"""
+
+
+#: v15：批次回放（``run_id``）。
+#: 一次批量导入/重建的所有任务共享一个 ``run_id``，失败后可整批按原参数重排。
+RUN_ID_SQL = """
+ALTER TABLE jobs ADD COLUMN run_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_jobs_run ON jobs(run_id);
+"""
+
+
+#: v16：标题树落库（详情页"文档结构"用）。
+#: 以前标题树只在流式过程里存在，导入结束就丢了；容器标题（只有下级、没有正文）
+#: 因此既看不到也查不到。JSON 数组：[{"level","title","path","page"}, ...]。
+STRUCTURE_JSON_SQL = """
+ALTER TABLE documents ADD COLUMN structure_json TEXT;
+"""
+
+
+#: v17：撤销"单独存标题结构"。
+#: 结构树（``structure_json``）不参与检索、只用于展示，而展示用每个片段的
+#: ``heading``（完整标题链）就够；不再单独存一份文档级结构。
+DROP_STRUCTURE_JSON_SQL = """
+ALTER TABLE documents DROP COLUMN structure_json;
+"""
+
+
+#: v18：全局领域词（自定义关键词）**存库**，替代 `data/userdict.txt` 的手工维护。
+#:
+#: 为什么搬进库：单一事实来源、随库一起备份、可在设置页增删改，不必再依赖相对路径文件。
+#: ``term`` 直接做主键（一行一词，天然去重）；``freq`` 为 NULL 时用 jieba 默认词频；
+#: ``enabled=0`` 的词**保留但不参与切词**（停用比删掉更好回溯）。
+TOKEN_DICT_SQL = """
+CREATE TABLE IF NOT EXISTS token_dict (
+    term       TEXT PRIMARY KEY,
+    freq       INTEGER,
+    enabled    INTEGER NOT NULL DEFAULT 1,
+    updated_at REAL    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_token_dict_enabled ON token_dict(enabled);
+"""
+
+
 #: 迁移：``{目标版本: SQL}``。建库时从当前版本逐条往上跑。
 #: v1 是初始版本（SCHEMA_SQL 就是它的形状），所以没有 v1 的迁移。
+#: 注：`index_meta` 在 v1 就有了（key/value/updated_at），索引指纹直接复用它，不再建表。
 MIGRATIONS: dict[int, str] = {
     2: JOBS_SQL,
     3: ERROR_SQL,
+    4: RAG_DOCUMENTS_SQL,
+    5: RAG_VECTOR_SQL,
+    6: VECTOR_PAYLOAD_SQL,
+    7: CHUNK_LOC_SQL,
+    8: VECTOR_KEYS_ORDER_SQL,
+    9: DOC_KEY_VERSION_UNIQUE_SQL,
+    10: CODES_SQL,
+    11: MATRIX_DROP_SQL,
+    12: VECTOR_ONLY_SQL,
+    13: JOBS_CLAIM_KIND_SQL,
+    14: PIPELINE_VERSIONS_SQL,
+    15: RUN_ID_SQL,
+    16: STRUCTURE_JSON_SQL,
+    17: DROP_STRUCTURE_JSON_SQL,
+    18: TOKEN_DICT_SQL,
 }
 
 
@@ -299,6 +599,20 @@ def init_schema(conn: sqlite3.Connection) -> int:
                 "补上 MIGRATIONS 再启动"
             )
         _apply_migration(conn, version, sql)
+
+    # v12 起这些表已废弃；但 SCHEMA_SQL 每次启动都会把它们 IF NOT EXISTS 建回来。
+    # 迁移结束后统一清一次，避免库里长期躺着幽灵表（见 DEPRECATED_TABLES_SQL 的说明）。
+    # 用与 _apply_migration 相同的写法（BEGIN/COMMIT 写进脚本）：executescript 会自己提交，
+    # 外面的 execute("BEGIN") 会被它顶掉。
+    if schema_version(conn) >= 12:
+        try:
+            conn.executescript(
+                "BEGIN IMMEDIATE;\n" + DEPRECATED_TABLES_SQL + "\nCOMMIT;"
+            )
+        except sqlite3.Error as exc:
+            with contextlib.suppress(sqlite3.Error):
+                conn.execute("ROLLBACK")
+            raise RuntimeError(f"清理废弃表失败（已回滚）：{exc}") from exc
 
     return schema_version(conn)
 

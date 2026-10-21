@@ -8,7 +8,7 @@
 一个指纹会把"改词库"也报成"全量重建 8 小时"，那等于逼用户不做这件事
 （技术方案 §9.13 的运维表就是按这个区分写的）。
 
-**指纹里必须含形状参数**（P0.2 的实测结论）：`embed.pad_to` / `embed.batch_size`
+**指纹里必须含形状参数**（P0.2 的实测结论）：`PAD_TO`（模型固定输入宽度）/ `embed.batch_size`
 看着像"性能参数"，其实决定向量值——宽度差 1 个 token 向量就差 1.4%。
 漏了它们的后果不是"慢一点"，而是"新块与老块的向量不在同一个空间、分数失去意义"。
 """
@@ -21,7 +21,6 @@ from collections.abc import Mapping
 
 from app.core.config.params import (
     PER_ITEM_PREFIX,
-    Aspect,
 )
 
 #: 指纹的算法版本。**改了拼法（比如加一项）就 +1**：这样老库的指纹一定对不上、
@@ -70,10 +69,3 @@ def diff(current_items: Mapping[str, str], stored_items: Mapping[str, str]) -> l
 def item_key(name: str) -> str:
     """``index_meta`` 里逐项留痕的键名（前缀 + 参数键）。"""
     return f"{PER_ITEM_PREFIX}{name}"
-
-
-def aspect_label(aspect: Aspect) -> str:
-    """给用户的一句话：这个指纹变了意味着要做什么。"""
-    if aspect is Aspect.VECTOR:
-        return "需要全量重建（重算向量，小时级）"
-    return "只需重算词法（秒级）"

@@ -208,8 +208,3 @@ def update_manifest_for(name: str) -> ModelFile:
     MANIFEST[name] = record
     logger.info("模型清单已更新：{} → {} 字节 {}", name, size, digest)
     return record
-
-
-def is_identifier(name: str) -> bool:
-    """名字是不是合法清单键（防路径穿越：只允许 字母/数字/点/下划线）。"""
-    return bool(re.fullmatch(r"[A-Za-z0-9._-]+", name or ""))

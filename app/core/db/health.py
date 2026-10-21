@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 
 from loguru import logger
@@ -25,13 +26,16 @@ KEY_CLEAN_EXIT = "health_last_shutdown_clean"
 
 
 def mark_clean_exit() -> None:
-    """把"本次是干净退出"写进 settings（``on_quit``/``atexit`` 里调）。"""
+    """把"本次是干净退出"写进 settings（``on_quit``/``atexit`` 里调）。
+
+    ``value_json`` 按整表约定存 JSON（见 jobs 的暂停状态的写法）。
+    """
     with transaction() as conn:
         conn.execute(
             "INSERT INTO settings(key, value_json, updated_at) VALUES (?, ?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json,"
             " updated_at = excluded.updated_at",
-            (KEY_CLEAN_EXIT, str(time.time()), time.time()),
+            (KEY_CLEAN_EXIT, json.dumps({"shutdown_clean": True, "at": time.time()}), time.time()),
         )
 
 
@@ -43,9 +47,11 @@ def _read_clean_mark() -> float | None:
     if row is None:
         return None
     try:
-        return float(row["value_json"])
+        payload = json.loads(row["value_json"])
     except (TypeError, ValueError):
         return None
+    at = payload.get("at") if isinstance(payload, dict) else None
+    return float(at) if at is not None else None
 
 
 def _clear_clean_mark() -> None:

@@ -35,15 +35,31 @@ def direct_names() -> set[str]:
     names: set[str] = set()
     if not REQ.exists():
         return names
-    for raw in REQ.read_text(encoding="utf-8", errors="replace").splitlines():
+    for raw in REQ.read_text(encoding="utf-8-sig", errors="replace").splitlines():
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
-        # 形如 `nicegui==3.18.0` / `pydantic>=2.9,<3`：取第一个名字令牌
-        name = line.split("=")[0].strip()
-        if name and not name.startswith("["):
-            names.add(name)
+        names.add(_req_name(line))
     return names
+
+
+def _req_name(line: str) -> str:
+    """从一行 requirements 里取发行版名（健壮：兼容 ``==``/``>=`` 区间/``[extras]``）。
+
+    - ``nicegui==3.18.0``          → ``nicegui``
+    - ``pydantic>=2.9,<3``         → ``pydantic``（不能 ``split("=")[0]``，那会带出 ``>``）
+    - ``foo[bar]>=1.0``            → ``foo``
+    名字是：第一个 token 里，遇到版本比较符/``[`` 之前的全部字符。
+    """
+    token = line.split()[0] if line.split() else line
+    name = token.split("[")[0]
+    cut = len(name)
+    for i, ch in enumerate(name):
+        if ch in "=<>!~;, ":
+            cut = i
+            break
+    name = name[:cut].strip()
+    return name
 
 
 def installed_freeze() -> dict[str, str]:
@@ -68,7 +84,8 @@ def resolve_top_level() -> set[str]:
 
 def freeze() -> None:
     """写 requirements.lock.txt（全量 + 分组注释）。"""
-    direct = direct_names().copy()
+    # 归一小写再比对：installed_freeze 的 key 是全小写，直接依赖名可能大小写混用
+    direct = {name.lower() for name in direct_names()}
     env = installed_freeze()
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     lines = [

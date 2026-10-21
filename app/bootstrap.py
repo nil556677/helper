@@ -84,22 +84,81 @@ def ensure_ready() -> None:
     # 2. 目录（日志与数据库都落在里面）
     paths.ensure_dirs()
 
-    # 3. 先用默认级别把日志建起来，再按配置调级别——这样"生成配置/隔离坏配置"这类事件留得下来
+    # 3. 先用默认级别把日志建起来（后面建库/迁移的事件要留得下来）
     if not is_initialized():
         init_logging()
-    config_path = access.ensure_default()
+
+    # 3a. **先建库**：引导配置现在存在 settings 表里（config.json 只做一次性迁移）。
+    version = schema.init_db()
+    access.ensure_default()
+    # 首次运行且带了 Qdrant 二进制：默认走服务端模式（UI 不再打开本地嵌入式）。
+    # 没有二进制就保持本地嵌入式；用户界面「本机服务」里可再切。
+    # 端口要先挑一个**空闲**的：6333 被别的程序占着时不能把自己的 URL 指过去，
+    # 否则 UI 会连到别人的 Qdrant 上（数据串库）。
+    try:
+        import socket
+
+        from app.core.config import store as params_store
+        from app.core.proc.lifecycle import qdrant_binary
+
+        def _free_port(start: int = 6333) -> int | None:
+            def _bindable(candidate: int) -> bool:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    try:
+                        sock.bind(("127.0.0.1", candidate))
+                    except OSError:
+                        return False
+                return True
+
+            for candidate in range(start, start + 20):
+                # HTTP=port、gRPC=port+1，两个都要空闲
+                if candidate <= 65534 and _bindable(candidate) and _bindable(candidate + 1):
+                    return candidate
+            return None
+
+        if not str(params_store.load()["vector.url"] or "").strip() and qdrant_binary().is_file():
+            port = _free_port()
+            if port is not None:
+                params_store.save_values({"vector.url": f"http://127.0.0.1:{port}"})
+                logger.info(
+                    "检测到 bin/qdrant/qdrant.exe：默认启用 Qdrant 服务端模式（127.0.0.1:{}）",
+                    port,
+                )
+            else:
+                logger.warning("6333–6352 都被占用，暂不启用 Qdrant 服务端（保持本地嵌入式）")
+    except Exception as exc:
+        logger.warning("初始化 Qdrant 服务端默认值失败（保持本地嵌入式）：{}", exc)
     config = access.load()
-    init_logging(config.log_level)
+    init_logging(config.log_level, debug=config.log_debug)
 
     # 3b. 过期日志清理（只留最近 7 天）与"上次是不是被沙箱挡了"的嗅探。
-    #     清理放在建表之前：它只动 logs/，失败也不该挡住建库。
+    #     清理只动 logs/，失败也不该挡住建库。
     purge_old_logs()
     hint = sniff_restricted_hint()
     if hint:
         logger.warning(hint)
 
-    # 4. 建表 / 迁移（幂等）
-    version = schema.init_db()
+    # 4a. 向量集合：旧名迁移（chunks/parents → rag_chunks/rag_parents）+ 保证存在。
+    #     失败不挡启动：向量层不可用时，导入/检索会另行明确报错，别让整个应用打不开。
+    #     **服务端模式要延后**：Qdrant sidecar 由入口在主程序生命周期里启动；这里先连
+    #     只会拿到"连接被拒绝"，集合永远建不出来。入口在 services.start() 之后再调。
+    try:
+        from app.core.config import store as params_store
+
+        server_mode = bool(str(params_store.load()["vector.url"] or "").strip())
+    except Exception:
+        server_mode = False
+    if server_mode:
+        logger.info("服务端模式：向量集合自检延后到 Qdrant 启动后（由主程序入口执行）")
+    else:
+        try:
+            from app.core.vector import api as vector_api
+
+            vector_api.ensure_collections()
+        except Exception as exc:
+            # 向量库启动时被占/没起来是预期内的情况：单行 warning（不刷 traceback），
+            # 界面各页已各自降级，导入/检索会另行明确报错。
+            logger.warning("向量集合自检失败（不影响启动，检索/导入会另行报错）：{}", exc)
 
     # 4b. T3.2 数据库体检：只在"上次没干净退出"时做（干净退出会写标记，启动读一次就清掉）。
     #     发现问题不在这里处理（只读；由调用方决定从备份恢复 / 重命名坏库）。
@@ -121,7 +180,7 @@ def ensure_ready() -> None:
     space_warning = check_disk_space(paths.data_dir())
     if space_warning:
         logger.warning(space_warning)
-    logger.info("引导配置：{}（日志级别 {}）", config_path, config.log_level)
+    logger.info("引导配置：数据库 settings 表（日志级别 {}；config.json 只做一次性迁移）", config.log_level)
     logger.info("数据库：{}（schema v{}）", paths.db_file(), version)
 
     _ready = True

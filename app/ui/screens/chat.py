@@ -14,8 +14,8 @@
 **多会话**：内容属于"当前会话"（`app/state/conversations.py`）。切会话时这里整块重画；
 发消息时**只增量画这一轮**——过程行有动画，整块重画会把动画抹掉。
 
-**数据源现在是模拟的**（用户要求：先只做界面）——见 `app/screens/_chat_mock.py`。
-接真实数据时只要把 `pick_turn` 换成"检索结果转成 `Turn`"，这个文件不用改。
+**数据源**：dense 语义检索 → 父块证据回填（见 `app/screens/_chat_retrieval.py`）。
+`pick_turn` 把检索结果转成 `Turn`，这个文件只负责渲染。
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from typing import Any
 
 from nicegui import ui
 
-from app.ui.screens import _chat_mock
+from app.ui.screens import _chat_retrieval
 from app.ui.state import conversations
 from app.ui.state.chat_model import Entry, Fragment, Turn
 from app.ui.state.layout import layout
@@ -53,7 +53,7 @@ def build() -> None:
             _render_history_turn(stream, entry)
 
     conversations.subscribe_select(render_current)
-    _chat_mock.ensure_seeded()
+    _chat_retrieval.ensure_seeded()
     render_current()
 
 
@@ -82,7 +82,9 @@ def _build_composer(stream: Any, scroll: Any) -> None:
         conversation = conversations.current()
         if not conversation.entries:
             stream.clear()  # 第一条消息进来时去掉"这个对话还是空的"或示例标注
-        turn = _chat_mock.pick_turn(text)
+        # 检索 = 查询嵌入（ONNX，可能排在入库批次后面）+ Qdrant 查询；**必须离开事件循环**，
+        # 否则长任务运行时点发送会把整个界面卡住（实测：取消按钮/导航都没反应）。
+        turn = await asyncio.to_thread(_chat_retrieval.pick_turn, text)
         # 先增量画这一轮（有"运行中"动画）……
         await _append_live_turn(stream, turn, question=text)
         # ……再落进会话数据；`append` 只通知左栏列表重画，不动对话流

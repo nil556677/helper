@@ -31,7 +31,7 @@ from app.ui.components.format import human_duration, human_time
 from app.ui.components.pager import PAGE_SIZES, PageState, render_pager
 
 #: 刷新间隔（秒）。进度写库有 0.2 秒节流，所以 0.5 秒够跟得上。
-REFRESH_S = 0.5
+REFRESH_S = 1.0
 
 
 def _progress_bar(value: float, *, uncertain: bool) -> None:
@@ -50,7 +50,10 @@ def _metrics(job: tasks_service.TaskView) -> str:
     if job.status == "running":
         if job.cancelling:
             return "正在取消…"
-        return f"{job.done}/{job.total}" if job.total else "进行中…"
+        if job.total:
+            pct = max(0, min(100, round(job.done * 100 / job.total)))
+            return f"{job.done}/{job.total} · {pct}%"
+        return "进行中…"
     if job.status == "pending":
         return f"等待中（第 {job.queue_position} 位）" if job.queue_position else "等待中"
     if job.status == "failed":
@@ -110,27 +113,26 @@ def _row(job: tasks_service.TaskView, *, picked: set[int], on_pick: Any) -> None
             elif failed or job.status == "cancelled":
                 ui.button(icon="replay", on_click=lambda job_id=job.id: _retry(job_id)).props(
                     "flat dense round size=sm"
-                ).mark(f"task-retry-{job.id}").tooltip("重试")
+                ).classes("hp-icon-warn hp-btn-icon").mark(f"task-retry-{job.id}").tooltip("重试")
             # 详情：**每个任务都有**（参数、结果、耗时、每一次失败/中断的完整经过都在里面，
             # 不用去翻日志文件）。以前只在失败时才给，想看"这条到底带了什么参数"就没入口。
             ui.button(icon="info", on_click=lambda job_id=job.id: _show_details(job_id)).props(
                 "flat dense round size=sm"
-            ).mark(f"task-details-{job.id}").tooltip("详情：参数、结果、耗时与每一次尝试")
+            ).classes("hp-icon-view hp-btn-icon").mark(f"task-details-{job.id}").tooltip(
+                "详情：参数、结果、耗时与每一次尝试"
+            )
 
 
 def _cancel(job_id: int) -> None:
-    """取消（可恢复 → 不弹确认框，但给 3 秒可撤销）。"""
+    """取消（可恢复 → 不弹确认框；恢复走任务行的「重试」）。"""
     if not tasks_service.cancel(job_id):
         notify("这个任务已经结束了", kind="info")
         return
 
-    async def undo() -> None:
-        tasks_service.retry(job_id)
-        notify("已撤销取消", kind="positive")
-
-    notify(
-        "已请求取消", kind="warning", actions=[{"label": "撤销", "handler": undo}], timeout=3
-    )
+    # **不能给 Quasar notify 传 Python 函数**：actions 会被原样 JSON 序列化，
+    # `handler: fn` 会抛 "Type is not JSON serializable: function"（实测，整条 toast
+    # 发不出去）。取消本身已可恢复（任务行「重试」），这里只给一句提示。
+    notify("已请求取消；可在任务行点「重试」恢复", kind="warning", timeout=3000)
 
 
 def _retry(job_id: int) -> None:
@@ -213,6 +215,10 @@ def _show_details(job_id: int) -> None:
 def render() -> None:
     """画「任务」分区。
 
+    R2 例外（函数偏长）：任务页是"轮询 + 大量控件"的组合，且交互（暂停/批量/筛选/分页/
+    组切换）都共享这块卡上的元素引用，拆成独立函数会传 6+ 个引用。内部的
+    `refresh`/行画法/空态本就是独立小函数（各自 <50 行），`render` 只做"搭骨架 + 编排"。
+
     版式（与知识库页**同一套骨架**：卡头 → 工具栏 → 主体 → 页脚，见 §13.8）：
 
     - **页面级动作**（暂停队列 / 重试全部失败 / 清理已完成）放页面右上——它们动的是整个队列，
@@ -231,9 +237,9 @@ def render() -> None:
             ui.label("任务").classes("hp-page-title")
             status = ui.label("").classes("hp-status")
             ui.space()
-            pause_button = ui.button("暂停队列", icon="pause").props("flat dense no-caps").classes(
-                "hp-row-button w-auto"
-            )
+            pause_button = ui.button("暂停队列", icon="pause").props(
+                "flat dense no-caps"
+            ).classes("hp-row-button w-auto").mark("task-pause")
             ui.button("重试全部失败", icon="replay", on_click=lambda: _retry_all()).props(
                 "flat dense no-caps"
             ).classes("hp-row-button w-auto")
@@ -245,7 +251,6 @@ def render() -> None:
             ).classes("hp-row-button w-auto").mark("task-cleanup").tooltip(
                 "清理孤儿副本、暂存残留、合并 WAL、清历史（排成一条维护任务）"
             )
-        ui.label("任务在本机后台跑；关窗口时正在跑的会记下来，下次打开接着做。").classes("hp-hint")
         hint = ui.label("").classes("hp-field-help")
 
         running_box = ui.column().classes("hp-card w-full gap-2 hp-tasks-running")
@@ -265,7 +270,7 @@ def render() -> None:
                 for key, label in tasks_service.GROUP_LABELS:
                     button = ui.button(label, on_click=lambda group=key: _switch_group(group)).props(
                         "flat dense no-caps"
-                    ).classes("hp-row-button w-auto").mark(f"task-group-{key}")
+                    ).classes("hp-group-btn w-auto").mark(f"task-group-{key}")
                     filter_buttons[key] = button
                 ui.space()
                 ui.button("全选本页", icon="select_all", on_click=lambda: _select_page()).props(
@@ -307,9 +312,9 @@ def render() -> None:
 
     def _cleanup_storage() -> None:
         """清理存储：**排成一条维护任务**（不是当场做——扫目录可能很慢）。"""
-        from app import tasks as tasks_app
+        from app.services import maintenance as maintenance_service
 
-        job_id = tasks_app.enqueue_cleanup("manual")
+        job_id = maintenance_service.enqueue_cleanup("manual")
         notify(f"已排队清理存储（任务 #{job_id}）", kind="positive")
         refresh(force=True)
 
@@ -418,8 +423,8 @@ def render() -> None:
         hint.text = data.hint
         hint.update()
         for key, button in filter_buttons.items():
-            button.classes(add="hp-row-active") if key == current["group"] else button.classes(
-                remove="hp-row-active"
+            button.classes(add="hp-group-btn-active") if key == current["group"] else button.classes(
+                remove="hp-group-btn-active"
             )
 
         # 正在跑：不分页（受全局并发上限约束就那么几条），内容变了才重画
@@ -438,6 +443,7 @@ def render() -> None:
                     ui.space()
                     ui.label(
                         f"并发 {data.concurrency.running}/{data.concurrency.limit}"
+                        + (" · ONNX 串行" if data.concurrency.serialized else "")
                     ).classes("hp-field-help").mark("task-concurrency")
                 if not data.running:
                     ui.label("现在没有任务在跑。导入资料、重建索引时，这里会显示进度。").classes(

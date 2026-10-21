@@ -114,6 +114,13 @@ def main() -> int:
         if code != 0:
             failed.append("ruff")
 
+    # 1.5 规则检查（《开发规则》的机械部分：文件过大/跨层 import）
+    rule_check = ROOT / "scripts" / "rule_check.py"
+    if rule_check.is_file():
+        code = _run([PY, str(rule_check)]).returncode
+        if code != 0:
+            failed.append("规则检查")
+
     # 2/3. 测试（**防污染的判据区**：只在这里前后各记一次 data/ 与 logs/ 的快照）
     if args.fast:
         steps = [("单测", ["-m", "pytest", "tests/unit", "-q"])]

@@ -1,10 +1,10 @@
 """数据备份工具 + 恢复验证（对应基础设施补全计划 T3.3）。
 
-思路一句话：**备份 = 复制 data/ 目录**。所以这里把「数据库 + data/files + userdict.txt」打成一包，
+思路一句话：**备份 = 复制 data/ 目录**。所以这里把「数据库 + data/files」打成一包，
 落一张 ``manifest.json``，并给三个动作：
 
 - ``--to <目录>``：做整份备份。数据库用 ``VACUUM INTO``（SQLite 原生一致快照，不用管 WAL 尾巴）；
-  ``data/files/`` 逐文件复制；``userdict.txt`` 等小文件一起。写 ``manifest.json``。
+  ``data/files/`` 逐文件复制。写 ``manifest.json``。
 - ``--verify <目录>``：重算的大小 / sha256 与 manifest 比对，不一致退出码 1。
 - ``--restore-smoke <目录>``：**在工具层面**打开备份库做 ``PRAGMA quick_check`` + 读三张表的计数，
   证明"这份备份拷回去能开"。
@@ -99,7 +99,6 @@ def backup(
     *,
     db_path: Path | None = None,
     files_path: Path | None = None,
-    userdict_path: Path | None = None,
 ) -> dict:
     """把 data/ 的内容备份到 ``to_dir``，返回写进的 manifest。
 
@@ -107,7 +106,6 @@ def backup(
         to_dir: 目标目录（不存在则建）。
         db_path: 数据库文件。
         files_path: ``data/files/`` 目录。
-        userdict_path: ``data/userdict.txt``。
     """
     from app.core import paths
 
@@ -154,20 +152,7 @@ def backup(
             }
         )
 
-    # 3) userdict.txt 等小文件（有就带，没有就跳过）。
-    udict = userdict_path if userdict_path is not None else paths.data_dir() / "userdict.txt"
-    if udict.is_file():
-        dest = data_out / udict.name
-        shutil.copyfile(udict, dest)
-        entries.append(
-            {
-                "relpath": _relposix(dest, to),
-                "bytes": dest.stat().st_size,
-                "sha256": _sha256(dest),
-                "kind": "file",
-            }
-        )
-
+    # 3) 词条表随数据库一起备份（``token_dict`` 在 helper.db 里），无需单独拷文件。
     manifest = {
         "tool": "backup_data.py",
         "spec_version": 1,

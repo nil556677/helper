@@ -19,13 +19,14 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from collections import deque
 
 from loguru import logger
 
 from app.core.jobs import api
-from app.core.jobs.runner import Runner, get_runner, set_runner
+from app.core.jobs.runner import Runner, get_runner
 from app.tasks._discovery import discovered_kinds
 
 #: 事件循环延迟的采样间隔与窗口（窗口 40 × 50ms = 最近 2 秒）
@@ -35,31 +36,44 @@ LAG_WINDOW = 40
 _lag_samples: deque[float] = deque(maxlen=LAG_WINDOW)
 _lag_task: asyncio.Task | None = None
 
+#: 保护 :func:`start` 的"注册 + 取/建执行器 + 启动"整段：并发调用时只会有一次真正装配，
+#: 其余调用等在锁上，进来时直接复用已就绪的实例（``register_kinds`` 并发跑会因重复登记报错）。
+_start_lock = threading.Lock()
+
+
+#: 保护 :func:`register_kinds` 的"读注册表 → 发现 → 写注册表"整段。
+#: 它可能被 :func:`start` 之外的路径直接调用（测试每个用例前一次），所以**不能只靠"启动时
+#: 单线程调一次"的约定**：并发调用会各算一批 fresh、第二个 register_all 撞"已注册"报错。
+_kinds_lock = threading.Lock()
+
 
 def register_kinds() -> None:
     """发现并登记所有任务类型（幂等：跑几次都一样，不会重复也不会漏）。
 
     **重复调用是常态**：应用启动时一次、测试每个用例前一次（它们会先清空注册表）。
     因此这里必须能从零重建：发现过程不依赖 import 期副作用，每次调用都重新读模块上的声明。
+    **并发安全**：整段加 :data:`_kinds_lock`（见那里的说明）。
 
     异常：
         ValueError: 声明不合规 / key 重复 / 与已注册的同名声明冲突。
     """
-    existing = {spec.key: spec for spec in api.kinds()}
-    fresh = []
-    for spec in discovered_kinds():
-        registered = existing.get(spec.key)
-        if registered is None:
-            fresh.append(spec)
-        elif registered != spec:
-            # 同名但声明不同：两处代码都想当这个 kind 的主人，属于配置错误，早报错。
-            raise ValueError(
-                f"任务类型 {spec.key!r} 已经注册过，且本次发现的声明与之不一致："
-                f"{registered!r} != {spec!r}"
-            )
-    if fresh:
-        api.register_all(fresh)  # 原子：全合规才登记
-        logger.debug("新登记 {} 种任务类型", len(fresh))
+    with _kinds_lock:
+        existing = {spec.key: spec for spec in api.kinds()}
+        fresh = []
+        for spec in discovered_kinds():
+            registered = existing.get(spec.key)
+            if registered is None:
+                fresh.append(spec)
+            elif registered != spec:
+                # 同名但声明不同：两处代码都想当这个 kind 的主人，属于配置错误，早报错。
+                raise ValueError(
+                    f"任务类型 {spec.key!r} 已经注册过，且本次发现的声明与之不一致："
+                    f"{registered!r} != {spec!r}"
+                )
+        if fresh:
+            api.register_all(fresh)  # 原子：全合规才登记
+            logger.debug("新登记 {} 种任务类型", len(fresh))
+        logger.info("任务方法加载：{} → {}", __file__, [spec.key for spec in api.kinds()])
 
 
 def lag_ms() -> float:
@@ -98,20 +112,19 @@ def ensure_lag_monitor() -> None:
 def start() -> Runner:
     """启动任务执行器（应用入口在 `ensure_ready()` 之后调用）。
 
-    **可重复调用**（这是刻意保证的）：注册是幂等的、执行器复用同一个实例、
-    `Runner.start()` 自己判"线程还活着就返回"，所以重复 start 不会多起线程、
-    也不会把正在跑的任务重复登记（见 runner.start）。
+    **可重复调用 + 线程安全**：整段加 :data:`_start_lock`；执行器走
+    :meth:`Runner.singleton` 取/建（进程级唯一），`Runner.start()` 自己判"线程还活着就返回"。
+    所以并发/重复调用都不会多起线程，也不会出现"两个实例互相覆盖、各自的
+    ``recover_on_start`` 把对方在跑的任务打回 pending"。
     返回：进程级执行器（后续 `stop()` 用）。
     """
-    register_kinds()
-    runner = get_runner()
-    if runner is None:
-        runner = Runner(lag_provider=lag_ms)
-        set_runner(runner)
-    runner.start()
-    enqueue_cleanup("startup")  # 启动时顺手维护一次（维护类，priority=-10，不抢用户的活）
-    logger.info("任务系统就绪：{} 种任务类型", len(api.kinds()))
-    return runner
+    with _start_lock:
+        register_kinds()
+        runner = Runner.singleton(lag_provider=lag_ms)
+        runner.start()
+        enqueue_cleanup("startup")  # 启动时顺手维护一次（维护类，priority=-10，不抢用户的活）
+        logger.info("任务系统就绪：{} 种任务类型", len(api.kinds()))
+        return runner
 
 
 def enqueue_cleanup(reason: str = "manual") -> int:
