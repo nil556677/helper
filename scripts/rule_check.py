@@ -8,11 +8,14 @@
 | 顶层函数数 | > 15 | — |
 | 函数长度 | > 50 行 | — |
 | 跨层 import | — | `app/ui` 直接 import `app/core` |
+| 节点交权 | — | `app/agent/nodes/**` 调用 `.transition(` |
 
 **白名单**（纯数据文件，规则 R1 例外）：DDL、CSS、参数常量表。
 **跨层**：`app/ui/**` 里出现 `from app.core` 或 `import app.core` → ERROR
 （`app/ui/screens/settings/**/preview.py` 这类里对 `app.ui.state.layout` 的局部 import 不算，
 只查顶层 `from app.core`/`import app.core`）。
+**节点交权**（契约收口 Q18/P6）：状态机迁移权收归 driver，节点只返回 state update；
+`app/agent/nodes/**` 里出现 ``.transition(`` 调用 → ERROR（节点不得自行迁移）。
 """
 
 from __future__ import annotations
@@ -35,6 +38,9 @@ DATA_FILES = {
 
 #: 跨层检查：app/ui 里禁止顶层 import app.core
 UI_ROOT = APP / "ui"
+
+#: 节点目录：此处不允许任何 `.transition(` 调用（Q18：driver 统一迁移）
+NODES_ROOT = APP / "agent" / "nodes"
 
 
 def _scan(path: Path) -> list[tuple[str, str]]:
@@ -67,6 +73,11 @@ def _scan(path: Path) -> list[tuple[str, str]]:
                 mod = (node.module or "").split(".")[0]
                 if node.level == 0 and mod == "core":
                     findings.append(("ERROR", f"{rel}: 界面 import core —— 跨层直连（R6）"))
+
+    if NODES_ROOT in path.parents:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "transition":  # 节点在调 transition
+                findings.append(("ERROR", f"{rel}:{node.lineno} 节点调用 .transition( —— 迁移权应归 driver（Q18）"))
 
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):

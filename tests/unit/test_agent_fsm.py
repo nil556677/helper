@@ -2,9 +2,14 @@
 
 from __future__ import annotations  # 类型注解延迟求值
 
+import ast  # 静态扫描（Q18：节点不得自行 transition）
+from pathlib import Path  # 路径
+
 import pytest  # 测试框架
 
 from app.agent.fsm import InvalidTransition, RunEvent, RunMachine, RunState  # 被测对象
+
+_NODES = Path(__file__).resolve().parents[2] / "app" / "agent" / "nodes"  # 节点目录
 
 
 def test_happy_path() -> None:  # 正常一轮
@@ -70,3 +75,19 @@ def test_listener_called() -> None:  # 监听器
     machine.add_listener(lambda record: seen.append(record.after.value))  # 监听
     machine.transition(RunEvent.START)  # 开始
     assert seen == ["context_loading"]  # 收到
+
+
+def test_nodes_never_call_transition() -> None:  # Q18：节点交权
+    """状态机迁移权归 driver：节点目录里禁止出现任何 ``.transition(`` 调用。
+
+    契约收口 Q18（driver 统一迁移）：节点只返回 state update，状态机由 driver 用
+    投影表驱动。这里用 AST 静态扫描，防止「顺手在节点里又迁移一次」回潮。
+    """
+    offenders: list[str] = []  # 违规清单
+    for path in sorted(_NODES.rglob("*.py")):  # 逐个节点源文件
+        tree = ast.parse(path.read_text(encoding="utf-8"))  # 解析
+        for node in ast.walk(tree):  # 遍历所有 AST 节点
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "transition":  # 恰好在调 transition
+                rel = str(path.relative_to(Path(__file__).resolve().parents[2])).replace("\\", "/")  # 相对路径
+                offenders.append(f"{rel}:{node.lineno}")  # 记录位置
+    assert not offenders, f"节点不得自行 transition（迁移权归 driver）：{offenders}"  # 必须为空
