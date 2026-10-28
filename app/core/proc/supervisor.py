@@ -31,7 +31,7 @@ HEALTH_FAIL_LIMIT = 3
 #: 没有它，worker 等 Qdrant 就绪（最多 30s）或加载模型时会被误判"不健康"反复杀掉重启。
 HEALTH_START_GRACE_S = 60.0
 
-#: 子进程登记文件名（放在 ``log_dir`` 的父目录，即 ``data/children.json``）。
+#: 子进程登记文件名（放在安装目录的 ``data/`` 下，即 ``data/children.json``）。
 #: 用途：主进程被强杀/崩溃时 ``stop()`` 来不及跑，下次启动靠它把残留子进程清掉。
 CHILD_REGISTRY_NAME = "children.json"
 
@@ -352,8 +352,17 @@ def _wait_exit(proc: subprocess.Popen, timeout_s: float) -> bool:
 
 
 def child_registry_path(log_dir: Path | None) -> Path | None:
-    """子进程登记文件路径（``data/children.json``）；没有 log_dir 就不记。"""
-    return None if log_dir is None else log_dir.parent / CHILD_REGISTRY_NAME
+    """子进程登记文件路径（``<安装目录>/data/children.json``）；没有 log_dir 就不记。
+
+    以前直接放在 ``log_dir.parent``（安装目录根）：运行期文件污染仓库根，且没被
+    ``.gitignore`` 覆盖，有误提交风险。统一收进 ``data/``（整个 data/ 已被忽略）。
+    """
+    if log_dir is None:  # 没日志目录就不登记
+        return None  # 无
+    base = log_dir.parent  # 安装目录（logs 的上一级）
+    if base.name.lower() == "data":  # log_dir 已经在 data/ 下（如 data/logs）
+        return base / CHILD_REGISTRY_NAME  # 直接放在 data/
+    return base / "data" / CHILD_REGISTRY_NAME  # 放进安装目录的 data/
 
 
 def _read_registry(path: Path) -> list[dict[str, Any]]:

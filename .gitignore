@@ -29,6 +29,8 @@ jieba.cache
 /app/debug.log
 /.qdrant-initialized
 /snapshots/
+# 旧版子进程登记表曾落在仓库根；现在收进 data/，这里兜底防误提交
+/children.json
 
 # ---------- 内部文档：整个 docs/ 不进版本控制（按用户要求） ----------
 # 技术方案、开发计划、命名规范都只在本机维护；clone 到别的机器不会带上 docs/ 下的任何文件

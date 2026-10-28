@@ -154,7 +154,7 @@ def test_registry_records_child_and_empties_after_stop(tmp_path: Path) -> None:
     sup.start()
     try:
         assert _wait_alive(sup, "fake")
-        registry = tmp_path / "children.json"  # log_dir 的父目录
+        registry = tmp_path / "data" / "children.json"  # 收在 data/ 下
         assert registry.is_file()  # 拉起即登记
         entries = json.loads(registry.read_text(encoding="utf-8"))["children"]
         assert [e["name"] for e in entries] == ["fake"]  # 名字对得上
@@ -162,7 +162,7 @@ def test_registry_records_child_and_empties_after_stop(tmp_path: Path) -> None:
     finally:
         report = sup.stop(grace_s=2.0)
     assert report["fake"] in {"stopped", "killed"}
-    entries = json.loads((tmp_path / "children.json").read_text(encoding="utf-8"))["children"]
+    entries = json.loads((tmp_path / "data" / "children.json").read_text(encoding="utf-8"))["children"]
     assert entries == []  # 已摘干净
 
 
@@ -191,7 +191,8 @@ def test_cleanup_skips_reused_pid(tmp_path: Path) -> None:
 
     proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(10)"])  # 别的进程
     try:
-        path = tmp_path / "children.json"
+        path = tmp_path / "data" / "children.json"
+        path.parent.mkdir(parents=True, exist_ok=True)  # data/ 目录先建好
         path.write_text(  # 伪造一条"pid 相同但创建时刻对不上"的登记
             json.dumps({"children": [{"name": "fake", "pid": proc.pid, "created": 1.0}]}),
             encoding="utf-8",
