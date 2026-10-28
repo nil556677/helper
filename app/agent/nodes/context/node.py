@@ -20,7 +20,6 @@ from app.agent.contexts.summarize import build_summarizer  # 摘要生成器（�
 from app.agent.contexts.tokens import count_messages  # token 估算
 from app.agent.contracts import StageGroup, TurnStatus  # 契约（分组/轮次状态）
 from app.agent.events import context as context_event  # 事件
-from app.agent.fsm.states import RunEvent  # 状态事件
 from app.agent.stages import stage  # 步骤事件
 from app.services import (  # 服务
     attachments,  # 附件
@@ -82,7 +81,6 @@ async def load_context(state: dict[str, Any], config: RunnableConfig) -> dict[st
                     window=budget.window,  # 窗口
                 )  # 事件结束
             )  # emit 结束
-            ctx.transition(RunEvent.CONTEXT_LOADED)  # 状态
         kept_ids = {int(item["id"]) for item in messages if "id" in item}  # 裁剪后保留的轮次 id
         turns = [t for t in turns if t.status is TurnStatus.DONE and int(t.turn_id) in kept_ids]  # 只留保留轮次
     return {"turns": [t.model_dump(mode="json") for t in turns], "summary": summary_text}  # 写回

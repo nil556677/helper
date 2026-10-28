@@ -1,6 +1,6 @@
 """E2 检查点：SQLite 检查点的持久化机制（读取/修剪/配置）。
 
-**选型说明**：本项目图节点是异步的，driver 必须 ``await graph.ainvoke``，而同步
+**选型说明**：本项目图节点是异步的，driver 必须 ``await`` 异步驱动（``astream``/``ainvoke``），而同步
 ``SqliteSaver`` 不支持异步读写（会 raise ``NotImplementedError``）。因此**生产侧要用
 ``AsyncSqliteSaver``（worker 单事件循环）**。
 

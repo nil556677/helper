@@ -39,12 +39,24 @@ class _Fake:  # 假图
         self.state = state or {}  # 状态
         self.config: dict | None = None  # 记录 config
 
-    async def ainvoke(self, state: dict, config: dict) -> dict:  # 跑
+    async def _record(self, state: dict, config: dict) -> None:  # 记录 config
         del state  # 不在乎输入
         self.config = config  # 记录
+
+    async def ainvoke(self, state: dict, config: dict) -> dict:  # 跑
+        """（保留：兼容仅 ainvoke 的调用方。）"""
+        await self._record(state, config)  # 记录
         if self.exc is not None:  # 要抛
             raise self.exc  # 抛
         return self.state  # 返回
+
+    async def astream(self, state: dict, config: dict, *, stream_mode=None) -> Any:  # 流式跑
+        """driver 现在用 astream；假图产一条 values 快照即可。"""
+        del stream_mode  # 不在乎模式
+        await self._record(state, config)  # 记录
+        if self.exc is not None:  # 要抛
+            raise self.exc  # 抛
+        yield ("values", dict(self.state))  # 产一条完整快照（假图无节点）
 
 
 def _drive(  # 跑一次驱动器

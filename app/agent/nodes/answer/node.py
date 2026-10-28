@@ -20,7 +20,6 @@ from app.agent.events import replace as replace_event  # 整段替换
 from app.agent.events import settings as settings_event  # 设置事件
 from app.agent.events import usage as usage_event  # 用量事件
 from app.agent.events import verify_report as verify_event  # 校验结论
-from app.agent.fsm.states import RunEvent  # 状态事件
 from app.agent.llm import DEFAULT_PARAMS, ModelGateway  # 模型网关（B）
 from app.agent.middleware import ModelRequest, ModelResponse, default_chain  # 中间件
 from app.agent.stages import stage  # 步骤事件
@@ -292,7 +291,6 @@ async def answer_node(state: dict[str, Any], config: RunnableConfig) -> dict[str
             extra=usage_extra,  # 明细
         )  # 构造结束
     )  # 发事件
-    ctx.transition(RunEvent.GENERATION_DONE)  # 生成完成
     return {  # 写回
         "answer": cleaned,  # 答案
         "fragments": fragments,  # 引用

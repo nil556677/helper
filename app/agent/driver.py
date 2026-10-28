@@ -2,11 +2,12 @@
 
 职责：
 - 开 trace 会话、回执 ack、启动前取消短路；
-- 调 `_CHAIN.before/after_run`、绑定 `run_context`、`graph.ainvoke`；
+- 调 `_CHAIN.before/after_run`、绑定 `run_context`、`graph.astream` 观测节点完成；
+- `_run_graph` 用投影把节点完成驱动成状态机迁移（节点不再自行 transition）；
 - 收敛异常：用户取消 / 任务取消 / 递归超限 / 其他失败 → 统一落部分结果 + 发终态；
 - `recursion_limit` 由这里显式传入（超限收敛为 `failed`）。
 
-抽出来后，`stream._run` 与 `runtime._run` 只剩「建初始状态 + 收尾出口」，差别只在出口（队列 vs Turn）。
+抽出来后，`stream._run` 只剩「建初始状态 + 收尾出口」，差别只在出口（队列 vs Turn）。
 """
 
 from __future__ import annotations  # 类型注解延迟求值
@@ -22,6 +23,7 @@ from loguru import logger  # 日志（失败要能查堆栈）
 
 from app.agent import events  # 事件
 from app.agent.context import RunCancelled, RunContext, run_context  # 上下文
+from app.agent.fsm.projection import project_event  # 节点完成 → 迁移事件
 from app.agent.fsm.states import RunEvent, RunState  # 状态
 from app.agent.middleware import default_chain  # 中间件
 from app.agent.persist import persist_turn  # 统一落库
@@ -120,6 +122,53 @@ def _sink_run_id(emit: Any, run_id: str) -> None:  # 回填 run id
         emit._run_id = run_id  # 回填
 
 
+async def _run_graph(  # 跑父图并驱动状态机
+    graph: Any,  # 编译父图
+    initial_state: dict[str, Any],  # 初始状态
+    ctx: RunContext,  # 运行上下文
+    emit: Any,  # 事件出口
+) -> dict[str, Any]:  # 权威最终状态
+    """用 astream 观测节点完成，driver 统一驱动状态迁移（节点不再自行 transition）。
+
+    每条 ``updates`` 记录都是「节点名 → 该节点返回的更新」，driver 用投影把完成的节点
+    映射成 ``RunEvent`` 并执行迁移（发 state 事件）；``values`` 是每一步的完整状态快照，
+    取最后一条作为权威最终状态（reducer 已合并，避免手拼合并漏字段）。
+    """
+    config = {  # 图配置
+        "configurable": {  # configurable
+            "run_ctx": ctx,  # 上下文
+            "thread_id": ctx.conversation_id,  # checkpoint 线程 = 会话
+        },  # configurable 结束
+        "metadata": {  # checkpoint 元数据（对账定位）
+            "turn_id": ctx.turn_id,  # 轮次
+            "attempt": int(ctx.attempt),  # 尝试次数
+        },  # 元数据结束
+        "recursion_limit": RECURSION_LIMIT,  # 图步上限
+    }  # config 结束
+    final_state: dict[str, Any] = {}  # 权威最终状态
+    async for mode, chunk in graph.astream(  # 流式观测（双模式）
+        initial_state,  # 初始状态
+        config,  # 配置
+        stream_mode=["updates", "values"],  # 更新 + 完整状态快照
+    ):  # 双模式开始
+        if mode == "updates":  # 节点完成记录
+            for node, update in chunk.items():  # 逐个完成的节点
+                event = project_event(node, update)  # 节点 → 迁移事件
+                if event is not None and ctx.machine.can(event):  # 有事件且当前状态允许
+                    ctx.transition(event)  # driver 统一驱动迁移（发 state 事件）
+        else:  # values：完整状态快照
+            final_state = dict(chunk)  # 收敛为最新（reducer 已合并）
+    if ctx.machine.state is RunState.DONE:  # 正常走到 done（finalize 已驱动迁移）
+        emit(  # 发完成终态（最后一帧，顺序在 state 事件之后）
+            events.done(  # 完成事件
+                ctx.first_token_ms or 0,  # 首 token
+                ctx.elapsed_ms,  # 总耗时
+                ctx.usage,  # 用量
+            )  # 事件结束
+        )  # emit 结束
+    return final_state  # 返回权威最终状态
+
+
 async def drive(  # 驱动图
     graph: Any,  # 编译父图
     ctx: RunContext,  # 运行上下文
@@ -146,19 +195,11 @@ async def drive(  # 驱动图
                 ctx.transition(RunEvent.START)  # 进入上下文
                 await _CHAIN.before_run(ctx)  # 中间件（如取消边界）
                 with run_context(ctx):  # 绑定当前 run
-                    state = await graph.ainvoke(  # 跑父图
+                    state = await _run_graph(  # 跑父图 + 驱动状态机
+                        graph,  # 编译父图
                         initial_state,  # 初始状态
-                        {  # config
-                            "configurable": {  # configurable
-                                "run_ctx": ctx,  # 上下文
-                                "thread_id": ctx.conversation_id,  # checkpoint 线程 = 会话
-                            },  # configurable 结束
-                            "metadata": {  # checkpoint 元数据（对账定位）
-                                "turn_id": ctx.turn_id,  # 轮次
-                                "attempt": int(ctx.attempt),  # 尝试次数
-                            },  # 元数据结束
-                            "recursion_limit": RECURSION_LIMIT,  # 图步上限
-                        },  # config 结束
+                        ctx,  # 上下文（投影用）
+                        emit,  # 事件出口（driver 收权后发 state/done）
                     )  # 图结束
                 status = "done"  # 正常结束
                 _seal_state(ctx, state, status)  # 封业务字段进最终 state

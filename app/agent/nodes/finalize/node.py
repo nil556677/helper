@@ -7,9 +7,7 @@ from typing import Any  # 任意值
 from langchain_core.runnables import RunnableConfig  # 图配置
 
 from app.agent.context import ctx_from_config  # 上下文
-from app.agent.events import done as done_event  # 事件
 from app.agent.events import note as note_event  # 说明事件
-from app.agent.fsm.states import RunEvent  # 状态事件
 from app.agent.persist import persist_turn  # 统一落库
 from app.agent.stages import stage  # 步骤事件
 
@@ -32,20 +30,10 @@ def _persist(state: dict[str, Any], ctx: Any) -> None:  # 落库
 
 
 async def finalize_node(state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:  # 收尾节点
-    """先落库，再发 done。"""
+    """先落库，再发说明；done 终态事件由 driver 统一发（保证最后一帧）。"""
     ctx = ctx_from_config(config)  # 上下文
     with stage("收尾"):  # 步骤（不给 group：只埋 trace，收尾不属于用户步骤）
         _persist(state, ctx)  # 落库
-        if ctx is not None:  # 新链路
-            ctx.transition(RunEvent.FINALIZED)  # 状态完成
-            if ctx.note:  # 有说明
-                ctx.emit(note_event(ctx.note))  # 发说明
-    if ctx is not None:  # 新链路
-        ctx.emit(  # done
-            done_event(  # 事件
-                ctx.first_token_ms or 0,  # 首 token
-                ctx.elapsed_ms,  # 总耗时
-                ctx.usage,  # 用量
-            )  # 事件结束
-        )  # emit 结束
+        if ctx is not None and ctx.note:  # 新链路且有说明
+            ctx.emit(note_event(ctx.note))  # 发说明
     return {}  # 不改状态

@@ -36,6 +36,13 @@ class _Graph:  # 假图
             raise self.error  # 抛出
         return {}  # 正常
 
+    async def astream(self, state: dict, config: dict, *, stream_mode=None):  # 流式入口
+        """driver 现在用 astream；有异常就抛，否则产一条 values。"""
+        del stream_mode  # 不在乎模式
+        if self.error is not None:  # 要失败
+            raise self.error  # 抛出
+        yield ("values", {})  # 一条完整快照
+
 
 def _run(monkeypatch, graph: _Graph, *, cancel_first: bool = False) -> tuple[list, object]:  # 跑一轮
     """启动流并收完事件。"""
@@ -85,6 +92,12 @@ class _SlowGraph:  # 慢图
         """睡很久；取消应把它打断。"""
         await asyncio.sleep(10)  # 长阻塞
         return {}  # 正常（到不了）
+
+    async def astream(self, state: dict, config: dict, *, stream_mode=None):  # 流式入口
+        """睡很久；取消应把它打断。"""
+        del stream_mode  # 不在乎模式
+        await asyncio.sleep(10)  # 长阻塞
+        yield ("values", {})  # 正常（到不了）
 
 
 def test_cancel_mid_run_cancels_task(fake_root, monkeypatch) -> None:  # 跑动中取消
