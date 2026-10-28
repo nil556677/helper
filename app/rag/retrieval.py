@@ -183,19 +183,3 @@ def evidence(ranked: list[dict[str, Any]], top_k: int = TOP_K) -> list[dict[str,
     docs = [_hit_to_doc(hit) for hit in ranked]  # 转文档
     return build_evidence(docs, top_k=top_k)  # 组装
 
-
-def retrieve(  # 同步兼容入口
-    question: str,  # 问题
-    *,
-    top_k: int = TOP_K,  # 证据数
-) -> dict[str, Any]:  # 结果
-    """旧图/测试用的同步链；新链路走 RAG 子图。"""
-    vector = embed_query(question)  # 查询向量
-    dense_hits = dense_search(vector)  # 语义
-    sparse_hits = sparse_search(question)  # 关键词
-    fused = fuse_hits(dense_hits, sparse_hits)  # 融合
-    candidates = backfill(fused)  # 回填
-    ranked = rerank(question, candidates)  # 精排
-    items = evidence(ranked, top_k=top_k)  # 证据
-    return {"hits": fused, "evidence": items}  # 返回
-

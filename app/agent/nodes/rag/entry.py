@@ -126,11 +126,10 @@ def make_rag_node(runner: RagRunner):  # 工厂
                 ctx.note = _reject_note(gate) if decision == "reject" else "没有在本地资料里找到相关内容，换个说法试试。"  # 说明
                 ctx.transition(RunEvent.NO_EVIDENCE)  # 直接收尾，不生成
         return {  # 写回
-            "evidence": result.evidence if answerable else [],  # 不可答时清空，保证边路由与状态机一致
+            "evidence": result.evidence if answerable else [],  # 不可答时清空（只留决策）
             "hits": result.hits,  # 命中
             "note": ctx.note if ctx is not None else "",  # 说明
-            "answerable": answerable,  # 边路由的唯一依据（RouteDecision.next 的投影）
-            "route": route,  # 唯一决策对象
+            "route": route.model_dump(mode="json"),  # 唯一决策对象（JSON 形态，可直接进 checkpoint）
         }  # 返回结束
 
     return rag_node  # 返回节点

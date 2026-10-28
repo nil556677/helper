@@ -16,17 +16,13 @@ from app.agent.state import ChatState  # 状态
 
 
 def after_rag(state: dict[str, Any]) -> str:  # RAG 后的分支
-    """只读唯一决策对象 ``route``（旧状态退回 ``answerable``）。
+    """只读唯一决策对象 ``route``（不再看 evidence/answerable）。
 
     不能再用 ``state["evidence"]`` 判断：门限可能「reject 但 kept 非空」，检索节点已经
     迁移到 NO_EVIDENCE（FINALIZING），若这里仍按 evidence 路由到 answer，answer 再发
     GENERATION_DONE 就会 ``InvalidTransition: finalizing 不允许事件 generation_done``。
     """
-    route = state.get("route")  # 唯一决策对象（模型或 dict）
-    if route is not None:  # 新路径：读 RouteDecision.next
-        target = route.get("next") if isinstance(route, dict) else getattr(route, "next", None)  # 兼容反序列化
-        return "answer" if str(target) == DecisionTarget.ANSWER.value else "finalize"  # 按决策路由
-    return "answer" if state.get("answerable") else "finalize"  # 旧状态兜底
+    return "answer" if state["route"]["next"] == DecisionTarget.ANSWER.value else "finalize"  # 按决策路由
 
 
 def build_agent_graph(runner: RagRunner, *, checkpointer: Any = None):  # 建父图

@@ -81,9 +81,8 @@ def test_reject_with_partial_evidence_routes_to_finalize(monkeypatch) -> None:  
     """reject 但 kept 非空时，必须收尾，不能路由到 answer（否则状态机非法迁移）。"""
     evidence = [{"index": 1, "text": "只有一条证据", "source_name": "资料", "origin": "段"}]  # 仅一条
     out, ctx = _run_rag(monkeypatch, _result("reject", evidence))  # 跑
-    assert out["answerable"] is False  # 不可答
     assert out["evidence"] == []  # 证据清空，避免按 evidence 误路由
-    assert out["route"].next is DecisionTarget.FINALIZE  # 决策对象也指向收尾
+    assert out["route"]["next"] == DecisionTarget.FINALIZE.value  # 决策对象指向收尾
     assert ctx.machine.state is RunState.FINALIZING  # 状态机已收尾
     assert agent_mod.after_rag(out) == "finalize"  # 路由一致
 
@@ -92,13 +91,12 @@ def test_pass_routes_to_answer(monkeypatch) -> None:  # 正常路径
     """pass 且证据非空时进入生成。"""
     evidence = [{"index": 1, "text": "证据", "source_name": "资料", "origin": "段"}]  # 证据
     out, ctx = _run_rag(monkeypatch, _result("pass", evidence))  # 跑
-    assert out["answerable"] is True  # 可答
     assert out["evidence"] == evidence  # 证据保留
-    assert out["route"].next is DecisionTarget.ANSWER  # 决策对象指向生成
+    assert out["route"]["next"] == DecisionTarget.ANSWER.value  # 决策对象指向生成
     assert ctx.machine.state is RunState.GENERATING  # 进入生成
     assert agent_mod.after_rag(out) == "answer"  # 路由一致
 
 
-def test_after_rag_ignores_stale_evidence() -> None:  # 防御
-    """即使 evidence 残留，answerable=False 也不能生成。"""
-    assert agent_mod.after_rag({"evidence": [{"x": 1}], "answerable": False}) == "finalize"  # 收尾
+def test_after_rag_reads_route_only() -> None:  # 单一事实来源
+    """即使 evidence 残留，也只按 route 决策（不再有第二信号）。"""
+    assert agent_mod.after_rag({"route": {"next": "finalize"}, "evidence": [{"x": 1}]}) == "finalize"  # 收尾
