@@ -59,10 +59,10 @@ def _banner(banner: ui.column, seen: dict[str, Any], force: bool) -> None:
         ui.row().classes("items-center gap-2 w-full no-wrap"),
     ):
         ui.icon("sync_problem").classes("text-base")
-        with ui.column().classes("gap-0"):
-            ui.label("索引和当前参数不一致").classes("hp-card-title")
-            ui.label(str(status["detail"])).classes("hp-field-help")
-        ui.space()
+        # 标题+详情合并成**一行**（不再各自独占一行占高度）；长文案让 flex 收缩省略。
+        ui.label(
+            f"索引和当前参数不一致 · {status.get('detail') or ''}"
+        ).classes("hp-field-help").style("flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;")
         if status["action"] == "lexical":
             ui.button("只重算词法", icon="bolt", on_click=_rebuild_lexical).props(
                 "flat dense no-caps"

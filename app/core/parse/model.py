@@ -200,6 +200,12 @@ class Block:
     header: tuple[str, ...] = ()
     """表头单元格（跨列展开后，1 基列序）。展示引用时用它渲染小表。"""
 
+    table_title: str = ""
+    """表格标题（显式表名/caption）；会追加到 section_path 末尾，不覆盖章节链。"""
+
+    merged_ranges: tuple[tuple[int, int, int, int], ...] = ()
+    """合并单元格 ``(row_from, row_to, col_from, col_to)``（1 基，含端点）。"""
+
     para_index: int | None = None
     """docx 正文段落的 body 顺序下标（0 基）。"""
 

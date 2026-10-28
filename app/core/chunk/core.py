@@ -26,6 +26,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import replace
 
@@ -53,6 +54,42 @@ _HARD_BACKOFF_CHARS = 40
 #: 硬切认可的**边界字符**（标点 + 空白）：宁可在它后面切开，也不把词/句劈两半。
 _HARD_BREAKS = frozenset("，。；：！？、,.。;:!? \t\r\n ！？")
 
+#: 原子文本：日期/时间/金额/编号/URL/邮箱/版本/单位。切点落在内部时要让位。
+_ATOM_RE = re.compile(
+    r"https?://[^\s，。；、]+"
+    r"|[\w.+-]+@[\w-]+(?:\.[\w-]+)+"
+    r"|\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b"
+    r"|\b\d{1,2}:\d{2}(?::\d{2})?\b"
+    r"|\b\d{1,3}(?:,\d{3})+(?:\.\d+)?\b"
+    r"|\b\d+(?:\.\d+)?%"
+    r"|\bv?\d+(?:\.\d+){2,}\b"
+    r"|\b\d+(?:\.\d+)?(?:kg|g|mb|gb|tb|km|cm|mm)\b",
+    re.IGNORECASE,
+)
+
+
+def _atom_spans(text: str) -> list[tuple[int, int]]:
+    return [(match.start(), match.end()) for match in _ATOM_RE.finditer(text)]
+
+
+def _inside_atom(spans: list[tuple[int, int]], index: int) -> bool:
+    return any(start < index < end for start, end in spans)
+
+
+def _merge_atom_spans(text: str, spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """把落在原子内部的切点并向下一段，保证 URL/日期/金额不被从句标点切开。"""
+    atoms = _atom_spans(text)
+    if not atoms or len(spans) <= 1:
+        return spans
+    merged: list[tuple[int, int]] = []
+    for start, end in spans:
+        if merged and _inside_atom(atoms, merged[-1][1]):
+            merged[-1] = (merged[-1][0], end)
+        else:
+            merged.append((start, end))
+    return merged
+
+
 #: 单份文档最多允许触发多少次**语义兜底**（embedding 很贵：16 行 ≈3.8s）。
 #: 对话体/小说里长引号段落会反复触发；超过上限后退回硬切并留诊断，避免一份 2 MB
 #: 文本把 CPU 占满几十分钟（实测：长任务期间界面直接卡死）。
@@ -66,8 +103,9 @@ def _last_break_before_end(segment: str) -> int:
     任何边界（或整段就是一个词）时返回 0（表示不回退）。
     """
     window_start = max(0, len(segment) - _HARD_BACKOFF_CHARS)
+    atoms = _atom_spans(segment)
     for index in range(len(segment), window_start, -1):
-        if segment[index - 1] in _HARD_BREAKS:
+        if segment[index - 1] in _HARD_BREAKS and not _inside_atom(atoms, index):
             return index
     return 0
 
@@ -146,6 +184,8 @@ class Splitter:
         self._parent_path: tuple[str, ...] = ()
         #: 文档大标题（H1）：标题路径从它开始，前缀预算要算进去
         self._doc_title = ""
+        #: 表格序号：同一个 table_ref 在一次导入里可能多次出现（空行分段），用它保唯一
+        self._table_seq = 0
         self._groups: list[ChunkGroup] = []
         #: 诊断收集器：降级/异常写进任务事件（不静默）
         self.sink = DiagnosticSink()
@@ -185,7 +225,7 @@ class Splitter:
             parent_overlap=sizes.parent_overlap,
             # 子块 token 上限：检索的最小单位 = pad_to − 安全余量
             child_size=sizes.child_size,
-            # 子块之间的整句重叠 = child_size × 15%（边界句两边都在，防"答案在缝里"）
+            # 子块之间的整句重叠 = child_size × 10%（边界句两边都在，防"答案在缝里"）
             child_overlap=sizes.child_overlap,
             # token 计量器：真 bge-m3 分词器；拿不到时 Splitter 内部退回字符估算（×0.69）
             count_tokens=counter,
@@ -594,6 +634,7 @@ class Splitter:
             # 整段被**引号**保护住（长篇对白）：再试一次"忽略引号"的软切。
             # 括号仍然受保护；只放开引号，否则几百字对白会被当成一句去跑 ONNX。
             spans = soft_spans(text, start, end, respect_quotes=False)
+        spans = _merge_atom_spans(text, spans)
         if len(spans) > 1:
             pieces: list[_Piece] = []
             # 软边界只是"更细的候选"：每段仍可能超预算，所以继续递归（不是一次切完）
@@ -624,6 +665,10 @@ class Splitter:
             Severity.WARNING,
             "存在没有可用标点的超长段落，已按字符硬切",
             detail=text[start:end][:80],
+            level="char",
+            loc=f"page={block.page} line={block.line_from}",
+            budget=budget,
+            actual=self._count(text[start:end]),
         )
         return self._hard_fit(text, start, end, budget)
 
@@ -747,6 +792,13 @@ class Splitter:
             表头在每段重复（见 ``_atomic_parts``），否则从第二段起的数字没有列名。
         """
         lines = block.text.split("\n")
+        if (
+            block.content_type == TYPE_TABLE
+            and block.header
+            and not any(": " in line for line in lines if line.strip())
+        ):
+            self._emit_plain_table(block)
+            return
         # xlsx 的行块（``列名: 值``）：走表级规则——一行一个 parent，完整行是父块；
         # 行放不下才按列拆 child。这样命中任何子块，回填父块都能拿到完整一行。
         if (
@@ -778,6 +830,11 @@ class Splitter:
                         Severity.WARNING,
                         "表格/代码存在超长单行，已按字符硬切",
                         detail=text[:80],
+                        level="char",
+                        loc=f"table={block.table_ref} row={row_from}",
+                        budget=budget,
+                        actual=self._count(text),
+                        atom_type="table" if block.content_type == TYPE_TABLE else "code",
                     )
                     pieces = [
                         (text[piece.start : piece.end], block.col_from, block.col_to, tuple(block.header))
@@ -790,6 +847,8 @@ class Splitter:
                 record = ChunkRecord(
                     text=piece_text,
                     content_type=block.content_type,
+                    role="table_row" if block.content_type == TYPE_TABLE else "code",
+                    fetch_mode=1,
                     section_path=tuple(block.section_path),
                     level=block.level,
                     page=block.page,
@@ -821,6 +880,142 @@ class Splitter:
         if batch:
             self._emit_atomic_group(block, batch)
 
+    def _with_table_title(self, block: Block, path: tuple[str, ...]) -> tuple[str, ...]:
+        """把显式表格标题追加到章节链末尾（不覆盖章节）。"""
+        title = str(block.table_title or "").strip()
+        if not title:
+            return path
+        if path and path[-1] == title:
+            return path
+        return (*path, title)
+
+    def _emit_plain_table(self, block: Block) -> None:
+        """DOCX/PDF/PPTX/MD/CSV 的普通表格：摘要 parent + 行 child（`列名: 值`）。
+
+        行放得下 → `fetch_mode=0` 的 table_row；
+        行超宽 → 拆列组，`fetch_mode=2`，同 `row_uid`，按 `segment_index` 拼回。
+        """
+        lines = [line for line in block.text.split("\n") if line.strip()]
+        if not lines:
+            return
+        header = tuple(str(cell).strip() for cell in block.header)
+        first_cells = [cell.strip() for cell in lines[0].split(" | ")]
+        rows = lines
+        header_skipped = False
+        if header and len(first_cells) >= 1:
+            matches = sum(1 for got, want in zip(first_cells, header, strict=False) if got == want)
+            if matches >= max(1, len(header) // 2):
+                rows = lines[1:]
+                header_skipped = True
+        columns = header or tuple(first_cells)
+        if not columns:
+            return
+
+        ref = str(block.table_ref or "表格")
+        self._table_seq += 1
+        table_uid = f"{ref}#{self._table_seq}"
+        path = self._with_table_title(block, tuple(block.section_path))
+        title = path[-1] if path else "表格"
+        level = block.level if block.level is not None else 1
+        cols = " | ".join(columns)
+        row_range = (
+            f"第 {block.row_from} 行" if block.row_from is not None else "行范围未知"
+        )
+        summary_text = (
+            f"{title}\n表摘要：{ref}\n范围：{row_range} · {len(columns)} 列\n列：{cols}"
+        )
+        parent = ChunkRecord(
+            text=summary_text,
+            is_parent=True,
+            content_type=TYPE_TABLE,
+            role="table_parent",
+            fetch_mode=0,
+            table_uid=table_uid,
+            section_path=path,
+            level=level,
+            page=block.page,
+            page_to=block.page_to,
+            table_ref=block.table_ref,
+            row_from=block.row_from,
+            row_to=block.row_to,
+            col_from=block.col_from,
+            col_to=block.col_to,
+            header=columns,
+            merged_ranges=tuple(block.merged_ranges),
+        )
+        children_list: list[ChunkRecord] = [replace(parent, is_parent=False)]
+
+        budget = self._budget_for(block)
+        base = int(block.row_from or 1) + (1 if header_skipped else 0)
+        for offset, line in enumerate(rows):
+            row_no = base + offset
+            row_uid = f"{table_uid}#r{row_no}"
+            cells = [cell.strip() for cell in line.split(" | ")]
+            pairs = [
+                f"{columns[i] if i < len(columns) else f'列{i + 1}'}: {cell}"
+                for i, cell in enumerate(cells)
+            ]
+            full = " | ".join(pairs)
+            if self._count(full) <= budget:
+                children_list.append(
+                    ChunkRecord(
+                        text=full,
+                        content_type=TYPE_TABLE,
+                        role="table_row",
+                        fetch_mode=0,
+                        table_uid=table_uid,
+                        row_uid=row_uid,
+                        row_no=row_no,
+                        segment_index=0,
+                        segment_count=1,
+                        section_path=path,
+                        level=level,
+                        table_ref=block.table_ref,
+                        row_from=row_no,
+                        row_to=row_no,
+                        col_from=block.col_from,
+                        col_to=block.col_to,
+                        header=columns,
+                    )
+                )
+                continue
+
+            groups: list[list[str]] = []
+            current: list[str] = []
+            for pair in pairs:
+                candidate = " | ".join([*current, pair])
+                if current and self._count(candidate) > budget:
+                    groups.append(current)
+                    current = [pair]
+                else:
+                    current.append(pair)
+            if current:
+                groups.append(current)
+            segment_children = tuple(
+                ChunkRecord(
+                    text=" | ".join(group),
+                    content_type=TYPE_TABLE,
+                    role="table_row_segment",
+                    fetch_mode=2,
+                    table_uid=table_uid,
+                    row_uid=row_uid,
+                    row_no=row_no,
+                    segment_index=index,
+                    segment_count=len(groups),
+                    section_path=path,
+                    level=level,
+                    table_ref=block.table_ref,
+                    row_from=row_no,
+                    row_to=row_no,
+                    col_from=block.col_from,
+                    col_to=block.col_to,
+                    header=columns,
+                )
+                for index, group in enumerate(groups)
+            )
+            children_list.extend(segment_children)
+        self._groups.append(ChunkGroup(parent=parent, children=tuple(children_list)))
+
     def _emit_table_rows(self, block: Block) -> None:
         """xlsx 表：**普通行共享表级摘要 parent；超宽行单独建 parent（摘要+完整行）**。
 
@@ -834,6 +1029,8 @@ class Splitter:
         if not lines:
             return
         ref = str(block.table_ref or "表格")
+        self._table_seq += 1
+        table_uid = f"{ref}#{self._table_seq}"
         path = tuple(block.section_path)
         if not path:
             heads, self._pending = self._pending, []
@@ -844,6 +1041,7 @@ class Splitter:
                 path = (ref[len("sheet:") :].split("#", 1)[0],)
             elif self._doc_title:
                 path = (self._doc_title,)
+        path = self._with_table_title(block, path)
         title = path[-1] if path else "表格"
         level = block.level if block.level is not None else 1
         columns = tuple(block.header)
@@ -863,6 +1061,9 @@ class Splitter:
             text=summary_text,
             is_parent=True,
             content_type=TYPE_TABLE,
+            role="table_parent",
+            fetch_mode=0,
+            table_uid=table_uid,
             section_path=path,
             level=level,
             page=block.page,
@@ -873,23 +1074,32 @@ class Splitter:
             col_from=block.col_from,
             col_to=block.col_to,
             header=columns,
+            merged_ranges=tuple(block.merged_ranges),
         )
         # 摘要 child：每张表只嵌一次，供"这张表有哪些列/多少行"召回
+        table_children: list[ChunkRecord] = []
         if ref not in self._table_summary_done:
             self._table_summary_done.add(ref)
-            summary_child = replace(table_parent, is_parent=False)
-            self._groups.append(ChunkGroup(parent=table_parent, children=(summary_child,)))
+            table_children.append(replace(table_parent, is_parent=False))
 
         budget = self._budget_for(block)
-        title_cost = self._count(title + "\n")
+        piece_budget = budget
         base = int(block.row_from or 1)
         for offset, line in enumerate(lines):
             row_no = base + offset
-            row_text = f"{title}\n{line}"
+            row_uid = f"{table_uid}#r{row_no}"
+            row_text = line
             if self._count(row_text) <= budget:
                 child = ChunkRecord(
                     text=row_text,
                     content_type=TYPE_TABLE,
+                    role="table_row",
+                    fetch_mode=0,
+                    table_uid=table_uid,
+                    row_uid=row_uid,
+                    row_no=row_no,
+                    segment_index=0,
+                    segment_count=1,
                     section_path=path,
                     level=level,
                     table_ref=block.table_ref,
@@ -899,10 +1109,10 @@ class Splitter:
                     col_to=block.col_to,
                     header=columns,
                 )
-                self._groups.append(ChunkGroup(parent=table_parent, children=(child,)))
+                table_children.append(child)
                 continue
 
-            piece_budget = max(1, budget - title_cost)
+            piece_budget = budget
             pieces = self._split_labeled_pairs(block, line, piece_budget)
             children_list: list[ChunkRecord] = []
             digest = self._row_key_digest(block, line, piece_budget)
@@ -910,7 +1120,7 @@ class Splitter:
                 digest_text, digest_from, digest_to, digest_header = digest
                 children_list.append(
                     ChunkRecord(
-                        text=f"{title}\n{digest_text}",
+                        text=digest_text,
                         content_type=TYPE_TABLE,
                         section_path=path,
                         level=level,
@@ -925,7 +1135,7 @@ class Splitter:
             if pieces:
                 children_list.extend(
                     ChunkRecord(
-                        text=f"{title}\n{text}",
+                        text=text,
                         content_type=TYPE_TABLE,
                         section_path=path,
                         level=level,
@@ -941,7 +1151,7 @@ class Splitter:
             else:
                 children_list.extend(
                     ChunkRecord(
-                        text=f"{title}\n{line[piece.start : piece.end]}",
+                        text=line[piece.start : piece.end],
                         content_type=TYPE_TABLE,
                         section_path=path,
                         level=level,
@@ -955,15 +1165,22 @@ class Splitter:
                     )
                     for piece in self._hard_fit(line, 0, len(line), piece_budget)
                 )
-            children = tuple(children_list)
-            # 超宽行：新建 parent = 全局摘要 + 这一完整行
-            row_parent = replace(
-                table_parent,
-                text=f"{summary_text}\n\n{row_text}",
-                row_from=row_no,
-                row_to=row_no,
+            children = tuple(
+                replace(
+                    child,
+                    role="table_row_segment",
+                    fetch_mode=2,
+                    table_uid=table_uid,
+                    row_uid=row_uid,
+                    row_no=row_no,
+                    segment_index=index,
+                    segment_count=len(children_list),
+                )
+                for index, child in enumerate(children_list)
             )
-            self._groups.append(ChunkGroup(parent=row_parent, children=children))
+            # 超宽行：所有列组都指向**表格摘要 parent**；整行由检索层按 row_uid 拼回
+            table_children.extend(children)
+        self._groups.append(ChunkGroup(parent=table_parent, children=tuple(table_children)))
 
     def _append_to_open_parent(
         self, block: Block, record: ChunkRecord, tokens: int
@@ -1012,6 +1229,8 @@ class Splitter:
             text=parent_text,
             is_parent=True,
             content_type=block.content_type,
+            role="table_parent" if block.content_type == TYPE_TABLE else "section_parent",
+            fetch_mode=0,
             # 原子块也归到**当前顶层章节**（H2）：表格/代码是该章的一部分，
             # 不把父块标成最内层小节（否则同一章会出现多个"章节"不同的父块）。
             section_path=section_path,

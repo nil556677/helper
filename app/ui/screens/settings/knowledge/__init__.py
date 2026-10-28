@@ -48,8 +48,7 @@ def render() -> None:
 
     with ui.column().classes("w-full gap-4"):
         with ui.row().classes("w-full items-center gap-2 no-wrap"):
-            ui.label("知识库").classes("hp-page-title")
-            ui.space()
+            ui.space()  # 靠右（标题在左栏，不再重复）
             with (
                 ui.tabs(
                     value="overview",

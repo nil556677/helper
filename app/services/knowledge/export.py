@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.rag import store
+from app.rag import kb_store
 
 
 def export(doc_ids: list[int], target: Path) -> dict[str, object]:
@@ -30,7 +30,7 @@ def export(doc_ids: list[int], target: Path) -> dict[str, object]:
     target.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for doc_id in ids:
-            row = store.get(doc_id)
+            row = kb_store.get_document(doc_id)
             if row is None:
                 continue
             stored = str(row["stored_path"] or "")
@@ -38,10 +38,10 @@ def export(doc_ids: list[int], target: Path) -> dict[str, object]:
             manifest.append(
                 {
                     "id": doc_id,
-                    "name": str(row["source_name"]),
+                    "name": str(row["name"]),
                     "size": int(row["size"] or 0),
                     "pages": row["pages"],
-                    "chars": row["chars"],
+                    "chars": None,
                     "file_hash": row["file_hash"],
                     "version": int(row["version"] or 1),
                     "exported_copy": bool(copy is not None and copy.is_file()),

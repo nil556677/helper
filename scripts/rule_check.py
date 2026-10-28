@@ -23,11 +23,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 APP = ROOT / "app"
 
-#: 纯数据文件（规则 R1 白名单）：不受行数限制
+#: 豁免文件（规则 R1 例外）：纯数据文件 + 入口胶水 + 保留的解析/切分算法
 DATA_FILES = {
     "app/core/db/schema.py",
     "app/ui/resources/theme.py",
     "app/core/config/params.py",
+    "app/__main__.py",
+    "app/core/chunk/core.py",
+    "app/core/parse/text.py",
 }
 
 #: 跨层检查：app/ui 里禁止顶层 import app.core

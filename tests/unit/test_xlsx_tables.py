@@ -140,8 +140,9 @@ def test_xlsx_table_chunks_carry_locator(tmp_path: Path) -> None:
     assert loc["table"] == "sheet:表A#1"
     assert loc["row_from"] == 2 and loc["row_to"] == 2
     assert loc["header"] == ["年度", "公司", "金额"]
-    # 标题进文本（进向量）；行内容带列名
-    assert first.text.startswith("表A\n年度: 2019")
+    # 标题在 heading/section_path，正文只放行数据（title/text 分开存）
+    assert first.section_path[-1] == "表A"
+    assert first.text.startswith("年度: 2019")
 
 
 def test_exstruct_optional_backend_falls_back_when_unavailable(tmp_path: Path) -> None:
@@ -167,3 +168,12 @@ def test_exstruct_optional_backend_falls_back_when_unavailable(tmp_path: Path) -
             os.environ.pop("HELPER_XLSX_BACKEND", None)
         else:
             os.environ["HELPER_XLSX_BACKEND"] = old
+
+
+def test_cell_newlines_stay_in_one_row() -> None:
+    """单元格内换行折叠成 /，避免一个 Excel 行被切成多块。"""
+    from app.core.parse.xlsx import _cell_text
+
+    text = _cell_text("A. 选项一\nB. 选项二\nC. 选项三")
+    assert "\n" not in text  # 不再带换行
+    assert text == "A. 选项一 / B. 选项二 / C. 选项三"  # 分隔语义保留

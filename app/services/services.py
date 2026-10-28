@@ -41,10 +41,25 @@ def worker_enabled() -> bool:
 
 
 def qdrant_url() -> str:
-    """当前 Qdrant 地址（空串 = 本地嵌入式）。"""
+    """当前 Qdrant 地址（服务端模式；默认 127.0.0.1:6333）。"""
     return _services.qdrant_url()
 
 
 def qdrant_port() -> int:
     """当前 Qdrant HTTP 端口。"""
     return _services.qdrant_port()
+
+
+def port_summary(ui_port: int = 0) -> dict[str, Any]:
+    """各进程端口汇总（启动日志/排障用）：UI / Qdrant HTTP+gRPC / worker 对话 RPC。"""
+    return _services.port_summary(ui_port)
+
+
+def worker_rpc_port() -> int:
+    """worker 的对话 RPC 端口（它写 ``data/worker.port``；未就绪为 0）。"""
+    return _services.worker_rpc_port()
+
+
+def last_cleanup() -> dict[str, list[str]]:
+    """上次退出残留子进程的清理结果（``killed`` / ``failed``，启动提示用）。"""
+    return _services.last_cleanup()

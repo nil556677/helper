@@ -69,6 +69,7 @@ class Param:
         help_text: 给用户看的一句话（界面的 tooltip）。
         minimum / maximum: 允许范围；``None`` 表示不限制。
         cast: 从 settings 读出来时的转换（int / float / str / bool）。
+        choices: 允许的取值（字符串枚举）；不在表里的值在 :meth:`coerce` 时夹回默认。
         secret: 是不是凭证类参数。``True`` 时**落库前用 DPAPI 加密**（与 LLM key 一致），
             读取时自动解密；界面上应当只回显尾号。
     """
@@ -82,6 +83,7 @@ class Param:
     minimum: float | None = None
     maximum: float | None = None
     cast: type = int
+    choices: tuple[str, ...] = ()
     secret: bool = False
 
     def coerce(self, value: object) -> object:
@@ -98,6 +100,8 @@ class Param:
         try:
             converted = self.cast(value)  # type: ignore[call-arg]
         except (TypeError, ValueError):
+            return self.default
+        if self.choices and str(converted) not in self.choices:
             return self.default
         if isinstance(converted, int | float):
             if self.minimum is not None and converted < self.minimum:
@@ -118,6 +122,7 @@ def _p(
     minimum: float | None = None,
     maximum: float | None = None,
     cast: type = int,
+    choices: tuple[str, ...] = (),
     secret: bool = False,
 ) -> Param:
     return Param(
@@ -130,6 +135,7 @@ def _p(
         minimum=minimum,
         maximum=maximum,
         cast=cast,
+        choices=choices,
         secret=secret,
     )
 
@@ -232,34 +238,7 @@ VECTOR: tuple[Param, ...] = (
 
 #: **检索与精排**（只影响查询时的行为，**不进指纹**——改它不需要重建索引）。
 RETRIEVAL: tuple[Param, ...] = (
-    _p(
-        "retrieval.dense_limit",
-        "向量召回条数",
-        50,
-        Aspect.QUERY,
-        help_text="两路召回之一。改它只影响查询，不用重建。",
-        minimum=1,
-        maximum=500,
-    ),
-    _p(
-        "retrieval.sparse_limit",
-        "词法召回条数",
-        50,
-        Aspect.QUERY,
-        help_text="两路召回之一。改它只影响查询，不用重建。",
-        minimum=1,
-        maximum=500,
-    ),
     _p("retrieval.rrf_k", "RRF k", 60, Aspect.QUERY, minimum=1, maximum=1000),
-    _p(
-        "retrieval.top_k",
-        "送模型的证据条数",
-        5,
-        Aspect.QUERY,
-        help_text="最终进 Prompt 的条数。",
-        minimum=1,
-        maximum=50,
-    ),
     _p(
         "retrieval.score_floor",
         "相似度阈值",
@@ -270,6 +249,68 @@ RETRIEVAL: tuple[Param, ...] = (
         maximum=1.0,
         cast=float,
     ),
+    _p(
+        "retrieval.rewrite.timeout_ms",
+        "查询重写超时（ms）",
+        1500,
+        Aspect.QUERY,
+        minimum=200,
+        maximum=10000,
+    ),
+    _p(
+        "retrieval.rewrite.max_chars",
+        "查询重写长度上限",
+        120,
+        Aspect.QUERY,
+        minimum=20,
+        maximum=500,
+    ),
+    _p("retrieval.cache.enabled", "启用检索缓存", True, Aspect.QUERY, cast=bool),
+    _p(
+        "retrieval.cache.ttl_s",
+        "缓存 TTL（秒）",
+        604800,
+        Aspect.QUERY,
+        minimum=60,
+        maximum=2592000,
+    ),
+    _p(
+        "retrieval.cache.negative_ttl_s",
+        "空结果缓存 TTL（秒）",
+        300,
+        Aspect.QUERY,
+        minimum=10,
+        maximum=3600,
+    ),
+    _p(
+        "retrieval.cache.max_entries",
+        "缓存条数上限",
+        512,
+        Aspect.QUERY,
+        minimum=16,
+        maximum=8192,
+    ),
+    _p(
+        "retrieval.timeout_ms",
+        "单轮检索预算（ms）",
+        6000,
+        Aspect.QUERY,
+        minimum=500,
+        maximum=30000,
+    ),
+    _p(
+        "retrieval.stage_timeout_ms",
+        "单通道预算（ms）",
+        2500,
+        Aspect.QUERY,
+        minimum=200,
+        maximum=10000,
+    ),
+    _p("tools.query_order.enabled", "启用订单工具", True, Aspect.QUERY, cast=bool),
+    _p("tools.query_express.enabled", "启用快递工具", True, Aspect.QUERY, cast=bool),
+    _p("tools.weather.enabled", "启用天气工具", True, Aspect.QUERY, cast=bool),
+    _p("tools.weather.default_city", "天气默认城市", "北京", Aspect.QUERY, cast=str),
+    _p("tools.time.enabled", "启用时间工具", True, Aspect.QUERY, cast=bool),
     _p("rerank.enabled", "启用精排", True, Aspect.QUERY, cast=bool),
     _p("rerank.candidates", "精排候选数", 10, Aspect.QUERY, minimum=2, maximum=100),
     _p(
@@ -320,8 +361,20 @@ STORAGE: tuple[Param, ...] = (
     ),
 )
 
+#: **运行**（agent 行为；只影响查询期，不进指纹）。
+AGENT: tuple[Param, ...] = (
+    _p(
+        "agent.compaction.slot",
+        "压缩摘要 LLM 槽位",
+        "llm-compact",
+        Aspect.QUERY,
+        help_text="压缩远期记忆（会话摘要）用的模型槽位；默认用「压缩摘要模型」卡，未配置时自动回退「大模型」。",
+        cast=str,
+    ),
+)
+
 #: 全部参数，按 key 索引（**唯一清单**）。
-ALL: tuple[Param, ...] = CHUNKING + VECTOR + RETRIEVAL + LEXICAL + STORAGE
+ALL: tuple[Param, ...] = CHUNKING + VECTOR + RETRIEVAL + LEXICAL + STORAGE + AGENT
 
 BY_KEY: dict[str, Param] = {param.key: param for param in ALL}
 
@@ -331,6 +384,7 @@ GROUPS: tuple[tuple[str, tuple[Param, ...]], ...] = (
     ("向量", VECTOR),
     ("检索与精排", RETRIEVAL),
     ("存储", STORAGE),
+    ("运行", AGENT),
 )
 
 

@@ -19,9 +19,7 @@ from app.ui.components.dialog import notify
 
 
 def render() -> None:
-    """画「数据与存储」分区（本地 import：避免与 settings 包的循环 import）。"""
-    from app.ui.screens.settings import vector
-
+    """画「数据与存储」分区。"""
     overview = settings_service.data_overview()
 
     def open_it(target: str, what: str) -> None:
@@ -35,40 +33,33 @@ def render() -> None:
         else:
             notify(f"打不开{what} —— 它可能已被删掉或移到别处", kind="negative")
 
-    with ui.column().classes("w-full gap-4"):
-        with ui.column().classes("hp-page-head gap-1"):
-            ui.label("数据与存储").classes("hp-page-title")
-
-        # ---- 数据目录（备份的入口）----
-        with ui.column().classes("hp-card w-full gap-3"):
-            card_head("folder_open", "数据目录")
-            with ui.row().classes("hp-field-row"):
-                with ui.column().classes("hp-field-main gap-0"):
-                    ui.label("数据目录").classes("hp-field-name")
-                    ui.label("备份 = 复制这个目录：资料、数据库、设置都在里面。").classes(
-                        "hp-field-help"
-                    )
-                ui.label(overview.data_dir).classes("hp-path")
-            with ui.row().classes("hp-actions"):
-                ui.button(
-                    "打开数据目录",
-                    icon="folder_open",
-                    on_click=partial(open_it, overview.data_dir, "数据目录"),
-                ).props("flat dense no-caps").classes("hp-row-button w-auto").mark("data-open-dir")
-                ui.button(
-                    "打开日志目录",
-                    icon="description",
-                    on_click=partial(open_it, overview.log_file, "日志目录"),
-                ).props("flat dense no-caps").classes("hp-row-button w-auto").mark("data-open-log")
-            with ui.expansion("详细信息（排查问题时用）", icon="bug_report").classes(
-                "w-full text-sm hp-sources"
-            ), ui.column().classes("w-full gap-2 p-2"):
-                for spot in overview.spots:
-                    _detail_row(spot.label, spot.path)
-                _detail_row("数据结构版本", str(overview.schema_version))
-
-    # 向量子区接在当前分区内容的下面（同一滚动区）
-    vector.render()
+    # ---- 数据目录（备份的入口）----
+    with ui.column().classes("w-full gap-4"), ui.column().classes("hp-card w-full gap-3"):
+        card_head("folder_open", "数据目录")  # 卡片头
+        with ui.row().classes("hp-field-row"):
+            with ui.column().classes("hp-field-main gap-0"):
+                ui.label("数据目录").classes("hp-field-name")  # 名称
+                ui.label("备份 = 复制这个目录：资料、数据库、设置都在里面。").classes(
+                    "hp-field-help"
+                )  # 说明
+            ui.label(overview.data_dir).classes("hp-path")  # 路径
+        with ui.row().classes("hp-actions"):
+            ui.button(
+                "打开数据目录",
+                icon="folder_open",
+                on_click=partial(open_it, overview.data_dir, "数据目录"),
+            ).props("flat dense no-caps").classes("hp-row-button w-auto").mark("data-open-dir")  # 打开数据目录
+            ui.button(
+                "打开日志目录",
+                icon="description",
+                on_click=partial(open_it, overview.log_file, "日志目录"),
+            ).props("flat dense no-caps").classes("hp-row-button w-auto").mark("data-open-log")  # 打开日志
+        with ui.expansion("详细信息（排查问题时用）", icon="bug_report").classes(
+            "w-full text-sm hp-sources"
+        ), ui.column().classes("w-full gap-2 p-2"):  # 折叠
+            for spot in overview.spots:  # 逐项
+                _detail_row(spot.label, spot.path)  # 一行
+            _detail_row("数据结构版本", str(overview.schema_version))  # 版本
 
 
 def _detail_row(name: str, value: str) -> None:

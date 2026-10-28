@@ -16,6 +16,7 @@ from typing import Any
 
 from nicegui import run, ui
 
+from app.core.paths import unique_path  # 导出不覆盖同名文件
 from app.services import knowledge as knowledge_service
 from app.ui.components.dialog import confirm, notify
 from app.ui.components.format import human_size
@@ -55,6 +56,7 @@ class _List:
         self.empty: ui.label | None = None
         self.empty_action: ui.button | None = None
         self.pager_box: ui.column | None = None
+        self.order_btn: ui.button | None = None  # 排序方向按钮（要随方向更新的图标）
 
         self._build()
         self.refresh(force=True)
@@ -96,8 +98,10 @@ class _List:
         self.seen["pager"] = mark
         self.pager_box.clear()
         with self.pager_box:
-            if page.total:
+            if int(page.total or 0) > 0:
                 render_pager(self.state, on_change=self.refresh, noun="份")
+            else:
+                ui.label("共 0 份资料").classes("hp-field-help")
 
     def _draw_rows(self, page: Any, force: bool) -> None:
         """行内容：筛选/页码/选中态/行数据任一变了才重画。"""
@@ -184,14 +188,15 @@ class _List:
                 placeholder="按名称筛选…",
                 value=self.filters["query"],
                 on_change=lambda event: self._search(str(event.value or "")),
-            ).props("outline dense clearable").classes("hp-search").mark("kb-search")
+            ).props("outline dense clearable debounce=300").classes("hp-search").mark("kb-search")
             ui.select(
                 {
                     "": "全部状态",
                     "pending": "待处理",
                     "indexing": "处理中",
-                    "ready": "就绪",
+                    "indexed": "就绪",
                     "failed": "失败",
+                    "superseded": "已退场",
                 },
                 value=self.filters.get("status", ""),
                 on_change=lambda event: self._filter_changed("status", str(event.value or "")),
@@ -207,12 +212,10 @@ class _List:
                 value=self.filters.get("sort", "updated_at"),
                 on_change=lambda event: self._filter_changed("sort", str(event.value or "updated_at")),
             ).props("outline dense options-dense").classes("hp-filter").mark("kb-sort")
-            ui.button(
-                icon="swap_vert",
-                on_click=lambda: self._filter_changed(
-                    "order", "asc" if self.filters.get("order", "desc") == "desc" else "desc"
-                ),
-            ).props("flat dense round").mark("kb-order").tooltip("切换升序/降序")
+            self.order_btn = ui.button(
+                icon="arrow_downward",
+                on_click=lambda: self._toggle_order(),
+            ).props("flat dense round").mark("kb-order").tooltip("当前降序；点一下切升序")
             ui.space()
             ui.button("全选本页", icon="select_all", on_click=lambda: self._select_page()).props(
                 "flat dense no-caps"
@@ -247,14 +250,32 @@ class _List:
         self.refresh(force=True)
 
     def _filter_changed(self, key: str, value: str) -> None:
+        """筛选变化：回第一页、**清空已选**（看不见的选中最容易让人搞不清选了什么）。"""
         self.filters[key] = value
         self.state.page = 1
+        self.picked.clear()
+        self._sync_order_btn()
         self.refresh(force=True)
+
+    def _toggle_order(self) -> None:
+        """切换升序/降序。"""
+        next_order = "asc" if self.filters.get("order", "desc") == "desc" else "desc"
+        self._filter_changed("order", next_order)
+
+    def _sync_order_btn(self) -> None:
+        """排序方向按钮显示**当前方向**（图标 + 悬停说明），不用用户去猜。"""
+        if self.order_btn is None:
+            return
+        desc = self.filters.get("order", "desc") == "desc"
+        self.order_btn.props(f'icon={"arrow_downward" if desc else "arrow_upward"}')
+        self.order_btn.tooltip("当前降序；点一下切升序" if desc else "当前升序；点一下切降序")
+        self.order_btn.update()
 
     def _clear_filters(self) -> None:
         self.filters["query"] = ""
         self.filters["status"] = ""
         self.state.page = 1
+        self.picked.clear()
         self.refresh(force=True)
 
     def _toggle_pick(self, doc_id: int) -> None:
@@ -290,11 +311,19 @@ class _List:
         notify(f"已排 {count} 份资料的向量化任务（任务页可见进度）", kind="positive")
         self.refresh(force=True)
 
-    def _batch_export(self) -> None:
+    async def _batch_export(self) -> None:
+        """批量导出：打包放线程池（大库会卡），且**不覆盖已有同名文件**。"""
         if not self.picked:
             return
-        target = Path.home() / "Downloads" / "知识库导出.zip"
-        report = knowledge_service.export(sorted(self.picked), target)
+        picked = sorted(self.picked)
+        target = unique_path(Path.home() / "Downloads" / "知识库导出.zip")
+        try:
+            report = await run.io_bound(knowledge_service.export, picked, target)
+        except Exception as exc:
+            notify(f"导出失败：{exc}", kind="negative")
+            return
+        if report is None:  # 取消/退出中
+            return
         notify(
             f"已导出 {report['documents']} 份（{report['files']} 个副本）→ {report['path']}",
             kind="positive",
@@ -308,6 +337,8 @@ class _List:
             picked = sorted(self.picked)
             try:
                 removed = await run.io_bound(knowledge_service.delete, picked)
+                if removed is None:  # 取消/退出中
+                    return
                 notify(f"已删除 {removed} 份资料", kind="positive")
             except Exception as exc:
                 notify(f"删除失败：{exc}", kind="negative")
@@ -359,7 +390,7 @@ class _List:
                     status.tooltip("这份没能用上；可以删掉它再换一份")
                 elif item.status == "indexing":
                     status.tooltip("文字已经能搜到，向量索引还在后台建（任务页可见进度）")
-            with ui.element("div").classes("hp-col-actions"):
+            with ui.element("div").classes("hp-col-actions hp-row-actions"):
                 ui.button(
                     icon="open_in_new", on_click=lambda doc_id=item.id: self.open_doc("detail", doc_id)
                 ).props("flat dense round size=sm").classes("hp-icon-view hp-btn-icon").mark(

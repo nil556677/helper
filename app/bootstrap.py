@@ -24,7 +24,9 @@ fd 1/2 重定向（会把测试进程的输出也劫走）与 stdlib ``logging``
 
 from __future__ import annotations
 
+import contextlib
 import tempfile
+import threading
 from pathlib import Path
 
 from loguru import logger
@@ -60,6 +62,24 @@ def pin_temp_dir() -> Path:
     return target
 
 
+def start_model_warmup() -> None:  # 后台预热
+    """启动后异步加载嵌入/精排，避免第一问等 3–5 秒。"""
+    def _warm() -> None:  # 后台线程
+        """失败只告警，不阻断启动。"""
+        with contextlib.suppress(Exception):  # 模型缺失也不崩
+            from app.core.embed import embed_texts  # 延迟导入
+
+            embed_texts(["预热"])  # 触发加载
+            logger.info("嵌入模型预热完成")  # 日志
+        with contextlib.suppress(Exception):  # 精排缺失也不崩
+            from app.core.rerank import score_pairs  # 延迟导入
+
+            score_pairs("预热", ["预热"])  # 触发加载
+            logger.info("精排模型预热完成")  # 日志
+
+    threading.Thread(target=_warm, name="model-warmup", daemon=True).start()  # 后台跑
+
+
 def ensure_ready() -> None:
     """保证运行前提（幂等：重复调用几乎零开销）。
 
@@ -91,43 +111,16 @@ def ensure_ready() -> None:
     # 3a. **先建库**：引导配置现在存在 settings 表里（config.json 只做一次性迁移）。
     version = schema.init_db()
     access.ensure_default()
-    # 首次运行且带了 Qdrant 二进制：默认走服务端模式（UI 不再打开本地嵌入式）。
-    # 没有二进制就保持本地嵌入式；用户界面「本机服务」里可再切。
-    # 端口要先挑一个**空闲**的：6333 被别的程序占着时不能把自己的 URL 指过去，
-    # 否则 UI 会连到别人的 Qdrant 上（数据串库）。
+    # v1：**只用 Qdrant 服务端模式**。没配 ``vector.url`` 时默认 127.0.0.1:6333，
+    # 由 helper 自己拉起 ``bin/qdrant/qdrant.exe``（存储 data/qdrant-server）。
     try:
-        import socket
-
         from app.core.config import store as params_store
-        from app.core.proc.lifecycle import qdrant_binary
 
-        def _free_port(start: int = 6333) -> int | None:
-            def _bindable(candidate: int) -> bool:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                    try:
-                        sock.bind(("127.0.0.1", candidate))
-                    except OSError:
-                        return False
-                return True
-
-            for candidate in range(start, start + 20):
-                # HTTP=port、gRPC=port+1，两个都要空闲
-                if candidate <= 65534 and _bindable(candidate) and _bindable(candidate + 1):
-                    return candidate
-            return None
-
-        if not str(params_store.load()["vector.url"] or "").strip() and qdrant_binary().is_file():
-            port = _free_port()
-            if port is not None:
-                params_store.save_values({"vector.url": f"http://127.0.0.1:{port}"})
-                logger.info(
-                    "检测到 bin/qdrant/qdrant.exe：默认启用 Qdrant 服务端模式（127.0.0.1:{}）",
-                    port,
-                )
-            else:
-                logger.warning("6333–6352 都被占用，暂不启用 Qdrant 服务端（保持本地嵌入式）")
+        if not str(params_store.load()["vector.url"] or "").strip():
+            params_store.save_values({"vector.url": "http://127.0.0.1:6333"})
+            logger.info("默认 Qdrant 服务端模式（127.0.0.1:6333）")
     except Exception as exc:
-        logger.warning("初始化 Qdrant 服务端默认值失败（保持本地嵌入式）：{}", exc)
+        logger.warning("初始化 Qdrant 服务端默认值失败：{}", exc)
     config = access.load()
     init_logging(config.log_level, debug=config.log_debug)
 
@@ -138,10 +131,8 @@ def ensure_ready() -> None:
     if hint:
         logger.warning(hint)
 
-    # 4a. 向量集合：旧名迁移（chunks/parents → rag_chunks/rag_parents）+ 保证存在。
-    #     失败不挡启动：向量层不可用时，导入/检索会另行明确报错，别让整个应用打不开。
-    #     **服务端模式要延后**：Qdrant sidecar 由入口在主程序生命周期里启动；这里先连
-    #     只会拿到"连接被拒绝"，集合永远建不出来。入口在 services.start() 之后再调。
+    # 4a. v1 向量集合：单集合 kb_chunks。
+    #     服务端模式要等 Qdrant sidecar 起来（入口 services.start() 之后）再建，这里跳过。
     try:
         from app.core.config import store as params_store
 
@@ -149,15 +140,13 @@ def ensure_ready() -> None:
     except Exception:
         server_mode = False
     if server_mode:
-        logger.info("服务端模式：向量集合自检延后到 Qdrant 启动后（由主程序入口执行）")
+        logger.info("服务端模式：向量集合自检延后到 Qdrant 启动后")
     else:
         try:
-            from app.core.vector import api as vector_api
+            from app.integrations import qdrant as qi
 
-            vector_api.ensure_collections()
+            qi.ensure_collection(qi.qdrant_client())
         except Exception as exc:
-            # 向量库启动时被占/没起来是预期内的情况：单行 warning（不刷 traceback），
-            # 界面各页已各自降级，导入/检索会另行明确报错。
             logger.warning("向量集合自检失败（不影响启动，检索/导入会另行报错）：{}", exc)
 
     # 4b. T3.2 数据库体检：只在"上次没干净退出"时做（干净退出会写标记，启动读一次就清掉）。

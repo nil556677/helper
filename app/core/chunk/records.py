@@ -56,6 +56,16 @@ class ChunkRecord:
     """docx 的"第几个 body 元素"（0 基）：没有页码时靠它定位回原文。"""
     hard_split: bool = False
     """这块是**硬切**出来的（原文这里没有标点可用于断句）——引用时如实说明。"""
+    role: str = "text"
+    """text / section_parent / table_parent / table_row / table_row_segment。"""
+    fetch_mode: int = 1
+    """0=取自己；1=取父块；2=取父块+兄弟块（按 segment_index 排序）。"""
+    table_uid: str | None = None
+    row_uid: str | None = None
+    row_no: int | None = None
+    segment_index: int | None = None
+    segment_count: int = 1
+    merged_ranges: tuple[tuple[int, int, int, int], ...] = ()
 
     @property
     def section(self) -> str:

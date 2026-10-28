@@ -87,6 +87,7 @@ def import_card(*, on_done: Any) -> None:
                         f"：{hint}" if hint else f"。支持：{knowledge_service.supported_formats()}"
                     )
                     notify(f"「{name}」不是支持的格式{reason}", kind="negative")
+                    _push(name, "不支持的格式", ok=False)  # 页内也留一条
                     return
                 target = knowledge_service.inbox_target(name)
                 await file.save(target)  # 流式落盘（大文件不整包进内存）
@@ -98,6 +99,7 @@ def import_card(*, on_done: Any) -> None:
                     with contextlib.suppress(OSError):
                         target.unlink(missing_ok=True)
                     notify(f"「{name}」的内容已经在资料库里了，跳过", kind="info")
+                    _push(name, "内容已在库里，跳过")  # 页内反馈
                 else:
                     doc_id = payload.get("doc_id")
                     try:
@@ -110,21 +112,47 @@ def import_card(*, on_done: Any) -> None:
                         knowledge_service.discard_pending(doc_id)
                         doc_id = None
                         raise
-                    notify(f"「{name}」已加入队列（任务 #{job_id}）", kind="positive")
+                    _push(name, f"已排队（任务 #{job_id}）")  # 页内反馈（不再逐文件弹 toast）
             except knowledge_service.UploadTooLarge as exc:
                 notify(f"「{name}」超过上传上限：{exc}", kind="negative")
+                _push(name, "超过上传上限", ok=False)  # 页内反馈
             except Exception as exc:
                 logger.exception("上传失败：{}", name)
                 if isinstance(exc, OSError):
                     notify(f"「{name}」上传失败：写暂存文件出错（磁盘空间或权限）", kind="negative")
                 else:
                     notify(f"「{name}」上传失败：{exc}", kind="negative")
+                _push(name, "上传失败", ok=False)  # 页内反馈
             finally:
                 # 走到这里还没进队列/没跳过 → 暂存文件没有任务会来读，删掉
                 if target is not None and doc_id is None:
                     with contextlib.suppress(OSError):
                         target.unlink(missing_ok=True)
                 on_done()
+
+        # 本次导入的页内反馈（最多 8 条）：多文件时不再只靠 toast 连弹
+        feedback_label = ui.label("本次导入").classes("hp-field-help")
+        feedback_label.visible = False  # 有内容才显示
+        feedback = ui.column().classes("w-full gap-1")
+        feedback_rows: list[Any] = []
+
+        def _push(name: str, text: str, *, ok: bool = True) -> None:
+            """往页内反馈里追加一条（超 8 条丢最早的）。"""
+            feedback_label.visible = True  # 有内容才显示标题
+            feedback_label.update()  # 刷新
+            with feedback:  # 必须画在反馈容器里（不是事件回调的临时槽位）
+                row = ui.row().classes("w-full items-center gap-2 no-wrap")  # 一行
+                with row:
+                    ui.icon("check_circle" if ok else "error_outline").classes(
+                        "text-base hp-card-icon"
+                    )  # 图标
+                    ui.label(name).classes("hp-col-name").style("flex: 1;")  # 文件名
+                    ui.label(text).classes("hp-field-help" if ok else "hp-note-error")  # 状态
+            feedback_rows.append(row)  # 记下
+            if len(feedback_rows) > 8:  # 只留最近 8 条
+                old = feedback_rows.pop(0)
+                with contextlib.suppress(Exception):
+                    old.delete()
 
         ui.upload(
             label="选择文件…",

@@ -25,12 +25,12 @@
 推导链（全部由模型的 ``PAD_TO`` 一个数得出）::
 
     child_size     = PAD_TO − SAFETY_MARGIN_TOKENS   # 子块必须塞得进嵌入宽度
-    child_overlap  = child_size × 15%
+    child_overlap  = child_size × 10%
     min_child_size = child_size × 40%
     parent_size    = child_size × 5                  # 一个证据块装 5 个检索单位
     parent_overlap = parent_size × 10%
 
-以模型默认 ``PAD_TO=320`` 为例：child=300、overlap=45、min=120、parent=1500、parent_overlap=150。
+以模型默认 ``PAD_TO=320`` 为例：child=300、overlap=30、min=120、parent=1500、parent_overlap=150。
 """
 
 from __future__ import annotations
@@ -43,7 +43,8 @@ from ._shared import _MIN_CHILD_RATIO
 SAFETY_MARGIN_TOKENS = 20
 
 #: 子块重叠占 ``child_size`` 的比例（边界句两边都在，防"答案正好在缝里"）。
-CHILD_OVERLAP_RATIO = 0.15
+#: 默认 10%：与父块同一口径，语义连贯又不让相邻 child 过度重复。
+CHILD_OVERLAP_RATIO = 0.10
 
 #: 一个 parent 装几个 child（证据块 = 若干个检索单位）。
 CHILDREN_PER_PARENT = 5
@@ -88,7 +89,7 @@ def derive(pad_to: int) -> ChunkSizes:
         # 证据块 = 5 个检索单位；超长节再分时的重叠取 10%
         parent_size=parent,
         parent_overlap=round(parent * PARENT_OVERLAP_RATIO),
-        # 15% 重叠：边界句两边都在，防"答案正好在缝里"
+        # 10% 重叠：边界句两边都在，防"答案正好在缝里"
         child_size=child,
         child_overlap=round(child * CHILD_OVERLAP_RATIO),
         # 软下限 40%：太短的尾块在同一块内并回前一块（不跨块）

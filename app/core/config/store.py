@@ -88,7 +88,18 @@ def load() -> Config:
     values: dict[str, object] = {}
     for row in rows:
         key = str(row["key"])
-        if not key.startswith(("chunk.", "embed.", "retrieval.", "rerank.", "tokenize.", "vector.")):
+        if not key.startswith(
+            (
+                "agent.",
+                "chunk.",
+                "embed.",
+                "retrieval.",
+                "rerank.",
+                "tokenize.",
+                "vector.",
+                "tools.",
+            )
+        ):
             continue  # 别把界面偏好（窗口几何之类）当参数读进来
         try:
             value = json.loads(str(row["value_json"]))
@@ -152,7 +163,25 @@ def aspect_extra(aspect: Aspect) -> dict[str, str]:
         from app.core.retrieval import terms  # 局部导入：避免 config 加载时拉起分词栈
 
         extra["tokenize.terms_hash"] = terms.terms_hash()
+        extra["sparse.stats"] = _sparse_stats_hash()
     return extra
+
+
+def _sparse_stats_hash() -> str:
+    """sparse 统计快照（N/avgdl）——进词法指纹，sparse 重建/入库后指纹变化。
+
+    这样"只重算词法"和查询缓存能感知 sparse 数据面的变化（见混合搜索计划）。
+    """
+    try:
+        from app.core.db.connection import get_connection
+
+        rows = get_connection().execute(
+            "SELECT key, value FROM sparse_meta WHERE key IN ('N', 'avgdl')"
+        ).fetchall()
+        values = {str(row["key"]): str(row["value"]) for row in rows}
+        return f"{values.get('N', '0')}|{values.get('avgdl', '0')}"
+    except Exception:
+        return "0|0"
 
 
 def compute_fingerprints(config: Config) -> dict[Aspect, str]:

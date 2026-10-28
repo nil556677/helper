@@ -594,6 +594,7 @@ def _csv_unit(path: Path, name: str) -> Unit:
                 text=rendered,
                 content_type=TYPE_TABLE,
                 table_ref=f"csv:{name}#1",
+                table_title=str(name),
                 row_from=1,
                 row_to=len(padded),
                 col_from=1,
@@ -958,7 +959,7 @@ def _md_unit(path: Path) -> Unit:
                             line_to=line_to,
                         )
                     )
-            text = str(token.content or "").strip()
+            text = _md_inline(str(token.content or "")).strip()
             if text and not looks_like_article_meta(text):
                 prefix = "> " * quote_depth
                 if item_markers:

@@ -21,6 +21,10 @@ def human_time(stamp: float | None, *, empty: str = "还没") -> str:
     """
     if not stamp:
         return empty
+    try:
+        stamp = float(stamp)  # 归一：坏数据（字符串时间戳）不炸界面，直接当作"没有"
+    except (TypeError, ValueError):
+        return empty
     seconds = max(0.0, datetime.now().timestamp() - stamp)
     if seconds < 10:
         return "刚刚"

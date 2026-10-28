@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from nicegui import ui
+from nicegui import run, ui
 
 from app.services import tasks as tasks_service
 from app.ui.components.auto_refresh import AutoRefresh
@@ -154,62 +154,64 @@ def _show_details(job_id: int) -> None:
         notify("这个任务已经不在库里了", kind="info")
         return
 
-    dialog, close = custom(title=f"{job.title} · 任务 #{job.id}")
-    with dialog:
+    def _body(close: Any) -> None:
+        """正文（必须画在卡片里：custom() 只建壳，content 回调里画）。"""
         ui.label(
             f"{job.status_label} · 第 {job.attempts}/{job.max_attempts} 次尝试"
             f" · 入队 {human_time(job.created_at)}"
-        ).classes("hp-field-help")
+        ).classes("hp-field-help")  # 状态行
         # 时间三件套 + 耗时：排查"这条任务等了多久、跑了多久"最直接的一行
         ui.label(
             " · ".join(
                 [
-                    f"开始 {human_time(job.started_at, empty='还没开始')}",
-                    f"结束 {human_time(job.finished_at, empty='还没结束')}",
-                    f"耗时 {human_duration(job.duration_s)}",
+                    f"开始 {human_time(job.started_at, empty='还没开始')}",  # 开始
+                    f"结束 {human_time(job.finished_at, empty='还没结束')}",  # 结束
+                    f"耗时 {human_duration(job.duration_s)}",  # 耗时
                 ]
             )
-        ).classes("hp-field-help")
+        ).classes("hp-field-help")  # 时间行
 
         # 参数：所有任务统一在这里展开（任务类声明的参数形状，入队时已校验过）
         if job.params:
             with ui.expansion("参数", icon="tune", value=True).classes("w-full hp-sources"):
-                for item in job.params:
+                for item in job.params:  # 逐个参数
                     with ui.row().classes("w-full items-start gap-2 no-wrap"):
-                        ui.label(item.key).classes("hp-field-name").style("min-width: 96px;")
-                        ui.label(item.value).classes("hp-field-help").style(
+                        ui.label(item.key).classes("hp-field-name").style("min-width: 96px;")  # 名
+                        ui.label(item.value).classes("hp-field-help").style(  # 值
                             "word-break: break-all;"
-                        ).tooltip(item.full)
+                        ).tooltip(item.full)  # 悬停看全文
 
         # 结果：任务跑完统一写进来的那句话（TaskResult.note）
         if job.result:
-            ui.label(f"结果：{job.result}").classes("hp-field-name")
+            ui.label(f"结果：{job.result}").classes("hp-field-name")  # 结果
         if job.error:
             ui.label(f"{job.error_label}：{job.error}" if job.error_label else job.error).classes(
                 "hp-note-error"
-            )
+            )  # 错误
 
         if not job.events:
-            ui.label("这个任务没有失败或中断记录。").classes("hp-field-help")
-        for event in job.events:
+            ui.label("这个任务没有失败或中断记录。").classes("hp-field-help")  # 空态
+        for event in job.events:  # 逐条事件
             with ui.column().classes("w-full gap-0 hp-event"):
                 with ui.row().classes("items-center gap-2 no-wrap"):
-                    ui.label(event.kind_label).classes("hp-field-name")
+                    ui.label(event.kind_label).classes("hp-field-name")  # 类型
                     if event.attempt:
-                        ui.label(f"第 {event.attempt} 次").classes("hp-field-help")
-                    ui.space()
-                    ui.label(human_time(event.at)).classes("hp-field-help")
+                        ui.label(f"第 {event.attempt} 次").classes("hp-field-help")  # 次数
+                    ui.space()  # 撑开
+                    ui.label(human_time(event.at)).classes("hp-field-help")  # 时间
                 if event.message:
-                    ui.label(event.message).classes("hp-field-help")
+                    ui.label(event.message).classes("hp-field-help")  # 消息
                 if event.detail:
                     with ui.expansion("完整信息（报错原文）").classes("w-full hp-sources"):
-                        ui.label(event.detail).classes("hp-detail-mono")
+                        ui.label(event.detail).classes("hp-detail-mono")  # 原文
 
-        with ui.row().classes("hp-actions w-full justify-end"):
+        with ui.row().classes("hp-actions w-full justify-end"):  # 底部动作
             ui.button("关闭", on_click=close).props("flat dense no-caps").classes(
                 "hp-row-button w-auto"
-            )
-    dialog.open()
+            )  # 关闭
+
+    dialog, _close = custom(title=f"{job.title} · 任务 #{job.id}", content=_body)  # 统一壳（正文在卡片里）
+    dialog.open()  # 打开
 
 
 def render() -> None:
@@ -234,9 +236,9 @@ def render() -> None:
 
     with ui.column().classes("w-full gap-4"):
         with ui.row().classes("w-full items-center gap-2"):
-            ui.label("任务").classes("hp-page-title")
-            status = ui.label("").classes("hp-status")
-            ui.space()
+            status = ui.label("").classes("hp-status")  # 队列状态（标题在左栏，不再重复）
+            ui.space()  # 撑开
+            # 页面级动作统一放**页顶右侧**（暂停/重试/清理 + 自动刷新），列表卡里只管列表
             pause_button = ui.button("暂停队列", icon="pause").props(
                 "flat dense no-caps"
             ).classes("hp-row-button w-auto").mark("task-pause")
@@ -251,6 +253,7 @@ def render() -> None:
             ).classes("hp-row-button w-auto").mark("task-cleanup").tooltip(
                 "清理孤儿副本、暂存残留、合并 WAL、清历史（排成一条维护任务）"
             )
+            auto_box = ui.row().classes("items-center gap-2 no-wrap")  # 自动刷新位置（页顶）
         hint = ui.label("").classes("hp-field-help")
 
         running_box = ui.column().classes("hp-card w-full gap-2 hp-tasks-running")
@@ -260,8 +263,7 @@ def render() -> None:
                 ui.icon("list_alt").classes("text-base hp-card-icon")
                 ui.label("任务列表").classes("hp-card-title")
                 count_label = ui.label("").classes("hp-field-help")
-                ui.space()
-                auto_box = ui.row().classes("items-center gap-2 no-wrap")
+                ui.space()  # 撑开（自动刷新已上移到页顶右侧）
             with ui.row().classes("hp-toolbar w-full items-center gap-2"):
                 # 筛选：数据多的时候先分组再翻页（"进行中"是默认视角）。
                 # 用**带 marker 的普通按钮**而不是 ui.toggle：toggle 的内部按钮在测试里点不动
@@ -298,15 +300,32 @@ def render() -> None:
 
     # ---------------- 动作 ----------------
 
-    def _retry_all() -> None:
-        count = tasks_service.retry_all_failed()
+    async def _retry_all() -> None:
+        """重试全部失败：DB 批量更新，放线程池，别卡界面。"""
+        count = await run.io_bound(tasks_service.retry_all_failed)
+        if count is None:  # 取消/退出中
+            return
         notify(
             f"已重新排队 {count} 条" if count else "没有失败的任务", kind="positive" if count else "info"
         )
         refresh(force=True)
 
     def _clear() -> None:
-        count = tasks_service.clear_finished()
+        """清理已完成：**破坏性操作，先确认**（和批量删除一致）。"""
+        confirm(
+            "清理已完成的任务记录？",
+            "会删掉所有已完成 / 失败 / 已取消的记录（正在跑和排队的不动），不可恢复。",
+            _do_clear,
+            confirm_label="清理",
+            danger=True,
+            confirm_mark="task-clear-confirm",
+        )
+
+    async def _do_clear() -> None:
+        """真正执行清理（DB 删除放线程池）。"""
+        count = await run.io_bound(tasks_service.clear_finished)
+        if count is None:  # 取消/退出中
+            return
         notify(f"清理了 {count} 条历史记录", kind="positive")
         refresh(force=True)
 
@@ -361,14 +380,17 @@ def render() -> None:
 
     def _batch_delete() -> None:
         """删历史记录：破坏性操作，确认一次（在跑/排队的删不掉，服务层挡着）。"""
+
+        async def go() -> None:
+            """DB 批量删除放线程池，删完刷新。"""
+            await run.io_bound(tasks_service.delete_many, picked)
+            picked.clear()  # 删完清空选择
+            refresh(force=True)  # 刷新
+
         confirm(
             f"删掉选中的 {len(picked)} 条记录？",
             "只删已完成 / 失败 / 取消的记录（正在跑和排队的不动），事件记录一起删。",
-            lambda: (
-                tasks_service.delete_many(picked),
-                picked.clear(),
-                refresh(force=True),
-            ),
+            go,
             confirm_label="删掉",
             danger=True,
             confirm_mark="task-batch-confirm",

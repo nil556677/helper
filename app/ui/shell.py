@@ -28,6 +28,8 @@ from nicegui import ui
 
 from app import tasks as tasks_app
 from app.services import tasks as tasks_service
+from app.ui.components.dialog import confirm
+from app.ui.components.ime import IME_ENTER_GUARD  # 输入法组词保护（回车/Esc 别误触发）
 from app.ui.resources.theme import apply as apply_theme
 from app.ui.screens import FEATURES, MAIN_FEATURES, PINNED_FEATURES
 from app.ui.screens import settings as settings_screen
@@ -152,6 +154,10 @@ _RIGHTBAR_RESIZER_JS = (
     .replace("__MAIN_MIN__", str(MAIN_MIN_WIDTH))
 )
 
+#: 中文输入法组词时，回车/Esc 是"确认/取消候选词"，不能当成提交/取消改名。
+#: 这里复用公共常量（见 app/ui/components/ime.py），组词中不 emit。
+_IME_GUARD = IME_ENTER_GUARD
+
 
 
 def _toggle_sidebar(drawer: object, state: dict[str, bool]) -> None:
@@ -252,24 +258,96 @@ def build_shell() -> None:
         chat_box.set_visibility(False)
         settings_box.set_visibility(True)
 
+    #: 正在改名的会话 id（空 = 没在改）。rename 让列表清空，所以编辑态是"一个 id"。
+    editing: dict[str, str] = {"id": ""}  # 编辑态
+
     def refresh_conversations() -> None:
         """重画左栏的会话列表（新建 / 自动命名 / 追加了一轮都会触发）。"""
-        items = conversations.conversations()
-        conversation_box.clear()
-        if not items:
-            # 还没种子会话时不要调 current()——它会顺手建一个空会话，把种子会话挤掉
+        # 页面/浏览器已经关掉：元素随客户端删除，直接跳过（数据已经落在会话里）。
+        if conversation_box.is_deleted:
             return
-        active_id = conversations.current().id
-        with conversation_box, ui.column().classes('w-full gap-0'):
-            for conversation in items:
-                # 同样用 button（ui.item 的点击在真机不触发，见上面功能导航的注释）
-                classes = 'w-full hp-row-button hp-conv-row'
-                if conversation.id == active_id:
-                    classes += ' hp-row-active'
-                row = ui.button(conversation.title).props('flat dense no-caps align=left').classes(
-                    classes
-                ).mark(f'conv-{conversation.id}')
-                row.on('click', partial(open_conversation, conversation.id))
+        try:
+            items = conversations.conversations()
+            conversation_box.clear()
+            if not items:
+                # 还没种子会话时不要调 current()——它会顺手建一个空会话，把种子会话挤掉
+                return
+            active_id = conversations.current().id
+            with conversation_box, ui.column().classes('w-full gap-0'):
+                for conversation in items:
+                    # 行 = 标题 / 输入框 + 改名 + 删除；点标题切会话，改名时禁止点行。
+                    classes = 'w-full items-center gap-0 no-wrap hp-conv-row'  # 行不换行
+                    if conversation.id == active_id:
+                        classes += ' hp-row-active'
+                    with ui.row().classes(classes).mark(f'conv-{conversation.id}') as row:
+                        if editing['id'] == conversation.id:
+                            # 改名态：标题就地换成输入框（不渲染改名/删除，避免误点）。
+                            field = ui.input(value=conversation.title).props(
+                                'dense autofocus borderless'
+                            ).classes('flex-1 hp-conv-title-edit')  # 输入框
+                            field.on(  # Enter 提交
+                                'keydown.enter',
+                                lambda _e=None, f=field, cid=conversation.id: _commit_rename(cid, f.value),
+                                js_handler=_IME_GUARD,  # 组词中不提交
+                            )  # 结束
+                            field.on(  # Esc 取消
+                                'keydown.escape',
+                                lambda _e=None: _cancel_rename(),
+                                js_handler=_IME_GUARD,  # 组词中不取消
+                            )  # 结束
+                            field.on(  # 失焦提交
+                                'blur', lambda _e=None, f=field, cid=conversation.id: _commit_rename(cid, f.value)
+                            )  # 结束
+                        else:
+                            row.on('click', partial(open_conversation, conversation.id))
+                            title = ui.button(conversation.title).props(
+                                'flat dense no-caps align=left'
+                            ).classes('flex-1 min-w-0 hp-row-button hp-conv-title')
+                            title.on('click', partial(open_conversation, conversation.id))
+                            # 右侧动作组：两个图标**固定成一组**贴在行尾（避免被标题挤走/换行）。
+                            # 用纯 div 而不是 ui.row：Quasar 的 .row 带 wrap/默认对齐，会引入偏移。
+                            with ui.element('div').classes('hp-conv-actions'):
+                                # 重命名图标：只在 hover 浮现（计划 A 定的）。
+                                ui.button(
+                                    icon='edit',
+                                    on_click=partial(_start_rename, conversation),
+                                ).props('flat dense round size=sm').classes('hp-conv-edit').tooltip('重命名')
+                                ui.button(
+                                    icon='delete_outline',
+                                    on_click=partial(ask_delete_conversation, conversation),
+                                ).props('flat dense round size=sm').classes('hp-conv-delete').tooltip('删除对话')
+        except RuntimeError:
+            # clear()/with 期间客户端被删：这一帧不画了，不能把后台追加打断。
+            return
+
+    def _start_rename(conversation: Any) -> None:
+        """进入改名态：标题变输入框。"""
+        editing['id'] = conversation.id  # 记录
+        refresh_conversations()  # 重画（输入框 autofocus）
+
+    def _commit_rename(conversation_id: str, value: Any) -> None:
+        """提交改名；幂等（ENTER + blur 可能各触发一次）。"""
+        if editing['id'] != conversation_id:  # 已提交/已放弃
+            return  # 跳过
+        editing['id'] = ''  # 先退出编辑态，让 refresh 重画成普通标题
+        conversations.rename(conversation_id, str(value or ''))  # 落库 + 通知重画
+
+    def _cancel_rename() -> None:
+        """取消改名，还原标题（不落库）。"""
+        if not editing['id']:  # 没在改
+            return  # 跳过
+        editing['id'] = ''  # 退出
+        refresh_conversations()  # 重画还原
+
+    def ask_delete_conversation(conversation: Any) -> None:
+        """确认后删除会话；当前会话会切到下一个。"""
+        confirm(
+            "删除对话",
+            f"确定删除「{conversation.title}」？消息记录会一起删除，不能恢复。",
+            lambda: conversations.delete(conversation.id),
+            confirm_label="删除",
+            danger=True,
+        )
 
     def open_conversation(conversation_id: str) -> None:
         """切到某个会话：聊天页会把对话流整块重画。"""

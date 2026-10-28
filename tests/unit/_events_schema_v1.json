@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "event_types": [
+    "ack",
+    "state",
+    "stage",
+    "basis",
+    "settings",
+    "reasoning",
+    "conflict",
+    "approval",
+    "context",
+    "pii",
+    "tool",
+    "delta",
+    "replace",
+    "citation",
+    "usage",
+    "note",
+    "verify",
+    "done",
+    "cancelled",
+    "error",
+    "retry"
+  ],
+  "terminal": [
+    "cancelled",
+    "done",
+    "error"
+  ],
+  "envelope": {
+    "schema_version": "int=1",
+    "event_id": "str",
+    "run_id": "str=''",
+    "timestamp": "float=factory",
+    "type": "EventType",
+    "payload": "Any"
+  },
+  "kinds": {
+    "ack": {},
+    "state": {
+      "before": "str",
+      "after": "str",
+      "trigger": "str",
+      "reason": "str=''"
+    },
+    "stage": {
+      "stage_id": "str",
+      "status": "str",
+      "title": "str=''",
+      "detail": "str=''",
+      "duration_ms": "int | None=None",
+      "group": "str=''"
+    },
+    "basis": {
+      "keywords": "list[str]",
+      "hit_counts": "dict[str, int]",
+      "sources": "list[dict[str, Any]]"
+    },
+    "settings": {
+      "model": "str",
+      "temperature": "float",
+      "system_prompt": "str",
+      "extra": "dict[str, Any]=factory"
+    },
+    "reasoning": {
+      "text": "str"
+    },
+    "conflict": {
+      "message": "str"
+    },
+    "approval": {
+      "request_id": "str",
+      "name": "str",
+      "risk": "str",
+      "detail": "str=''",
+      "diff": "str=''"
+    },
+    "context": {
+      "turns": "int",
+      "tokens": "int",
+      "trimmed": "int=0",
+      "window": "int=0",
+      "tiers": "dict[str, int]={}",
+      "blocks": "dict[str, int]={}",
+      "subblocks": "dict[str, dict[str, int]]={}",
+      "compacted": "int=0",
+      "compacted_saved": "int=0",
+      "trimmed_saved": "int=0",
+      "prompt_versions": "dict[str, int]={}"
+    },
+    "pii": {
+      "counts": "dict[str, int]"
+    },
+    "tool": {
+      "tool_name": "str",
+      "status": "str",
+      "detail": "str=''",
+      "variant": "str=''",
+      "path": "str=''",
+      "diff": "str=''",
+      "output": "str=''",
+      "call_id": "str=''"
+    },
+    "delta": {
+      "text": "str"
+    },
+    "replace": {
+      "text": "str"
+    },
+    "citation": {
+      "items": "list[dict[str, Any]]"
+    },
+    "usage": {
+      "prompt_tokens": "int",
+      "completion_tokens": "int",
+      "total_tokens": "int | None=None",
+      "extra": "dict[str, Any]=factory"
+    },
+    "note": {
+      "text": "str",
+      "note_kind": "str='plain'"
+    },
+    "verify": {
+      "valid": "list[int]",
+      "invalid": "list[int]",
+      "missing": "list[int]",
+      "unsupported": "list[int]",
+      "coverage": "float",
+      "passed": "bool",
+      "reasons": "list[str]"
+    },
+    "done": {
+      "ttft_ms": "int",
+      "total_ms": "int",
+      "usage": "dict[str, Any]=factory"
+    },
+    "cancelled": {
+      "reason": "str='user'"
+    },
+    "error": {
+      "code": "str",
+      "message": "str",
+      "stage": "str=''"
+    },
+    "retry": {
+      "attempt": "int",
+      "max_attempts": "int",
+      "error_kind": "str",
+      "error_message": "str=''",
+      "delay_ms": "int=0",
+      "scope": "str='model'"
+    }
+  },
+  "stage_group_order": [
+    "prepare",
+    "search",
+    "filter",
+    "tool",
+    "generate"
+  ],
+  "stage_group_labels": {
+    "prepare": "理解问题",
+    "search": "查找资料",
+    "filter": "筛选重点",
+    "tool": "使用工具",
+    "generate": "生成回答"
+  }
+}

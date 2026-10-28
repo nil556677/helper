@@ -22,15 +22,15 @@ from nicegui import run, ui
 
 from app.services import models as models_service
 from app.ui.components.dialog import notify
+from app.ui.components.ime import IME_ENTER_GUARD  # 输入法组词保护
 
 #: 每个槽位的图标（卡片头用）
-_SLOT_ICONS = {"reasoning": "smart_toy", "ocr": "image"}
+_SLOT_ICONS = {"llm": "smart_toy", "llm-compact": "compress", "ocr": "image"}
 
 
 def render() -> None:
     """画「模型配置」分区的内容（每个槽位一张卡）。"""
     with ui.column().classes("w-full gap-4"):
-        ui.label("模型配置").classes("hp-page-title")
         for item in models_service.load_all():
             _render_slot(item)
 
@@ -139,7 +139,8 @@ def _render_slot(item: models_service.SlotView) -> None:
 
     def do_save() -> None:
         # 没在"更换"状态就不动已存的 key（api_key=None 的语义）
-        api_key = str(key_input.value or "").strip() if state["editing"] else None
+        typed = str(key_input.value or "").strip() if state["editing"] else ""  # 屏幕上填的 key
+        api_key = typed or None  # 空串当"没改"：别把已存的 key 清掉
         try:
             models_service.save(
                 slot_key,
@@ -168,10 +169,22 @@ def _render_slot(item: models_service.SlotView) -> None:
         result.classes(remove="hp-status-ok hp-status-bad")
         result.update()
         try:
-            # 网络请求放线程池：探测最长要等 20 秒，绝不能卡住界面
-            outcome = await run.io_bound(models_service.test_connection, slot_key)
+            # 网络请求放线程池：探测最长要等 20 秒，绝不能卡住界面。
+            # 用**屏幕上当前的值**测（不是库里旧的）：改完地址/模型先测，再决定要不要保存。
+            outcome = await run.io_bound(
+                models_service.test_connection,
+                slot_key,
+                base_url=str(base_url.value or ""),
+                model=str(model.value or ""),
+                api_key=(str(key_input.value or "").strip() if state["editing"] else None),
+            )
         finally:
             test_button.props(remove="loading")
+
+        if outcome is None:  # 取消/应用退出中：线程池直接返回 None
+            result.text = "测试被取消"
+            result.update()
+            return
 
         if outcome.ok:
             result.text = f"测试通过 · {outcome.elapsed_ms} ms"
@@ -186,9 +199,9 @@ def _render_slot(item: models_service.SlotView) -> None:
 
     save_button.on_click(do_save)
     test_button.on_click(do_test)
-    # 在输入框里按回车就保存：填完三个字段不用去够鼠标
+    # 在输入框里按回车就保存：填完三个字段不用去够鼠标（输入法组词中不触发）
     for element in (provider, model, base_url):
-        element.on('keydown.enter', do_save)
+        element.on('keydown.enter', lambda _e=None: do_save(), js_handler=IME_ENTER_GUARD)
     refresh_status()
 
 

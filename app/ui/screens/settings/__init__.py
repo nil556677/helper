@@ -33,12 +33,15 @@ from app.ui.screens.settings.knowledge import render as render_knowledge
 from app.ui.screens.settings.models import render as render_models
 from app.ui.screens.settings.tasks import render as render_tasks
 from app.ui.screens.settings.terms import render as render_terms
+from app.ui.screens.settings.traces import render as render_traces
+from app.ui.state import section  # 当前分区（隐藏分区的轮询据此让路）
 
 #: (分区 key, 标题, 图标)。顺序就是左栏里的顺序：模型配置排第二，因为不配它什么都跑不起来。
 SECTIONS: tuple[tuple[str, str, str], ...] = (
     ("knowledge", "知识库", "library_books"),
     ("terms", "领域词", "sell"),
     ("tasks", "任务", "pending_actions"),
+    ("traces", "检索追踪", "query_stats"),
     ("models", "模型配置", "smart_toy"),
     ("data", "数据与存储", "folder_open"),
     ("general", "通用", "tune"),
@@ -52,6 +55,7 @@ RENDERERS: dict[str, Callable[[], None]] = {
     "knowledge": render_knowledge,
     "terms": render_terms,
     "tasks": render_tasks,
+    "traces": render_traces,
 }
 
 
@@ -67,14 +71,16 @@ def build() -> Callable[[str], None]:
     # 结果那个空 column 带 h-full 把高度吃光，滚动区被挤成 0 高——用户看到的就是白板。
     with ui.column().classes("w-full h-full gap-0 hp-settings-body"):
         scroll = ui.scroll_area().classes("w-full flex-1 min-h-0 hp-settings-scroll")
-        with scroll, ui.column().classes("w-full hp-page gap-5 pt-3 pb-8"):
+        # gap/pt/pb 收紧：设置页整体去空白（标题/边框/间距是空白的主要来源）
+        with scroll, ui.column().classes("w-full hp-page gap-3 pt-2 pb-6"):
             for key, _title, _icon in SECTIONS:
-                panel = ui.column().classes("w-full gap-4")
+                panel = ui.column().classes("w-full gap-3")
                 panels[key] = panel
                 with panel:
                     RENDERERS[key]()
 
     def select(key: str) -> None:
+        section.set_active(key)  # 记下当前分区（隐藏分区的轮询据此让路）
         for panel_key, panel in panels.items():
             panel.set_visibility(panel_key == key)
         # 切分区时回到顶部：两个分区高度差很大，不回顶会让用户"看到一片空白"

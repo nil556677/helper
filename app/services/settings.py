@@ -142,19 +142,63 @@ def copy_path(target: str) -> bool:
         return False
 
 
+def open_url(url: str) -> bool:
+    """用系统默认浏览器打开一个 http(s) 地址（Qdrant 控制台等）。
+
+    为什么不用界面里的 ``ui.link``：桌面壳是 QtWebEngine，点击链接会把**应用页面本身**
+    导航走（界面就没了）；交给 ``os.startfile`` 则弹外部浏览器，应用留在原地。
+
+    参数：
+        url: 完整地址（``http://127.0.0.1:6333/dashboard``）。
+    返回：打开成功为 True；失败由调用方提示用户。
+    """
+    try:
+        os.startfile(url)  # type: ignore[attr-defined]  # Windows 专有
+    except OSError as exc:
+        logger.warning("打开链接失败（{}）：{}", url, exc)
+        return False
+    return True
+
+
+def copy_text(text: str) -> bool:
+    """把任意文本复制到剪贴板（打不开浏览器时的降级：用户自己粘贴）。
+
+    与 :func:`copy_path` 的区别：这个**原样复制**，不做 ``Path(...).parent`` 推导
+    （地址不是路径，推导会把 ``http://.../dashboard`` 截坏）。
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        proc = subprocess.run(
+            ["clip"],
+            input=text,
+            text=True,
+            capture_output=True,
+            timeout=3,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return proc.returncode == 0
+    except Exception as exc:
+        logger.warning("复制文本失败：{}", exc)
+        return False
+
+
 # ---------------- 索引期参数与指纹（P0.6） ----------------
 
 
 def rebuild_lexical() -> dict[str, Any]:
-    """**只重算词法**（P1.8 快路径：改了词库/分词参数之后用）。
+    """只重算词法统计（N/df/avgdl）——新 sparse 数据面。"""
+    from app.core.db.connection import get_connection
+    from app.core.retrieval.tokenize import to_tokens
+    from app.integrations.sparse import SparseTermStore
 
-    返回：``{"updated": 更新行数, "status": 之后的状态}``。
-    为什么在这里记指纹：重算完就是"索引已按这套参数建过"，否则提示条永远不会消失。
-    """
-    from app.rag.ingest import rebuilder
-
-    updated = rebuilder.rebuild_lexical()
-    return {"updated": updated, "status": mark_index_built()}
+    rows = get_connection().execute(
+        "SELECT c.text FROM chunks c JOIN documents d ON d.id = c.doc_id"
+        " WHERE c.is_parent = 0 AND c.status = 'active'"
+    ).fetchall()
+    tokens = [to_tokens(str(row["text"])).split() for row in rows]
+    SparseTermStore().recompute(tokens)
+    return {"updated": len(tokens), "status": mark_index_built()}
 
 
 def rebuild_all(doc_ids: list[int] | None = None) -> int:

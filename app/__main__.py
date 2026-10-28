@@ -26,6 +26,7 @@ from __future__ import annotations
 import atexit
 import contextlib
 import os
+import re
 import socket
 import sys
 import threading
@@ -122,6 +123,26 @@ def _log_run_summary(started_monotonic: float, started_wall: float) -> None:
         logger.warning("运行收尾统计失败（不影响退出）：{}", exc)
 
 
+def _stop_services_fallback() -> None:
+    """兜底停受管子进程：正常退出由 ``on_quit`` 停过（幂等），这里覆盖异常退出路径。
+
+    为什么还要这一层：``aboutToQuit`` 只在 Qt 正常退出时触发；主循环抛异常、或
+    ``main()`` 提前 return 时它不会跑。Job Object 是内核兜底，但"分配进 Job 失败"
+    的环境下就只能靠这里。**停不掉只记日志**（退出阶段不能再抛、也不适合弹框）。
+    """
+    try:
+        from loguru import logger as _logger
+
+        from app.services import services as services_service
+
+        report = services_service.stop(grace_s=2.0)  # 已停过则是空操作
+        stuck = [name for name, state in report.items() if state == "still-running"]
+        if stuck:
+            _logger.error("退出兜底：以下子进程仍未退出：{}", "、".join(stuck))
+    except Exception:
+        pass  # 退出阶段：兜底清理失败不能再抛
+
+
 #: Qt 消息级别映射（按枚举名，便于测试）。
 _QT_LEVELS: dict[str, str] = {
     "QtDebugMsg": "DEBUG",
@@ -158,6 +179,30 @@ def _js_log_level(enum_name: str) -> str:
         "WarningMessageLevel": "WARNING",
         "ErrorMessageLevel": "ERROR",
     }.get(enum_name, "DEBUG")
+
+
+#: 浏览器控制台里**已知无害**的消息（整条文本正则精确匹配，**不做前缀/模糊匹配**，
+#: 模糊匹配会误伤真正的告警）。命中则降级到 DEBUG，不再刷成 ERROR。
+#:
+#: 目前只有一条：Quasar 的 QTooltip/QMenu 用字符串 target（``#c<id>``）锚定元素时，
+#: 若目标元素比 tooltip 晚一步挂载（常见于 ``ui.refreshable`` 列表刷新重建），Quasar
+#: 会 ``console.error`` 报"锚点没找到"。这是上游已知问题、纯 UI 提示无功能影响：
+#: https://github.com/quasarframework/quasar/issues/18566
+#: 触发来源是 NiceGUI 的 ``Element.tooltip()``（把 target 设成 ``#<元素id>``）。
+_JS_KNOWN_HARMLESS: tuple[re.Pattern[str], ...] = (
+    re.compile(r'^Anchor: target "#c\d+" not found$'),
+)
+
+
+def _js_message_level(enum_name: str, message: str) -> str:
+    """浏览器控制台消息 → 日志级别（纯逻辑，便于测试）。
+
+    已知无害的消息降级到 DEBUG；其余沿用 :func:`_js_log_level` 的映射。
+    """
+    text = message.strip()
+    if any(pattern.match(text) for pattern in _JS_KNOWN_HARMLESS):
+        return "DEBUG"
+    return _js_log_level(enum_name)
 
 
 def _install_qt_message_handler() -> None:
@@ -241,7 +286,7 @@ def _logging_page_class(allowed_origin: str) -> type:
         def javaScriptConsoleMessage(self, level, message, line_number, source_id) -> None:  # type: ignore[no-untyped-def]
             name = getattr(level, "name", None) or str(level).rsplit(".", 1)[-1]
             js_logger.bind(src=source_id or "js", at=line_number).opt(depth=1).log(
-                _js_log_level(name), "浏览器控制台：{}", message
+                _js_message_level(name, message), "浏览器控制台：{}", message
             )
 
         def acceptNavigationRequest(self, url, _navigation_type, is_main_frame) -> bool:  # type: ignore[no-untyped-def]
@@ -353,6 +398,39 @@ def _probe_bind(host: str, port: int) -> str:
         return f"端口 {host}:{port} 现在可以绑定 → 刚才是别的原因（不是端口被占）"
     except OSError as exc:
         return f"端口 {host}:{port} 现在绑不上（{exc}）→ 大概率是端口被占/被系统保留"
+
+
+def _log_ports(ui_port: int) -> None:
+    """把本次启动各进程的端口汇总成一行（排障用：以前只打 UI，查端口冲突要翻几处）。
+
+    - UI：NiceGUI 页面服务，QtWebEngine 窗口加载的就是它；
+    - Qdrant sidecar：HTTP 端口（gRPC 固定占 HTTP+1）；
+    - worker：对话 RPC 端口（worker 启动后自己写 ``data/worker.port``；
+      嵌入式模式或还没起好时显示"未就绪"）。
+    """
+    from loguru import logger  # 本模块的 logger 在 main() 里延迟引入
+
+    from app.services import services as services_service  # 服务门面
+
+    ports = services_service.port_summary(ui_port)  # 各进程端口/pid
+    rpc = ports["worker_rpc"]  # worker 对话 RPC 端口
+    if ports["worker_pid"] and not rpc:  # worker 已拉起但端口文件还没写：短等一下再读
+        for _ in range(20):  # 最多约 2s（只在真的缺端口时才会等）
+            time.sleep(0.1)  # 等 worker 写完 data/worker.port
+            rpc = services_service.worker_rpc_port()  # 再读一次
+            if rpc:  # 拿到了
+                break  # 别再等
+        ports["worker_rpc"] = rpc  # 回填汇总
+    parts: list[str] = [f"UI=127.0.0.1:{ports['ui']}"]  # UI 服务
+    if ports["qdrant_http"]:  # 本机 Qdrant sidecar
+        parts.append(  # Qdrant 两个端口 + pid
+            f"Qdrant HTTP={ports['qdrant_http']}/gRPC={ports['qdrant_grpc']} pid={ports['qdrant_pid']}"  # 明细
+        )  # 追加结束
+    if ports["worker_pid"]:  # worker 已拉起（RPC 端口可能还没写）
+        parts.append(  # worker 行
+            f"worker RPC={ports['worker_rpc'] or '未就绪'} pid={ports['worker_pid']}"  # 明细
+        )  # 追加结束
+    logger.info("进程端口：{}", "；".join(parts))  # 一行汇总
 
 
 def _place_window(view: object, screen: object, preferred: tuple[int, int]) -> tuple[int, int]:
@@ -492,6 +570,7 @@ def main() -> int:
     run_started_monotonic = time.monotonic()
     run_started_wall = time.time()
     atexit.register(_log_run_summary, run_started_monotonic, run_started_wall)
+    atexit.register(_stop_services_fallback)  # 兜底：异常退出路径也把子进程停掉
     root = Path(__file__).resolve().parent.parent
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
@@ -541,6 +620,12 @@ def main() -> int:
 
     from nicegui import ui
 
+    # 只做“上次残留”的一次性清理：**不改工作目录**（全局 chdir 会让第三方库、
+    # Qdrant/NiceGUI 的相对路径都跑到 logs 下，副作用太大）。
+    for stale in (root / "debug.log", root / "app" / "debug.log"):
+        with contextlib.suppress(OSError):
+            stale.unlink(missing_ok=True)
+
     from app import tasks as tasks_app
     from app.nicegui_patch import skip_unused_process_pool
     from app.ui.shell import WINDOW_SIZE, build_shell, set_window_width
@@ -568,6 +653,23 @@ def main() -> int:
             f"后台服务启动失败：{type(exc).__name__}: {exc}\n\n详细信息已写入：\n{where or '（文件也写不进去）'}",
         )
         return 2
+    # 上次异常退出（崩溃/被强杀）可能留下后台进程：start() 里已经照登记表清理过，
+    # 这里把结果转成给用户看的提示（清掉的告知一声；没清掉的必须点名，让用户去手动结束）。
+    try:
+        leftover = services_service.last_cleanup()
+    except Exception as exc:
+        leftover = {"killed": [], "failed": []}
+        logger.warning('读取上次残留子进程清理结果失败（不影响启动）：{}', exc)
+    if leftover.get("killed"):
+        startup_service_notes.append(
+            '上次退出有后台进程残留，已自动结束：\n'
+            + '\n'.join(f'  - {item}' for item in leftover['killed'])
+        )
+    if leftover.get("failed"):
+        startup_service_notes.append(
+            '上次退出有后台进程残留，且**没能结束**（请到任务管理器手动结束）：\n'
+            + '\n'.join(f'  - {item}' for item in leftover['failed'])
+        )
     # 服务进程可能"起了但没健康"（Qdrant 10 秒没就绪 / worker 反复崩溃降级）。这些场景
     # 以前只写日志；把它们收集起来，稍后随 warnings 一起弹给用户。
     try:
@@ -577,21 +679,21 @@ def main() -> int:
             if child.get("degraded"):
                 startup_service_notes.append(
                     f'后台进程 {name} 反复崩溃已被降级，可能不可用。\n'
-                    f'日志位置：{paths.data_dir() / "logs"}'
+                    f'日志位置：{paths.logs_dir()}'
                 )
             elif name == "qdrant" and child.get("running") is False and child.get("installed"):
                 startup_service_notes.append(
                     'Qdrant 服务没有就绪（可能端口被占或启动失败）。\n'
-                    f'日志位置：{paths.data_dir() / "logs"}'
+                    f'日志位置：{paths.logs_dir()}'
                 )
     except Exception as exc:
         logger.warning('启动后检查后台服务状态失败（不影响启动）：{}', exc)
     if services_service.worker_enabled():
         # 服务端已经就绪：现在才建/迁移集合（bootstrap 阶段故意跳过，见 ensure_ready 说明）。
         try:
-            from app.core.vector import api as vector_api
+            from app.integrations import qdrant as qi
 
-            vector_api.ensure_collections()
+            qi.ensure_collection(qi.qdrant_client())
         except Exception as exc:
             logger.warning('服务端向量集合自检失败（检索/导入会另行报错）：{}', exc)
         # 首次从本地嵌入式切服务端：服务端库是空的，自动排一轮重建，避免"资料在、搜索为空"。
@@ -607,6 +709,10 @@ def main() -> int:
         logger.info('任务执行在独立 worker 子进程（主进程不跑 Runner）')
     else:
         tasks_app.start()
+
+    from app.bootstrap import start_model_warmup
+
+    start_model_warmup()  # 后台预热嵌入/精排
 
     @ui.page('/')
     def index() -> None:
@@ -756,6 +862,8 @@ def main() -> int:
         logger.error('界面服务 {}s 内未就绪，仍尝试打开窗口：{}', SERVER_WAIT_S, url)
         warnings.append(f'界面服务 {SERVER_WAIT_S:.0f} 秒内没起来。\n日志在：{log_path}')
 
+    _log_ports(int(state['port']))  # 排障：汇总 UI / Qdrant / worker 各自的端口
+
     from PySide6.QtCore import QTimer, QUrl
     from PySide6.QtGui import QKeySequence, QShortcut
     from PySide6.QtWebEngineCore import QWebEngineProfile
@@ -834,13 +942,13 @@ def main() -> int:
             logger.opt(exception=exc).warning('停止本机服务失败：{}', exc)
             exit_notes.append(f'停止本机服务时出错：{type(exc).__name__}: {exc}')
         else:
-            stuck = [f'  - {name}（{state}）' for name, state in stop_report.items()
+            stuck = [f'  - {name}' for name, state in stop_report.items()
                      if state == 'still-running']
             if stuck:
                 logger.error('以下子进程停止后仍未退出，可能留下孤儿进程：\n{}', '\n'.join(stuck))
                 exit_notes.append(
                     '部分后台进程没能正常退出（可能残留孤儿进程）：\n' + '\n'.join(stuck) +
-                    '\n请到任务管理器手动结束，或在下次启动后检查。'
+                    '\n下次启动会自动再清理一次；若仍残留，请到任务管理器手动结束。'
                 )
         # 同进程模式下让在跑的任务收尾：还没跑完的放回队列（**不算失败**），下次打开接着做
         try:
@@ -855,11 +963,11 @@ def main() -> int:
         # （实测日志：关掉后 600ms 又被打开，那个对象活到解释器卸载才报错）。
         try:
             from app.core.jobs.runner import get_runner
-            from app.core.vector import qdrant_store
+            from app.integrations import qdrant as qi
 
             runner = get_runner()
             if runner is None or runner.running_count == 0:
-                qdrant_store.shutdown()
+                qi.close_client()
             else:
                 logger.warning('还有 {} 个任务在跑，跳过关闭向量库（交给进程退出）', runner.running_count)
         except Exception as exc:

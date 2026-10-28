@@ -14,10 +14,12 @@ from loguru import logger
 from app.core import paths
 
 from .handlers import (
+    CHILD_LOG_COMPONENTS,
     CONSOLE_PREFIX,
     LOG_FILENAME,
     LOGS_TOTAL_LIMIT_MB,
     RETENTION_DAYS,
+    child_log_file,
     console_output_file,
     log_file,
 )
@@ -45,6 +47,8 @@ def purge_old_logs(days: int = RETENTION_DAYS, total_limit_mb: int = LOGS_TOTAL_
     两个**正在写的文件**（主日志 + 当天原生输出）永远不动——删掉它们只会让日志立刻开始报错。
     """
     protected = {path for path in (log_file(), console_output_file()) if path is not None}
+    # 当天的子进程日志也在写：worker/qdrant 由子进程持句柄写，删了同样会让它们报错。
+    protected |= {child_log_file(name) for name in CHILD_LOG_COMPONENTS}
 
     def _candidates() -> list[Path]:
         try:

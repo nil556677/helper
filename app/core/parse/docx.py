@@ -121,40 +121,57 @@ def _run_style(paragraph) -> tuple[float | None, bool]:
     return size, bold
 
 
-def _table_rows(table) -> list[list[str]]:
-    """表格 → 行文本，**合并单元格不重复**。
+def _table_rows(table) -> tuple[list[list[str]], tuple[tuple[int, int, int, int], ...]]:
+    """表格 → 行文本 + 合并范围。
 
-    python-docx 的 ``row.cells`` 对合并单元格会返回**同一个底层 ``_tc``** 多次
-    （横向合并：同一行出现两遍；纵向合并：跨行重复），直接取 ``cell.text``
-    会把"合并表头"渲染成"合并表头 | 合并表头"（实测复现）。按 ``_tc`` 身份去重：
-    一张表里同一个单元格只渲染一次，归在它**第一次出现**的位置。
-
-    去重集合是**表级**而不是行级：纵向合并的单元格在第二行还会再出现一次，
-    行级去重挡不住。
-
-    参数：
-        table: python-docx 的 ``Table``。
-    返回：
-        行列表；每行是"该行第一次出现的非空单元格文本"。整行都空时**不加入**
-        （渲染出来只剩空行，对检索没有价值，还会让行区间多算）。
+    合并策略：
+    - 纵向合并：后续行用首行值填充（≤20 行语义；DOCX 不区分超大）；
+    - 横向合并在表头区（前 2 行）：铺开，保证多级列名；
+    - 横向合并在数据区：首列保留值，其余列留空，避免复制成假值。
     """
-    seen: set[object] = set()
+    seen: dict[object, tuple[int, int, str]] = {}
     rows: list[list[str]] = []
-    for row in table.rows:
+    merged: list[tuple[int, int, int, int]] = []
+    for row_index, row in enumerate(table.rows):
         cells: list[str] = []
-        for cell in row.cells:
+        for col_index, cell in enumerate(row.cells):
             tc = cell._tc
-            # 按**元素对象**去重（不能按 id()：lxml 代理对象会被回收、id 被复用，
-            # 实测会把后面几行的单元格误判成"已见过"而整行丢掉）
-            if tc in seen:
-                continue
-            seen.add(tc)
             text = cell.text.strip()
-            if text:
+            first = seen.get(tc)
+            if first is None:
+                seen[tc] = (row_index, col_index, text)
                 cells.append(text)
-        if cells:
+                continue
+            first_row, first_col, first_text = first
+            if first_row < row_index:
+                # 纵向合并：向下填值，保证每一行都能独立读懂
+                cells.append(first_text)
+                merged.append((first_row + 1, row_index + 1, first_col + 1, col_index + 1))
+            elif row_index <= 1:
+                # 表头横向合并：铺开给多级表头
+                cells.append(first_text)
+                merged.append((first_row + 1, row_index + 1, first_col + 1, col_index + 1))
+            else:
+                # 数据区横向合并：值只保留一次，其余列留空
+                cells.append("")
+        if any(cells):
             rows.append(cells)
-    return rows
+    return rows, tuple(merged)
+
+
+def _paragraph_is_caption(element) -> bool:
+    """题注段落：Word 的 Caption/题注样式，或以“表/Table”开头的短句。"""
+    text = str(getattr(element, "text", "") or "").strip()
+    if not text or len(text) > 120:
+        return False
+    style = ""
+    try:
+        style = str(element.style.name) if element.style else ""
+    except Exception:
+        style = ""
+    if style.lower().startswith(("caption", "题注")):
+        return True
+    return text.startswith(("表 ", "表1", "表2", "表3", "Table "))
 
 
 def _walk_body(document) -> Iterator[object]:
@@ -218,18 +235,21 @@ def iter_units(path: Path) -> Iterator[Unit]:
 
     table_no = 0
     image_count = 0
+    pending_caption = ""
     for element_index, element in enumerate(_walk_body(document)):
         if isinstance(element, Table):
             table_no += 1
-            rows = _table_rows(element)
-            rendered = "\n".join(" | ".join(cell for cell in row if cell) for row in rows if any(row))
-            header = tuple(row for row in rows[0] if row) if rows else ()
+            rows, merged = _table_rows(element)
+            rendered = "\n".join(" | ".join(row) for row in rows if any(row))
+            header = tuple(rows[0]) if rows else ()
             yield Unit(
                 blocks=[
                     Block(
                         text=rendered,
                         content_type=TYPE_TABLE,
                         table_ref=f"tbl#{table_no}",
+                        table_title=pending_caption,
+                        merged_ranges=merged,
                         row_from=1,
                         row_to=max(1, len(rows)),
                         col_from=1,
@@ -239,6 +259,7 @@ def iter_units(path: Path) -> Iterator[Unit]:
                     )
                 ]
             )
+            pending_caption = ""
             continue
 
         # 图片段落（图文讲义：每页一张幻灯片图，正文常为空）：
@@ -261,6 +282,7 @@ def iter_units(path: Path) -> Iterator[Unit]:
         text = element.text.strip()
         if not text:
             continue
+        pending_caption = text if _paragraph_is_caption(element) else ""
         level = _paragraph_level(element)
         size, bold = _run_style(element)
         if level is None and looks_like_article_meta(text):

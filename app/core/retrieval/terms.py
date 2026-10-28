@@ -95,6 +95,16 @@ def _check_freq(freq: object) -> int | None:
     return int(freq)
 
 
+def _freq_db(freq: int | None) -> int:
+    """落库的词频：``None``（="用 jieba 默认"）按数据库默认 **1** 存。
+
+    ``token_dict.freq`` 是 ``NOT NULL DEFAULT 1``——直接写 ``NULL`` 触发 IntegrityError，
+    会被上层误判成"词条已存在"（实测：不带词频添加就一直报这个）。None 落成 1
+    正好等价于列默认值，语义也一致。
+    """
+    return 1 if freq is None else freq
+
+
 def _row_to_term(row: sqlite3.Row) -> Term:
     return Term(
         term=str(row["term"]),
@@ -135,17 +145,18 @@ def add_term(term: str, *, freq: int | None = None, enabled: bool = True) -> Ter
     """
     text = _normalize(term)
     freq = _check_freq(freq)
+    db_freq = _freq_db(freq)  # None → 1（NOT NULL 列，直接写 None 会误判成"已存在"）
     now = time.time()
     try:
         with transaction() as conn:
             conn.execute(
                 "INSERT INTO token_dict(term, freq, enabled, updated_at) VALUES (?, ?, ?, ?)",
-                (text, freq, 1 if enabled else 0, now),
+                (text, db_freq, 1 if enabled else 0, now),
             )
     except sqlite3.IntegrityError as exc:
         raise TermError(f"词条已存在：{text}") from exc
     _bump()
-    return Term(term=text, freq=freq, enabled=bool(enabled), updated_at=now)
+    return Term(term=text, freq=db_freq, enabled=bool(enabled), updated_at=now)
 
 
 def update_term(
@@ -172,6 +183,7 @@ def update_term(
 
     target = current.term if new_term is _KEEP else _normalize(new_term)
     next_freq = current.freq if freq is _KEEP else _check_freq(freq)
+    next_freq_db = _freq_db(next_freq)  # None → 1（NOT NULL）
     next_enabled = current.enabled if enabled is _KEEP else bool(enabled)
     now = time.time()
 
@@ -181,12 +193,12 @@ def update_term(
                 conn.execute(
                     "UPDATE token_dict SET term = ?, freq = ?, enabled = ?, updated_at = ?"
                     " WHERE term = ?",
-                    (target, next_freq, 1 if next_enabled else 0, now, text),
+                    (target, next_freq_db, 1 if next_enabled else 0, now, text),
                 )
             else:
                 conn.execute(
                     "UPDATE token_dict SET freq = ?, enabled = ?, updated_at = ? WHERE term = ?",
-                    (next_freq, 1 if next_enabled else 0, now, text),
+                    (next_freq_db, 1 if next_enabled else 0, now, text),
                 )
     except sqlite3.IntegrityError as exc:
         raise TermError(f"词条已存在：{target}") from exc

@@ -87,6 +87,36 @@ def _walk_shapes(container) -> Iterator[object]:
             yield from _walk_shapes(shape)
 
 
+def _table_rows_and_merges(table) -> tuple[list[list[str]], tuple[tuple[int, int, int, int], ...]]:
+    """表格 → 行列文本 + 合并范围；合并值铺到覆盖区（PPT 表格通常不大）。"""
+    grid = [[cell.text.strip() for cell in row.cells] for row in table.rows]
+    merged: list[tuple[int, int, int, int]] = []
+    for row_index, row in enumerate(table.rows):
+        for col_index, cell in enumerate(row.cells):
+            if not getattr(cell, "is_merge_origin", False):
+                continue
+            span_h = max(1, int(getattr(cell, "span_height", 1) or 1))
+            span_w = max(1, int(getattr(cell, "span_width", 1) or 1))
+            value = grid[row_index][col_index] if row_index < len(grid) else ""
+            for rr in range(row_index, min(row_index + span_h, len(grid))):
+                for cc in range(col_index, min(col_index + span_w, len(grid[rr]))):
+                    grid[rr][cc] = value
+            merged.append(
+                (row_index + 1, row_index + span_h, col_index + 1, col_index + span_w)
+            )
+    return grid, tuple(merged)
+
+
+def _slide_title(slide) -> str:
+    """幻灯片标题占位符文本（没有就空串）。"""
+    for shape in _walk_shapes(slide):
+        if _is_title_placeholder(shape) and getattr(shape, "has_text_frame", False):
+            text = str(shape.text_frame.text or "").strip()
+            if text:
+                return text
+    return ""
+
+
 def iter_units(path: Path) -> Iterator[Unit]:
     """按幻灯片逐张产出。
 
@@ -129,14 +159,13 @@ def iter_units(path: Path) -> Iterator[Unit]:
     for slide_index, slide in enumerate(presentation.slides, start=1):
         blocks: list[Block] = []
         table_no = 0  # 本页内的表格序号（不是全局序号，引用里跟 slide 号一起用）
+        slide_title = _slide_title(slide)
         for shape in _walk_shapes(slide):
             if getattr(shape, "has_table", False):
                 table_no += 1
-                rows = [[cell.text.strip() for cell in row.cells] for row in shape.table.rows]
-                rendered = "\n".join(
-                    " | ".join(cell for cell in row if cell) for row in rows if any(row)
-                )
-                header = tuple(cell for cell in rows[0] if cell) if rows else ()
+                rows, merged = _table_rows_and_merges(shape.table)
+                rendered = "\n".join(" | ".join(row) for row in rows if any(row))
+                header = tuple(rows[0]) if rows else ()
                 blocks.append(
                     Block(
                         text=rendered,
@@ -144,6 +173,8 @@ def iter_units(path: Path) -> Iterator[Unit]:
                         page=slide_index,
                         page_to=slide_index,
                         table_ref=f"slide:{slide_index}#{table_no}",
+                        table_title=slide_title,
+                        merged_ranges=merged,
                         row_from=1,
                         row_to=max(1, len(rows)),
                         col_from=1,

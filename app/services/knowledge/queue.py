@@ -59,12 +59,12 @@ def enqueue_reindex(doc_ids: list[int] | None = None) -> int:
 def _ensure_rebuildable(doc_id: int) -> None:
     """校验资料存在且有副本；不满足抛 ValueError（不排必败任务）。"""
     from app.core import paths
-    from app.rag import store
+    from app.rag import kb_store
 
-    row = store.get(int(doc_id))
+    row = kb_store.get_document(int(doc_id))
     if row is None:
         raise ValueError("这份资料已经不在库里了（可能已被删除）")
-    stored = str(dict(row).get("stored_path") or "")
+    stored = str(row["stored_path"] or "")
     copy = paths.resolve_stored_path(stored) if stored else None
     if copy is None or not copy.is_file():
         raise ValueError("这份资料还没有可用副本（导入未完成或已失败），请删除后重新导入")
@@ -108,19 +108,8 @@ def enqueue_rebuild_many(doc_ids: list[int]) -> int:
 
 
 def enqueue_backfill_attrs() -> int:
-    """排一条"回填动态字段"任务（**同一时刻只排一条**）。
-
-    只在字段字典/提取器/归一化版本变了、界面提示"动态字段规则已更新"时用：
-    只重算 ``attrs*``，不重新解析、不重嵌入（秒级）。
-    """
-    from app.tasks.backfill_attrs import BackfillAttrs
-
-    return api.enqueue(
-        BackfillAttrs.key(),
-        {},
-        dedupe_key="backfill_attrs",
-        priority=PRIORITY_WAITING,
-    )
+    """v1 已移除动态字段（attrs）数据面；保留入口返回 0，界面不会排空任务。"""
+    return 0
 
 
 def migrate_server_store_if_needed() -> int:
@@ -140,14 +129,15 @@ def migrate_server_store_if_needed() -> int:
     except Exception:
         return 0
 
-    from app.core.vector import api as vector_api
-    from app.core.vector import qdrant_store
+    from app.integrations import qdrant as qi
 
     try:
-        if qdrant_store.count(vector_api.COLLECTION_CHUNKS) > 0:
+        client = qi.qdrant_client()
+        qi.ensure_collection(client)
+        if int(client.count(collection_name=qi.COLLECTION).count) > 0:
             return 0
     except Exception as exc:
-        logger.warning("检查服务端向量库是否为空失败（跳过自动迁移）：{}", exc)
+        logger.warning("检查向量库是否为空失败（跳过自动迁移）：{}", exc)
         return 0
 
     from app.core.db.connection import get_connection, transaction
@@ -159,7 +149,7 @@ def migrate_server_store_if_needed() -> int:
         ).fetchone():
             return 0
         rows = conn.execute(
-            "SELECT id FROM documents WHERE status = 'ready' AND stored_path <> ''"
+            "SELECT id FROM documents WHERE status = 'indexed' AND stored_path <> ''"
         ).fetchall()
     except Exception as exc:
         logger.warning("读取待迁移资料失败（跳过自动迁移）：{}", exc)

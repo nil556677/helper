@@ -2,15 +2,62 @@
 
 本地桌面 AI 助手：**资料在本机、检索在本机，只把命中的资料片段 + 你的问题交给云端大模型生成回答。**
 
+## 当前运行模式：Qdrant 服务端（唯一支持）
+
+> **helper 不再使用本地嵌入式 Qdrant。** 每次启动由 helper 自己拉起：
+
+```powershell
+bin\qdrant\qdrant.exe --storage-path data\qdrant-server
+```
+
+| 项 | 当前值 |
+| --- | --- |
+| 模式 | **服务端（HTTP）**，非嵌入式 |
+| 地址 | `http://127.0.0.1:6333`（`vector.url`，可在设置 → 本机服务改端口） |
+| 集合 | 单集合 `kb_chunks`（dense + sparse） |
+| 存储 | `data/qdrant-server/` |
+| 生命周期 | Qdrant 与 worker 随 helper 启动/退出，不单独常驻 |
+| 已移除 | 本地嵌入式目录 `data/qdrant/` 与相关代码 |
+
+好处：UI、worker、测试脚本可以**同时**通过 HTTP 访问，不再受“同一目录只能一个进程打开”的锁限制。端口被占时，在 **设置 → 本机服务** 换端口并重启 helper。
+
 - **界面**：NiceGUI 写界面（纯 Python），装在 **PySide6 QtWebEngine** 窗口里 —— 双击打开，不用浏览器
   （不是 pywebview：它要经 pythonnet 加载 .NET，本机实测 CLR 加载失败）
 - **数据**：全部落在本机 `data/` 下（SQLite 库 + 资料副本 + 向量索引），备份 = 复制这个目录
 - **模型调用**：自己写的**最小** OpenAI 兼容客户端（标准库 `urllib`，不引 SDK：这里只需要
   "发请求 + 按 SSE 读增量 + 把失败原因分好类"）
 - **本地模型**：嵌入与精排都用 **ONNX Runtime** 跑（不引 torch / transformers），模型文件自己准备（见下）
+- **编排层（v2）**：用 **LangChain 1.4.7 + LangGraph 1.2.16** 做工具/检索/生成编排；
+  但只允许出现在 `app/agent/` 与 `app/integrations/`，数据面（解析、切分、ONNX、Qdrant）仍是自研
 - **资料解析**：自己写（`pypdf` / `python-docx` / `openpyxl` / `python-pptx` + 标准库），
-  不引 langchain / unstructured：那套框架会带进来几十个依赖和一堆用不上的抽象
+  **不引** langchain 的 loader/splitter：那套会丢页/表/标题链，引用定位会退化
+- **可选表格结构识别**：`HELPER_TABLE_STRUCTURE=off|docling|paddle|cloud`，默认 `off`；
+  启用后 PDF 表格优先走结构适配器，失败自动回退 `pdfplumber`。重依赖不默认安装：
+  `pip install docling` / `pip install "paddleocr>=3"`。文本层 PDF 继续用 `pdfplumber`。
+- **远景（未实现）**：[模板化解析](docs/远景-模板化解析.md) —— 先做无损 IR，再检索/匹配模板；
+  低置信度进入“未知模板”闭环，而不是硬解析
 - **密钥**：用 Windows DPAPI 加密后存本地数据库，界面上只显示尾号
+
+## v2 净室改造（2026-10-22，当前架构）
+
+- **切分口径**：父子块、child 搜索 / parent 回答、默认 **10% 重叠**、token 只当预算不硬切、
+  代码/表格/公式尽量整块；完整原则与验收清单见 [docs/切分原则.md](docs/切分原则.md)。
+
+- **数据库**：SQLite schema **v1**（净室基线，不迁移旧库）；`documents` + `chunks`（parent/child 全文）+
+  `conversations/messages` + `trace_*`；旧 v20 库需用 `scripts/reset_workspace.py` 重置。
+- **向量库**：Qdrant **服务端模式**（`127.0.0.1:6333`，存储 `data/qdrant-server`），只有
+  **一个集合 `kb_chunks`**（dense + sparse）；父块不再进 Qdrant，回填从 SQLite 查；
+  没有 alias、没有 `rag_parents`、没有本地嵌入式 `data/qdrant`。
+- **检索/回答**：dense + sparse 两路召回 → Python RRF → ONNX 精排 → SQLite 父块回填 →
+  `ChatOpenAI` 生成（未配置 LLM 时回退资料原文）；引用角标做越界校验。
+  可调项：`HELPER_RRF_DENSE_WEIGHT` / `HELPER_RRF_SPARSE_WEIGHT`（默认 1.0）、
+  `HELPER_TABLE_EVIDENCE_CAP`（同一张表最多几条证据，默认 2）。
+- **编排**：LangGraph `StateGraph` + `interrupt`（补参/澄清）+ SQLite checkpointer；会话消息落库。
+- **追踪**：每轮 `trace_runs/spans/hits/events` 落库；设置 → **检索追踪** 可看路由、两路命中、
+  融合/精排/证据、耗时、tokens、错误。
+- **数据重置**：`python scripts/reset_workspace.py --reimport` 会备份旧库、保留 `llm_slots`
+  （DPAPI 密文）、删除旧 Qdrant 集合、建 v1 schema、从 `data/files/` 重导；`models/` 不动。
+
 
 ## 准备模型文件
 
@@ -147,15 +194,15 @@ print('维度', v.shape, '行范数', float(numpy.linalg.norm(v, axis=-1)[0]))
 ### 跑测试
 
 ```
-.venv\Scripts\python.exe -m pytest                # 全部（单测 + 界面测试）
-.venv\Scripts\python.exe -m pytest tests/unit -q  # 只跑单测：快，不碰界面
-.venv\Scripts\python.exe -m pytest tests/ui -q    # 只跑界面测试（进程内模拟用户，不需要浏览器）
+.venv\Scripts\python.exe -m pytest -q             # 全部（目前只有单测）
+.venv\Scripts\python.exe -m pytest tests/unit -q  # 同一个集合，写明只跑单测
 ```
 
-- 测试的临时目录与数据都在 `.tmp/` 下，**不会碰真实的 `data/`**（界面测试用 `.tmp/ui-test-root`）
+- 测试的临时目录与数据都在 `.tmp/` 下，**不会碰真实的 `data/`**
 - 唯一例外：测试进程的日志会追加进真实的 `logs/helper.log`（日志 sink 在进程内只建一次）
-- `tests/unit/test_layering.py` 是**分层红线**的机械检查：`app/core` 不许碰界面与 `services`、
-  `app/ui` 不许碰 `core`、`app/services` 不许碰界面 —— 越界会直接测试失败
+- **界面没有 pytest 用例**：DOM 断言在 `scripts/check_ui.py`（真 QtWebEngine 渲染后取 HTML，见下）
+- **规则红线**由 `scripts/rule_check.py` 机械检查（文件过大 / 函数过长 / `app/ui` 顶层 import `app/core`），
+  由 `scripts/check.py` 串在 lint 和测试之间自动跑
 
 ### 想验"界面在真实浏览器引擎里渲染成什么样"
 
@@ -198,7 +245,7 @@ print('维度', v.shape, '行范数', float(numpy.linalg.norm(v, axis=-1)[0]))
 | `models/` | 本地 ONNX 模型（见上；文件不进版本控制，只留说明） |
 | `logs/` | 日志（不进版本控制） |
 | `scripts/` | 开发脚本：`check_ui.py`（真实引擎里的 DOM 断言）、`install_wheels.py` |
-| `tests/` | `unit`（不碰界面）+ `ui`（NiceGUI 的 user 装置，进程内模拟用户） |
+| `tests/` | 只有 `unit/`（不碰界面）；界面断言在 `scripts/check_ui.py` |
 | `docs/` | 内部方案文档（不进版本控制） |
 
 ## 发布流程

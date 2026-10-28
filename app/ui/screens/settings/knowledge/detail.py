@@ -14,6 +14,7 @@ from typing import Any
 
 from nicegui import run, ui
 
+from app.core.paths import unique_path  # 导出不覆盖
 from app.services import knowledge as knowledge_service
 from app.ui.components.dialog import confirm, notify
 from app.ui.components.format import human_size, human_time
@@ -117,21 +118,13 @@ def _header(detail: dict[str, Any], *, on_refresh: Any, back: Any) -> None:
             ui.button(
                 "重建",
                 icon="refresh",
-                on_click=lambda: (
-                    knowledge_service.enqueue_rebuild(int(detail["id"])),
-                    notify("已加入重建队列（任务页可见进度）", kind="positive"),
-                    on_refresh(),
-                ),
-            ).props("flat dense no-caps").mark("kb-detail-rebuild")
+                on_click=lambda: _rebuild(int(detail["id"]), on_refresh),
+            ).props("flat dense no-caps").mark("kb-detail-rebuild")  # 重建（重解析+重切分）
             ui.button(
                 "重新向量化",
                 icon="memory",
-                on_click=lambda: (
-                    knowledge_service.enqueue_rebuild(int(detail["id"])),
-                    notify("已加入重建队列（任务页可见进度）", kind="positive"),
-                    on_refresh(),
-                ),
-            ).props("flat dense no-caps").mark("kb-detail-embed")
+                on_click=lambda: _revectorize(int(detail["id"]), on_refresh),
+            ).props("flat dense no-caps").mark("kb-detail-embed")  # 只重建向量
             ui.button(
                 "导出",
                 icon="ios_share",
@@ -144,12 +137,36 @@ def _header(detail: dict[str, Any], *, on_refresh: Any, back: Any) -> None:
             ).props("flat dense no-caps").classes("hp-danger").mark("kb-detail-delete")
 
 
+def _rebuild(doc_id: int, on_refresh: Any) -> None:
+    """重建这一份（重解析 + 重切分 + 重向量）；没有副本时给出人话原因。"""
+    try:
+        job_id = knowledge_service.enqueue_rebuild(doc_id)  # 排重建任务
+    except ValueError as exc:  # 没有副本（pending/failed）
+        notify(str(exc), kind="warning")  # 说明原因
+        return
+    notify(f"已加入重建队列（任务 #{job_id}，任务页可见进度）", kind="positive")  # 提示
+    on_refresh()  # 刷新详情
+
+
+def _revectorize(doc_id: int, on_refresh: Any) -> None:
+    """只重算向量（不重解析）；失败给原因。"""
+    try:
+        count = knowledge_service.revectorize([doc_id])  # 排向量化任务
+    except ValueError as exc:  # 没有可向量化的片段
+        notify(str(exc), kind="warning")  # 说明原因
+        return
+    notify(f"已排队 {count} 份资料的向量化任务（任务页可见进度）", kind="positive")  # 提示
+    on_refresh()  # 刷新详情
+
+
 def _ask_delete(detail: dict[str, Any], *, back: Any) -> None:
     """详情页删除：确认后丢线程池删，删完回列表。"""
 
     async def do() -> None:
         try:
             removed = await run.io_bound(knowledge_service.delete, [int(detail["id"])])
+            if removed is None:  # 取消/退出中
+                return
             notify(f"已删除「{detail['name']}」" if removed else "这份已经不在了", kind="positive")
         except Exception as exc:
             notify(f"删除失败：{exc}", kind="negative")
@@ -227,7 +244,7 @@ def _chunks(
                 on_change=lambda event: _heading_changed(
                     str(event.value or ""), chunk_filter, state, on_refresh
                 ),
-            ).props("outline dense clearable").classes("hp-filter").mark("kb-chunk-heading")
+            ).props("outline dense clearable debounce=300").classes("hp-filter").mark("kb-chunk-heading")
             options = {"": "全部类型"}
             options.update({item: KIND_LABELS.get(item, item) for item in kinds})
             ui.select(
@@ -467,9 +484,15 @@ def _rollback(version_doc_id: int, on_refresh: Any) -> None:
     confirm("回滚到这个版本？", "当前版本会退场（保留可再切回），检索立刻只看回滚后的版本。", do)
 
 
-def _export_one(doc_id: int, name: str) -> None:
-    """导出单份（复用批量导出的同一实现）。"""
-    safe = name.rsplit(".", 1)[0]
-    target = Path.home() / "Downloads" / f"{safe}.zip"
-    report = knowledge_service.export([doc_id], target)
+async def _export_one(doc_id: int, name: str) -> None:
+    """导出单份（线程池 + 不覆盖同名文件）。"""
+    safe = name.rsplit(".", 1)[0]  # 去掉扩展名
+    target = unique_path(Path.home() / "Downloads" / f"{safe}.zip")  # 唯一路径
+    try:
+        report = await run.io_bound(knowledge_service.export, [doc_id], target)
+    except Exception as exc:
+        notify(f"导出失败：{exc}", kind="negative")
+        return
+    if report is None:  # 取消/退出中
+        return
     notify(f"已导出 → {report['path']}", kind="positive")

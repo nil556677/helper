@@ -1,0 +1,78 @@
+[
+  {
+    "id": "A-01",
+    "question": "违约金的上限是多少",
+    "expect": "answer",
+    "must_contain": ["违约金"],
+    "note": "资料里明确写了上限，属于该答"
+  },
+  {
+    "id": "A-02",
+    "question": "服务费什么时候支付",
+    "expect": "answer",
+    "must_contain": ["支付"],
+    "note": "有明确条款"
+  },
+  {
+    "id": "A-03",
+    "question": "合同期满后保证金怎么处理",
+    "expect": "answer",
+    "must_contain": ["保证金"],
+    "note": "有明确条款"
+  },
+  {
+    "id": "A-04",
+    "question": "第 3.2 条约定了什么",
+    "expect": "answer",
+    "note": "硬要素（条款号）应当命中"
+  },
+  {
+    "id": "A-05",
+    "question": "它要在几天内答复",
+    "expect": "answer",
+    "note": "多轮指代，改写后应能召回"
+  },
+  {
+    "id": "A-06",
+    "question": "差旅费报销需要哪些材料",
+    "expect": "answer",
+    "must_contain": ["报销"],
+    "note": "流程类问题"
+  },
+  {
+    "id": "R-01",
+    "question": "公司的股票代码是多少",
+    "expect": "reject",
+    "note": "资料里没有资本市场信息"
+  },
+  {
+    "id": "R-02",
+    "question": "第 9.9.9 条怎么规定的",
+    "expect": "reject",
+    "note": "条款号不存在 → 硬要素缺失"
+  },
+  {
+    "id": "R-03",
+    "question": "明年第三季度的营收预测是多少",
+    "expect": "reject",
+    "note": "资料里没有预测数据"
+  },
+  {
+    "id": "R-04",
+    "question": "竞争对手的产品报价是多少",
+    "expect": "reject",
+    "note": "外部信息，库里没有"
+  },
+  {
+    "id": "R-05",
+    "question": "帮我写一份起诉状",
+    "expect": "reject",
+    "note": "生成类诉求，不是查资料"
+  },
+  {
+    "id": "R-06",
+    "question": "这条法律在 2027 年修订了吗",
+    "expect": "reject",
+    "note": "未来时间点，库里不可能有"
+  }
+]

@@ -22,6 +22,7 @@ import asyncio
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 
 from loguru import logger
 
@@ -109,8 +110,11 @@ def ensure_lag_monitor() -> None:
     _lag_task = loop.create_task(_measure_lag())
 
 
-def start() -> Runner:
+def start(heartbeat: Callable[[], None] | None = None) -> Runner:
     """启动任务执行器（应用入口在 `ensure_ready()` 之后调用）。
+
+    参数：
+        heartbeat: 可选心跳回调，挂在调度线程上（独立 worker 进程用于探活注入）。
 
     **可重复调用 + 线程安全**：整段加 :data:`_start_lock`；执行器走
     :meth:`Runner.singleton` 取/建（进程级唯一），`Runner.start()` 自己判"线程还活着就返回"。
@@ -120,7 +124,7 @@ def start() -> Runner:
     """
     with _start_lock:
         register_kinds()
-        runner = Runner.singleton(lag_provider=lag_ms)
+        runner = Runner.singleton(lag_provider=lag_ms, heartbeat=heartbeat)
         runner.start()
         enqueue_cleanup("startup")  # 启动时顺手维护一次（维护类，priority=-10，不抢用户的活）
         logger.info("任务系统就绪：{} 种任务类型", len(api.kinds()))

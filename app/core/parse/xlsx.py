@@ -51,7 +51,10 @@ def _cell_text(value: object) -> str:
             pass
         return str(value)
     text = str(value).strip()
-    return text
+    # 单元格里的换行不能带进表格行文本：切分器按行切，会把一个 Excel 行拆成多块。
+    # 用 " / " 保留选项/多行值的分隔语义，同时保证“一 Excel 行 = 一行文本”。
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return " / ".join(lines) if len(lines) > 1 else (lines[0] if lines else "")
 
 
 def _grid(sheet: object, max_col: int, read_only: bool) -> dict[int, list[str]]:
@@ -76,27 +79,65 @@ def _grid(sheet: object, max_col: int, read_only: bool) -> dict[int, list[str]]:
     return rows
 
 
-def _expand_merged(sheet: object, rows: dict[int, list[str]], max_col: int) -> None:
-    """把合并单元格区域内所有格填成左上角的值（read_only 模式没有合并信息，直接跳过）。"""
+def _expand_merged(
+    sheet: object, rows: dict[int, list[str]], max_col: int
+) -> tuple[tuple[int, int, int, int], ...]:
+    """按合并策略填充单元格，返回 `merged_ranges`。
+
+    - 纵向 ≤20 行：向下填满（每行都能独立读懂）；
+    - 纵向 >20 行：只保留组头（首行 + “合并至第 N 行”），其余行留空；
+    - 横向单行合并：值只放首列并标“跨 X 列”，不复制成假值；
+    - 纯版式空合并：不传播空值。
+    """
     merged = getattr(sheet, "merged_cells", None)
     ranges = getattr(merged, "ranges", None) if merged is not None else None
     if not ranges:
-        return
+        return ()
+    out: list[tuple[int, int, int, int]] = []
     for span in ranges:
         try:
             top_row, top_col = int(span.min_row), int(span.min_col)
+            end_row, end_col = int(span.max_row), int(span.max_col)
             value = rows.get(top_row, [""] * max_col)[top_col - 1]
         except (AttributeError, IndexError, TypeError):
             continue
         if not value:
             continue
-        for row_no in range(int(span.min_row), int(span.max_row) + 1):
-            target = rows.get(row_no)
-            if target is None:
+        out.append((top_row, end_row, top_col, end_col))
+        row_count = end_row - top_row + 1
+        col_count = end_col - top_col + 1
+        target = rows.get(top_row)
+        if target is None:
+            continue
+        if row_count == 1 and col_count > 1:
+            if top_row <= 2:
+                # 表头区的横向合并：多级表头要铺开，才能拼出完整列名
+                for col_no in range(top_col, end_col + 1):
+                    if 1 <= col_no <= len(target):
+                        target[col_no - 1] = value
                 continue
-            for col_no in range(int(span.min_col), int(span.max_col) + 1):
+            # 数据区横向合并：值只出现一次，标注跨列；其余列留空
+            for col_no in range(top_col, end_col + 1):
                 if 1 <= col_no <= len(target):
-                    target[col_no - 1] = value
+                    target[col_no - 1] = ""
+            target[top_col - 1] = f"{value}（跨 {col_count} 列）"
+            continue
+        if row_count > 20:
+            # 超大纵向合并：组头只放首行，其余行留空（行文本里带组头语义）
+            target[top_col - 1] = f"{value}（合并至第 {end_row} 行）"
+            for row_no in range(top_row + 1, end_row + 1):
+                row = rows.get(row_no)
+                if row is not None and 1 <= top_col <= len(row):
+                    row[top_col - 1] = ""
+            continue
+        for row_no in range(top_row, end_row + 1):
+            row = rows.get(row_no)
+            if row is None:
+                continue
+            for col_no in range(top_col, end_col + 1):
+                if 1 <= col_no <= len(row):
+                    row[col_no - 1] = value
+    return tuple(out)
 
 
 def _comment_text(comment: object) -> str:
@@ -203,6 +244,7 @@ def _iter_openpyxl(path: Path) -> Iterator[Unit]:
 
     try:
         prepared: list[tuple[object, int, dict[int, list[str]]]] = []
+        merged_by_sheet: dict[str, tuple[tuple[int, int, int, int], ...]] = {}
         for sheet in workbook.worksheets:
             try:
                 max_col = int(getattr(sheet, "max_column", 0) or 0)
@@ -211,7 +253,7 @@ def _iter_openpyxl(path: Path) -> Iterator[Unit]:
             if max_col <= 0:
                 continue
             rows = _grid(sheet, max_col, read_only)
-            _expand_merged(sheet, rows, max_col)
+            merged_by_sheet[str(sheet.title)] = _expand_merged(sheet, rows, max_col)
             if not read_only:
                 # 单元格批注：拼到该格值后面（F4/L24 这类注释不能丢）
                 for (row_no, col_no), note in _cell_comments(sheet).items():
@@ -313,6 +355,8 @@ def _iter_openpyxl(path: Path) -> Iterator[Unit]:
                             text=text,
                             content_type=TYPE_TABLE,
                             table_ref=f"sheet:{sheet.title}#{ordinal}",
+                            table_title=str(sheet.title),
+                            merged_ranges=merged_by_sheet.get(str(sheet.title), ()),
                             row_from=data_rows[0][0],
                             row_to=segment[-1][0],
                             col_from=1,

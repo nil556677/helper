@@ -46,7 +46,7 @@ CACHE = ROOT / ".tmp" / "qtwebengine"
 #: 等界面服务真的返回 200 的上限
 WAIT_HTTP_S = 25.0
 
-#: 页面加载完再等一会儿：首屏示例是异步渲染的（过程行动画 0.12s + Markdown 渲染）
+#: 页面加载完再等一会儿：首屏是异步渲染的（种子会话 + Markdown 渲染）
 RENDER_WAIT_MS = 4000
 
 #: 断言清单：``名字 → 判定``（判定拿渲染后的 HTML 文本）。
@@ -63,8 +63,8 @@ CHECKS: dict[str, Callable[[str], bool]] = {
     "左栏会话列表项": lambda t: 'hp-conv-row' in t,
     "示例会话在列表里": lambda t: "示例对话" in t,
     "左栏顶部「返回聊天」": lambda t: "返回聊天" in t,
-    "设置分区（通用 + 模型配置）": lambda t: all(s in t for s in ("通用", "模型配置")),
-    "没落地的分区不摆出来": lambda t: not any(s in t for s in ("词库", "追踪")),
+    "设置分区（通用 + 模型配置 + 检索追踪）": lambda t: all(s in t for s in ("通用", "模型配置", "检索追踪")),
+    "旧分区不摆出来": lambda t: "词库" not in t,
     "知识库有导入控件": lambda t: "q-uploader" in t,
     "模型配置两个测试连接": lambda t: t.count("测试连接") >= 2,
     "知识库概览四格": lambda t: all(s in t for s in ("份资料", "个片段", "副本占用", "向量占用")),
@@ -80,6 +80,18 @@ CHECKS: dict[str, Callable[[str], bool]] = {
     "高级参数不上界面": lambda t: "温度" not in t and "最大输出" not in t,
     "写明配置进数据库": lambda t: "llm_slots" in t,
     "模拟数据已明确标注": lambda t: "示例数据" in t,
+    # 下面是聊天区这一轮的改动（等待反馈 + 底栏统计）：
+    # 等待行有动画元素（CSS 注入即出现，运行时也一直存在）
+    "等待行动画（running 行 + 跳动点）": lambda t: "hp-running-row" in t and "hp-dots" in t,
+    "等待行秒表样式": lambda t: "hp-running-clock" in t,
+    "聊天底栏统计 dock": lambda t: "hp-composer-stats" in t,
+    "上下文占用条": lambda t: "hp-context-bar" in t,
+    "统计数字等宽": lambda t: "hp-stat-pill" in t,
+    # 工作步骤（工具/命令行）与推理预览：种子会话里的一轮会真的画出这些行
+    "工作步骤行（工具/命令）": lambda t: "hp-step-title" in t,
+    "推理预览块": lambda t: "hp-reasoning-title" in t,
+    # 资料区默认收起：只露一行"资料 · N 段"，点开才列出出处
+    "资料区折叠条（默认收起）": lambda t: "资料 · 1 段" in t,
     # 下面几条是"格式真的渲染出来了"的硬证据——用户模拟里看不到这一层
     "Markdown 表格 → <table>": lambda t: "<table" in t,
     # 浏览器内置的 HTML 消毒会丢掉 <pre>，pygments 的 .codehilite 容器才是留下的那个
@@ -108,6 +120,7 @@ MEASURE_SCRIPT = r"""
   try {
     out['聊天 · 输入盒'] = height('.hp-composer-box');
     out['聊天 · 一轮对话'] = height('.hp-turn');
+    out['聊天 · 底栏统计'] = height('.hp-composer-stats');
 
     const settings = button('设置');
     if (settings) settings.click();
@@ -164,16 +177,77 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def seed_sample_conversation() -> None:
+    """渲染检查用：给聊天页种一个带完整一轮的示例会话。
+
+    真实应用里聊天页自己种"新对话"（空会话，见 `_chat_retrieval.ensure_seeded`）；
+    这里种一个**有内容**的会话，让"表格/代码块/引用/过程行真的渲染出来了"
+    那组断言有东西可查——这正是本脚本要验的那一层（用户模拟看不到
+    markdown-it 的产物）。
+    """
+    from app.ui.state import conversations as store
+    from app.ui.state.chat_model import Entry, Fragment, Process, Step, Turn
+
+    if store.conversations():
+        return
+    store.new(
+        title="示例对话",
+        note="示例数据（界面展示用，不是真实检索结果）",
+    )
+    store.append(
+        Entry(
+            question="违约金怎么算？",
+            turn=Turn(
+                process=Process(
+                    running="正在检索本地资料…",
+                    done="检索本地资料 · hybrid · 命中 1 条",
+                    steps=[
+                        Step(group="prepare", title="理解问题", detail="查询词：违约金怎么算？"),
+                        Step(group="search", title="语义检索", detail="命中 1 条"),
+                        Step(
+                            group="filter",
+                            title="回填父块",
+                            detail="取回 1 个父块 → 1 条证据\n#1 1.00 · 合同.md · 第 5 段",
+                        ),
+                    ],
+                    reasoning="- 查询词：违约金怎么算？\n- 检索模式：hybrid（通道：semantic + keyword）",
+                    duration_ms=12,
+                ),
+                answer=(
+                    "#### 合同.md · 第 5 段\n\n"
+                    "违约金按日万分之三计算。\n\n"
+                    "| 条款 | 说明 |\n| --- | --- |\n| 违约金 | 日万分之三 |\n\n"
+                    "```python\nprint('示例')\n```\n\n行内代码 `示例`。"
+                ),
+                fragments=[
+                    Fragment(
+                        index=1,
+                        source_name="合同.md",
+                        origin="第 5 段",
+                        score=1.0,
+                        text="违约金按日万分之三计算。",
+                    ),
+                ],
+            ),
+        )
+    )
+
+
 def wait_http(url: str, timeout_s: float = WAIT_HTTP_S) -> bool:
     """等界面服务真的返回 200（只等 TCP 端口不够：那时页面还是空的）。"""
     deadline = time.monotonic() + timeout_s
+    last: BaseException | None = None
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=1.0) as response:
+            with urllib.request.urlopen(url, timeout=5.0) as response:
                 if response.status == 200:
                     return True
-        except (urllib.error.URLError, OSError, ValueError):
+                last = RuntimeError(f"HTTP {response.status}")
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            last = exc
             time.sleep(0.15)
+    if last is not None:
+        print(f"wait_http 最后错误：{type(last).__name__}: {last}", file=sys.stderr)
     return False
 
 
@@ -190,6 +264,7 @@ def main() -> int:
 
     @ui.page('/')
     def index() -> None:
+        seed_sample_conversation()
         build_shell()
 
     port = free_port()
@@ -232,9 +307,16 @@ def main() -> int:
         except ValueError:
             data = {"X_量高度脚本没返回": -1}
         print('\n=== 可见高度（元素在 HTML 里不算数，要看真的有没有高度）===', flush=True)
+        empty_kb = data.get("设置 · 知识库分页节点") == 0
         for name, value in data.items():
             checked += 1
-            ok = isinstance(value, int) and value > 0
+            # 空库/空任务列表时页脚可以自然塌成 0（有内容时必须 >0）
+            ok = isinstance(value, int) and (
+                value > 0
+                or (empty_kb and name == "设置 · 知识库列表页脚" and value == 0)
+                or ("任务页页脚" in name and value == 0)
+                or ("知识库分页节点" in name and value == 0)
+            )
             print(('PASS  ' if ok else 'FAIL  ') + f'{name}：{value} px', flush=True)
             if not ok:
                 failed.append(f'{name}（可见高度 {value}）')

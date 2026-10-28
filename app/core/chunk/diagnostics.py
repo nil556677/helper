@@ -65,6 +65,16 @@ class Diagnostic:
     count: int = 1
     """同类诊断出现了几次（聚合后）。"""
 
+    level: str = ""
+    """降级级别：clause / symbol / char / atomic_overflow（普通诊断可空）。"""
+
+    loc: str = ""
+    """定位（页/行/表格行/代码行）。"""
+
+    budget: int = 0
+    actual: int = 0
+    atom_type: str = ""
+
 
 @dataclass
 class DiagnosticSink:
@@ -76,7 +86,19 @@ class DiagnosticSink:
 
     _items: dict[str, Diagnostic] = field(default_factory=dict)
 
-    def add(self, code: str, severity: Severity, message: str, detail: str = "") -> None:
+    def add(
+        self,
+        code: str,
+        severity: Severity,
+        message: str,
+        detail: str = "",
+        *,
+        level: str = "",
+        loc: str = "",
+        budget: int = 0,
+        actual: int = 0,
+        atom_type: str = "",
+    ) -> None:
         """记一条；同 code 只保留首条样本并计数。
 
         参数：
@@ -84,11 +106,22 @@ class DiagnosticSink:
             severity: 严重度；同 code 后续再报**不覆盖**首条的级别。
             message: 给用户的一句话。
             detail: 可选细节（首个样本的现场，通常是原文片段/位置）。
+            level/loc/budget/actual/atom_type: 降级/原子超限的可运营字段。
         返回：无。
         """
         existing = self._items.get(code)
         if existing is None:
-            self._items[code] = Diagnostic(code, severity, message, detail)
+            self._items[code] = Diagnostic(
+                code,
+                severity,
+                message,
+                detail,
+                level=level,
+                loc=loc,
+                budget=int(budget),
+                actual=int(actual),
+                atom_type=atom_type,
+            )
         else:
             # 保留**首条**的 message/detail：第一条通常是原始现场；
             # 后续只把次数加上去，避免同一问题刷屏
@@ -98,6 +131,11 @@ class DiagnosticSink:
                 existing.message,
                 existing.detail,
                 existing.count + 1,
+                level=existing.level,
+                loc=existing.loc,
+                budget=existing.budget,
+                actual=existing.actual,
+                atom_type=existing.atom_type,
             )
 
     def extend(self, other: DiagnosticSink) -> None:

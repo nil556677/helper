@@ -153,6 +153,12 @@ def backup(
         )
 
     # 3) 词条表随数据库一起备份（``token_dict`` 在 helper.db 里），无需单独拷文件。
+
+    # 4) **Qdrant 数据目录**：chunks 只在 Qdrant（SQLite 无 chunks 表），不备份=恢复后丢片段。
+    #    本地嵌入式 copies `data/qdrant/`；本机 sidecar copies `data/qdrant-server/`；
+    #    远程服务端**跳过**（存储不在本机，应由调用方对服务端做 snapshot）。
+    _backup_qdrant(to=to, data_out=data_out, entries=entries)
+
     manifest = {
         "tool": "backup_data.py",
         "spec_version": 1,
@@ -163,6 +169,35 @@ def backup(
     }
     _write_json(to / MANIFEST_NAME, manifest)
     return manifest
+
+
+def _backup_qdrant(
+    *, to: Path, data_out: Path, entries: list[dict]
+) -> None:
+    """把本机 Qdrant 服务端存储目录拷进备份（远程服务端跳过）。"""
+    from app.core import paths
+    from app.core.config import store as params_store
+
+    try:
+        url = str(params_store.load()["vector.url"] or "").strip()
+    except Exception:
+        url = ""
+    if url and "127.0.0.1" not in url and "localhost" not in url:
+        return  # 远程服务端：不拷本机目录
+    qdir = paths.data_dir() / "qdrant-server"
+    if not qdir.is_dir():
+        return
+    dest = data_out / qdir.name
+    shutil.copytree(qdir, dest, dirs_exist_ok=True)
+    for item in _walk_files(dest):
+        entries.append(
+            {
+                "relpath": _relposix(item, to),
+                "bytes": item.stat().st_size,
+                "sha256": _sha256(item),
+                "kind": "vector",
+            }
+        )
 
 
 def verify(backup_dir: str | Path) -> tuple[bool, list[str]]:

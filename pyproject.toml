@@ -1,6 +1,6 @@
 [project]
 name = "helper"
-version = "0.1.0"
+version = "0.2.0"
 description = "本地桌面 AI 助手（本机检索 + 云端大模型回答）"
 requires-python = ">=3.12"
 # 运行时依赖统一在装环境时写进 requirements.txt（安装成功后 pip freeze 出 lock 文件），

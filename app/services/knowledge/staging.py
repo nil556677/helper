@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from app.core import paths
 from app.core.parse import supported_suffixes
-from app.rag import store
+from app.rag import kb_store
 
 #: 单个上传文件的上限（界面与**服务端**共用这一个数：前端拦一次，落盘后再校验一次）。
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
@@ -38,7 +38,7 @@ def discard_pending(doc_id: int | str | None) -> None:
     if doc_id is None:
         return
     try:
-        store.delete_many([int(doc_id)])
+        kb_store.delete_document(int(doc_id))
     except Exception:
         from loguru import logger
 
@@ -151,21 +151,18 @@ def _register_staged(name: str, target: Path, sha256: str) -> dict[str, str]:
     # 一条永远没人认领的占位行。
     from app.core.db.connection import transaction
 
-    with transaction() as conn:
-        existing = store.find_id_by(
-            "file_hash",
-            sha256,
-            statuses=("pending", "ready", "indexing", "superseded"),
-            conn=conn,
-        )
-        if existing is not None:
-            payload["skip"] = str(existing)
+    with transaction():
+        existing = kb_store.find_by_file_hash(sha256)
+        if existing is not None and str(existing["status"]) != "failed":
+            payload["skip"] = str(int(existing["id"]))
             return payload
-        doc_id = store.insert_pending(
-            payload["name"],
-            size=target.stat().st_size,
+        doc_id = kb_store.insert_document(
+            name=payload["name"],
+            stored_path="",
             file_hash=sha256,
-            conn=conn,
+            size=target.stat().st_size,
+            status="pending",
+            version=1,
         )
     payload["doc_id"] = str(doc_id)
     return payload

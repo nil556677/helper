@@ -4,7 +4,7 @@
 明文既不落盘也不进日志。``config.json`` 只留"打开数据库之前就必须知道"的两项
 （日志级别、数据目录）——见方案 §12。
 
-**为什么只有两个槽位**：推理模型负责回答问题，OCR 模型负责把扫描件 / 图片转成文字。
+**为什么只有两个槽位**：大模型负责回答与查询重写，OCR 模型负责把扫描件 / 图片转成文字。
 以后加槽位 = 这里加一行（表里 ``slot`` 是主键、没写死取值约束，**不用迁移库**）。
 """
 
@@ -38,12 +38,19 @@ class Slot:
     """用哪个探测函数：``chat`` 或 ``ocr``。"""
 
 
-#: 现在的两个槽位。加槽位就在这后面加一行。
+#: 现在的三个槽位。加槽位就在这后面加一行。
 SLOTS: tuple[Slot, ...] = (
     Slot(
-        key="reasoning",
-        title="推理模型",
-        purpose="回答问题时用的主模型，走 OpenAI 兼容协议",
+        key="llm",
+        title="大模型",
+        purpose="回答、查询重写等任务统一使用的大模型，走 OpenAI 兼容协议",
+        example="火山方舟 / doubao-seed-1.6",
+        probe="chat",
+    ),
+    Slot(
+        key="llm-compact",
+        title="压缩摘要模型",
+        purpose="压缩远期记忆（会话摘要）用；不配置则沿用「大模型」",
         example="火山方舟 / doubao-seed-1.6",
         probe="chat",
     ),
@@ -192,40 +199,82 @@ def save(
     )
 
 
-def test_connection(slot_key: str, *, timeout: float | None = None) -> ConnectionOutcome:
-    """拿库里存着的配置**真发一次极小的请求**，把"通不通"验出来。
+def test_connection(
+    slot_key: str,
+    *,
+    timeout: float | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+) -> ConnectionOutcome:
+    """真发一次极小的请求，把"通不通"验出来。
 
     参数：
         slot_key: 槽位名。
         timeout: 覆盖探测超时（测试用）。
+        base_url / model / api_key: **可选的"当前输入"覆盖**——界面里改了输入框还没保存时，
+            直接拿屏幕上的值测，而不是测库里那份旧的（否则会让人误判"配置没问题"）。
+            ``api_key`` 传明文即可，只在本函数内存里用，不落盘。
     ``kind`` 见 :data:`app.core.llm.openai_compat.KIND_LABELS`——**失败会分类**，
     用户照着 ``detail`` 就能改。
     """
-    slot = _slot(slot_key)
-    row = _row(slot_key)
-    if row is None or not str(row["base_url"]).strip() or not str(row["model"]).strip():
+    slot = _slot(slot_key)  # 槽位
+    row = _row(slot_key)  # 库里那一行（可能还没保存过）
+    url = (base_url if base_url is not None else str(row["base_url"]) if row else "").strip()  # 地址
+    mdl = (model if model is not None else str(row["model"]) if row else "").strip()  # 模型名
+    if not url or not mdl:  # 必填缺失
         return ConnectionOutcome(
             ok=False, kind="config", detail="先填好接口地址与模型名并保存", elapsed_ms=0
         )
-    if not row["api_key_cipher"]:
+
+    key = (api_key or "").strip()  # 屏幕上填的新 key（可能为空）
+    if key:  # 有当前输入 → 直接用它
+        plain = key  # 明文
+    elif row is not None and row["api_key_cipher"]:  # 没填新的 → 用库里存着的
+        try:
+            plain = unprotect(bytes(row["api_key_cipher"])).decode("utf-8")  # 解密
+        except SecurityError as exc:  # 换用户/换机器/密文损坏
+            return ConnectionOutcome(
+                ok=False,
+                kind="auth",
+                detail=f"存着的密钥解不开：{exc}。请重新粘贴一次 key",
+                elapsed_ms=0,
+            )
+    else:  # 既没新 key 也没存过
         return ConnectionOutcome(ok=False, kind="config", detail="还没填 api key", elapsed_ms=0)
 
-    try:
-        api_key = unprotect(bytes(row["api_key_cipher"])).decode("utf-8")
-    except SecurityError as exc:  # 换用户/换机器/密文损坏都会走到这里
-        return ConnectionOutcome(
-            ok=False,
-            kind="auth",
-            detail=f"存着的密钥解不开：{exc}。请重新粘贴一次 key",
-            elapsed_ms=0,
-        )
-
-    probe = _PROBES[slot.probe]
-    kwargs = {} if timeout is None else {"timeout": timeout}
-    result: ProbeResult = probe(str(row["base_url"]), str(row["model"]), api_key, **kwargs)
+    probe = _PROBES[slot.probe]  # 探测方式
+    kwargs = {} if timeout is None else {"timeout": timeout}  # 超时
+    result: ProbeResult = probe(url, mdl, plain, **kwargs)  # 真发一次
     return ConnectionOutcome(
         ok=result.ok,
         kind=result.kind,
         detail=result.detail,
         elapsed_ms=result.elapsed_ms,
     )
+
+
+@dataclass(frozen=True)
+class LLMRuntime:
+    """一次调用要用的已解密配置（**只给内部用，绝不进日志/界面**）。"""
+
+    base_url: str
+    model: str
+    api_key: str
+
+
+def llm_runtime() -> LLMRuntime | None:
+    """读 ``llm`` 槽位并解密 key；没配全/解不开返回 ``None``（重写直接跳过）。"""
+    row = _row("llm")
+    if row is None:
+        return None
+    base_url = str(row["base_url"] or "").strip()
+    model = str(row["model"] or "").strip()
+    cipher = row["api_key_cipher"]
+    if not base_url or not model or not cipher:
+        return None
+    try:
+        api_key = unprotect(bytes(cipher)).decode("utf-8")
+    except (SecurityError, OSError, ValueError):
+        return None
+    return LLMRuntime(base_url=base_url, model=model, api_key=api_key)

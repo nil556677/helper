@@ -111,6 +111,7 @@ class Runner:
         lag_provider: Callable[[], float] | None = None,
         lane_limits: dict[str, int] | None = None,
         max_concurrent: int | None = None,
+        heartbeat: Callable[[], None] | None = None,
     ) -> None:
         if not inline:
             # **机制**（而不是"请用 singleton() 的约定"）：非 inline 执行器一个进程只许有一个。
@@ -150,6 +151,10 @@ class Runner:
         self._warned_stuck = False
         self.lag_degraded = False
         """cpu 泳道是否因为界面延迟被自动让路（任务页会显示原因）。"""
+        #: 可选心跳回调：由独立 worker 进程注入（写心跳时间戳供主进程探活）。
+        #: 挂在**调度线程**上、而不是主循环：调度线程停摆（卡死/退出）才真正意味着
+        #: "进程还活着却不干活"，此时心跳停 → 主进程看门狗判定不健康 → 重启 worker 收尸。
+        self._heartbeat_cb = heartbeat
 
     # ---------------- 生命周期 ----------------
 
@@ -607,6 +612,9 @@ class Runner:
         last_renew = 0.0
         while not self._stop.is_set():
             try:
+                # 心跳在每轮开头打：调度线程活着走得到这里 = worker 健康。
+                # 就算 tick/maintenance 抛异常，下面 catch 后仍会继续、照常心跳。
+                _safe_heartbeat(self._heartbeat_cb)
                 if not store.get_paused():
                     self.tick()
                 if time.time() - self._last_maintenance >= MAINTENANCE_EVERY_S:
@@ -622,6 +630,16 @@ class Runner:
             except Exception:
                 logger.exception("调度循环出错（继续跑）")
             self._wait_next()
+
+
+def _safe_heartbeat(cb: Callable[[], None] | None) -> None:
+    """打一次心跳回调；失败静默（心跳是探活旁路，绝不能被它拖垮调度）。"""
+    if cb is None:
+        return
+    try:
+        cb()
+    except Exception:
+        logger.warning("worker 心跳写失败（不影响调度）")
 
 
 def get_runner() -> Runner | None:

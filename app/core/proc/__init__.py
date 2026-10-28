@@ -1,12 +1,13 @@
-"""子进程守护（P7）：Qdrant sidecar 与独立 worker 共用。"""
+"""子进程守护（P7）：Qdrant sidecar 与独立 worker 共用。
 
-from app.core.proc.lifecycle import build_specs, start_sidecars, stop_sidecars
-from app.core.proc.supervisor import ChildSpec, Supervisor
+入口统一走 ``app.core.proc.services``（``start/stop/status/restart``）；本包只导出
+Supervisor / ChildSpec，以及崩溃后清理残留子进程的 ``cleanup_stale_children``。
+"""
+
+from app.core.proc.supervisor import ChildSpec, Supervisor, cleanup_stale_children
 
 __all__ = [
     "ChildSpec",
     "Supervisor",
-    "build_specs",
-    "start_sidecars",
-    "stop_sidecars",
+    "cleanup_stale_children",
 ]

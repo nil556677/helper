@@ -22,6 +22,7 @@ from .filters import (
     redact,
 )
 from .handlers import (
+    CHILD_LOG_COMPONENTS,
     CONSOLE_PREFIX,
     LOG_FILENAME,
     LOG_FILENAME_PREFIX,
@@ -33,9 +34,11 @@ from .handlers import (
     DailyFileSink,
     InterceptHandler,
     capture_native_output,
+    child_log_file,
     console_file,
     console_output_file,
     daily_log_file,
+    init_child_logging,
     init_logging,
     install_asyncio_handler,
     install_exception_hooks,
@@ -50,6 +53,7 @@ from .overview import (
 )
 
 __all__ = [
+    "CHILD_LOG_COMPONENTS",
     "CONSOLE_PREFIX",
     "LOGS_TOTAL_LIMIT_MB",
     "LOG_FILENAME",
@@ -63,10 +67,12 @@ __all__ = [
     "InterceptHandler",
     "capture_native_output",
     "check_disk_space",
+    "child_log_file",
     "console_file",
     "console_output_file",
     "daily_log_file",
     "environment_snapshot",
+    "init_child_logging",
     "init_logging",
     "install_asyncio_handler",
     "install_exception_hooks",

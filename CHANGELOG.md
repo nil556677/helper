@@ -3,6 +3,19 @@
 本文件记录面向用户的改动轨迹。内部方案文档在 `docs/`、不进版本控制，因此公开可查的变更历史只有这一份 ——
 **版本发布时必须在 `CHANGELOG.md` 补一条**，发布步骤见 [README.md 的「发布流程」](#发布流程)。
 
+## 0.2.0 — 2026-10-22
+
+- **净室重写**：编排层迁到 LangChain 1.4.7 + LangGraph 1.2.16（`StateGraph`、`interrupt`、
+  SQLite checkpointer）；删除旧 agent route/pending、旧 RAG query/assemble、旧 vector/store。
+- **数据库 v1**：全新 schema（documents + chunks parent/child、conversations/messages、trace_*）；
+  旧 v20 库通过 `scripts/reset_workspace.py` 一次性重置，仅保留 `llm_slots`。
+- **向量库**：Qdrant 单集合 `kb_chunks`（dense+sparse）；父块回 SQLite；删除
+  `rag_parents`、alias、v2 集合；`models/` 三个 ONNX 文件继续使用。
+- **检索/回答**：dense+sparse → RRF → 精排 → 父块证据 → 生成/引用校验；未配置 LLM 时回退原文。
+- **检索追踪**：trace 落库（runs/spans/hits/events）+ 设置页「检索追踪」后台。
+- **知识库**：查询/暂存/删除/重建/导入任务全部切到 v1 + 新 ingest pipeline。
+- **UI**：真实引擎 DOM 检查 59/59 通过；单测全绿。
+
 ## 0.1.0 — 2026-10-15
 
 - 首个可运行版本：NiceGUI + QtWebEngine 桌面窗口，双击即起、不用浏览器（聊天 / 设置两套模式，窗口大小与位置会记住）

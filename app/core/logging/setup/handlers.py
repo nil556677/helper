@@ -232,6 +232,43 @@ def console_file(day: str | None = None) -> Path:
     return paths.logs_dir() / f"{CONSOLE_PREFIX}{stamp}.log"
 
 
+#: 受管子进程的日志组件名：文件名规则与主日志一致，``<组件>-YYYY-MM-DD.log``。
+CHILD_LOG_COMPONENTS = ("worker", "qdrant")
+
+
+def child_log_file(component: str, day: str | None = None, directory: Path | None = None) -> Path:
+    """子进程日志的当天路径（``logs/worker-YYYY-MM-DD.log`` / ``qdrant-…``）。
+
+    与 ``helper-<日期>.log`` / ``console-<日期>.log`` 同一套命名规则。
+    子进程由 Supervisor 继承文件句柄直接写入（父进程不做转写），所以这里只负责
+    "今天该写哪个名字"；``directory`` 允许测试/自定义目录（默认 ``logs/``）。
+    """
+    stamp = day or time.strftime("%Y-%m-%d")
+    base = Path(directory) if directory is not None else paths.logs_dir()
+    return base / f"{component}-{stamp}.log"
+
+
+def init_child_logging(component: str, level: str = "DEBUG") -> None:
+    """子进程（worker）专用日志初始化：**只装 stderr sink**，不写文件。
+
+    为什么只装 stderr：子进程的 stdout/stderr 已被 Supervisor 重定向到
+    ``logs/<组件>-<日期>.log``，这里再加文件 sink 就会双写。装 stderr 的目的只有一个——
+    让它用同一套 :data:`LOG_FORMAT`（带 run / 模块:行），而不是 loguru 的默认格式，
+    这样所有日志文件的字段顺序完全一致。
+    """
+    logger.remove()  # 清掉 loguru 默认 handler（它的格式与 LOG_FORMAT 不同）
+    logger.configure(patcher=_patch)  # 兜底脱敏 + 保证 run/src/at 一定有值
+    logger.add(  # 唯一的 sink：stderr（由 Supervisor 落到子日志文件）
+        sys.stderr,
+        level=level.upper(),  # 文件级别
+        format=LOG_FORMAT,  # 与主日志同一套格式
+        backtrace=False,  # 不带变量现场（防泄漏，见模块说明）
+        diagnose=False,  # 异常栈不带局部变量
+        catch=True,  # 日志自身出错不拖垮进程
+    )
+    logger.info("子进程日志已初始化：{}（输出到 stderr，由 Supervisor 落盘）", component)  # 起始标记
+
+
 def init_logging(
     level: str = "INFO",
     *,

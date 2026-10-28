@@ -116,6 +116,8 @@ class _OpenParent:
             text=self.text,
             is_parent=True,
             content_type=self.content_type,
+            role="section_parent",
+            fetch_mode=0,
             section_path=self.section_path,
             level=self.level,
             page=self.page,

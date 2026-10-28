@@ -66,11 +66,16 @@ def _forget_depth(conn: sqlite3.Connection) -> None:
 _fts5_ok: bool | None = None
 
 
-def _configure(conn: sqlite3.Connection) -> sqlite3.Connection:
-    """设置本项目的连接约定（每次建连都要走这里）。"""
+def _configure(conn: sqlite3.Connection, *, readonly: bool = False) -> sqlite3.Connection:
+    """设置本项目的连接约定（每次建连都要走这里）。
+
+    readonly=True：供 **只读进程/连接**（UI）用，跳过 ``journal_mode=WAL``（那是一个需要
+    写权限的 PRAGMA，只读连接上会失败）；WAL 模式是库级持久设置，worker 已开启，只读方直接读。
+    """
     conn.row_factory = sqlite3.Row
-    # WAL：读写并发，写不挡读；synchronous=NORMAL 在 WAL 下已能保证不损坏，换更快的写。
-    conn.execute("PRAGMA journal_mode=WAL")
+    if not readonly:  # 只读连接不设 WAL（会失败）
+        # WAL：读写并发，写不挡读；synchronous=NORMAL 在 WAL 下已能保证不损坏，换更快的写。
+        conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     # 外键默认是关的，级联删除全靠它。
     conn.execute("PRAGMA foreign_keys=ON")
@@ -139,6 +144,21 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
         )
         raise
     return _configure(conn)
+
+
+def connect_readonly(db_path: Path | None = None) -> sqlite3.Connection:
+    """新建一条**只读**连接（E0）：UI 进程用它读库，物理写不了。
+
+    参数：
+        db_path: 库文件路径；默认 ``{数据目录}/helper.db``。
+    说明：
+        通过 URI ``file:...?mode=ro`` 打开，配合 WAL 供「多读 + 单写（worker）」。
+        只读连接由调用方负责关闭；不要用 ``transaction()``（它需要写）。
+    """
+    target = db_path or paths.db_file()
+    # as_uri() 给出 file:///C:/... 形式，SQLite URI 接受并正确转义非 ASCII/空格。
+    conn = sqlite3.connect(target.as_uri() + "?mode=ro", uri=True, isolation_level=None)
+    return _configure(conn, readonly=True)
 
 
 def _usable(conn: sqlite3.Connection) -> bool:

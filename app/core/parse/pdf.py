@@ -46,6 +46,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import fitz
 from loguru import logger
@@ -58,6 +59,7 @@ from app.core.parse.model import (
     ParseError,
     Unit,
 )
+from app.core.parse.pdf_meta import attach_table_titles, structure_grid
 
 #: 句末标点（含收尾的引号/括号）：能结束一句话的字符集。
 #: 页尾块若**不以**这些结尾 → 认为句子未完 → 续接到下一页。
@@ -268,7 +270,13 @@ def _close_paragraph(
 
 
 def _extract_table(
-    page, bbox: tuple[float, float, float, float], pdfplumber_page, page_number: int, table_no: int
+    page,
+    bbox: tuple[float, float, float, float],
+    pdfplumber_page,
+    page_number: int,
+    table_no: int,
+    *,
+    grid: Any = None,
 ) -> Block:
     """在 fitz 给的表格区域内，用 pdfplumber 精确抠单元格。
 
@@ -292,6 +300,23 @@ def _extract_table(
     rows: list[list[str]] = []
     #: 每**行**的 bbox（pdfplumber 才能给；退回到 fitz 的兜底就没有，引用高亮退到整块）
     row_coords: list[tuple[float, float, float, float]] = []
+    if grid is not None:
+        text, header, merged = grid.to_block_parts()
+        return Block(
+            text=text,
+            content_type=TYPE_TABLE,
+            page=page_number,
+            page_to=page_number,
+            table_ref=f"page:{page_number}#{table_no}",
+            table_title=str(getattr(grid, "title", "") or ""),
+            merged_ranges=tuple(merged),
+            row_from=1,
+            row_to=max(1, len(grid.cells)),
+            col_from=1,
+            col_to=max(1, grid.width),
+            header=header,
+            coords=bbox,
+        )
     try:
         if pdfplumber_page is not None:
             # 只裁表格区域：整页 extract_table 会把版面里的其他文字也吃进来
@@ -492,7 +517,19 @@ def iter_units(path: Path) -> Iterator[Unit]:
             # 当前页的 pdfplumber 页对象（只取这一页；越界时给 None，走 fitz 兜底）
             pdf_page = pdfplumber.pages[page_no] if pdfplumber is not None and page_no < len(pdfplumber.pages) else None
             for table_no, bbox in enumerate(table_boxes, start=1):
-                items.append((bbox[1], _extract_table(page, bbox, pdf_page, page_number, table_no)))
+                items.append(
+                    (
+                        bbox[1],
+                        _extract_table(
+                            page,
+                            bbox,
+                            pdf_page,
+                            page_number,
+                            table_no,
+                            grid=structure_grid(path, page_number, bbox),
+                        ),
+                    )
+                )
             items.sort(key=lambda item: item[0])
 
             blocks: list[Block] = []
@@ -582,6 +619,7 @@ def iter_units(path: Path) -> Iterator[Unit]:
 
             if blocks or notes:
                 # 书签是文档级的：只在第一个产出的单元上带一次
+                blocks = attach_table_titles(blocks)
                 yield Unit(blocks=blocks, notes=notes, pages=page_count, toc=toc)
                 toc = None
 

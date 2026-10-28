@@ -25,6 +25,17 @@ def file_size(path: Path) -> int:
     except OSError:
         return 0
 
+
+def unique_path(path: Path) -> Path:
+    """同名文件已存在时加序号（`x.zip` → `x-2.zip`），避免**静默覆盖**。"""
+    if not path.exists():
+        return path
+    for index in range(2, 1000):
+        candidate = path.with_name(f"{path.stem}-{index}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    return path.with_name(f"{path.stem}-{path.stat().st_mtime_ns}{path.suffix}")
+
 #: SQLite 主库文件名。
 DB_FILENAME = "helper.db"
 

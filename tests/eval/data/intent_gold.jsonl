@@ -1,0 +1,125 @@
+{"text": "你好呀", "intent": "chitchat"}
+{"text": "您好", "intent": "chitchat"}
+{"text": "嗨", "intent": "chitchat"}
+{"text": "在吗", "intent": "chitchat"}
+{"text": "早上好", "intent": "chitchat"}
+{"text": "晚上好", "intent": "chitchat"}
+{"text": "谢谢你", "intent": "chitchat"}
+{"text": "谢啦", "intent": "chitchat"}
+{"text": "辛苦了", "intent": "chitchat"}
+{"text": "再见", "intent": "chitchat"}
+{"text": "拜拜", "intent": "chitchat"}
+{"text": "晚安", "intent": "chitchat"}
+{"text": "回头聊", "intent": "chitchat"}
+{"text": "好的谢谢", "intent": "chitchat"}
+{"text": "哈哈", "intent": "chitchat"}
+{"text": "嗯嗯", "intent": "chitchat"}
+{"text": "你是谁", "intent": "chitchat"}
+{"text": "你能做什么", "intent": "chitchat"}
+{"text": "好久不见", "intent": "chitchat"}
+{"text": "没事了", "intent": "chitchat"}
+{"text": "查订单 123456", "intent": "tool_call", "tool": "query_order"}
+{"text": "订单 889900 到哪了", "intent": "tool_call", "tool": "query_order"}
+{"text": "我的订单 202610", "intent": "tool_call", "tool": "query_order"}
+{"text": "订单号 123456 的状态", "intent": "tool_call", "tool": "query_order"}
+{"text": "帮我查订单 555555", "intent": "tool_call", "tool": "query_order"}
+{"text": "订单 777777 什么时候到", "intent": "tool_call", "tool": "query_order"}
+{"text": "查一下订单 314159", "intent": "tool_call", "tool": "query_order"}
+{"text": "订单 271828 信息", "intent": "tool_call", "tool": "query_order"}
+{"text": "看看订单 123456", "intent": "tool_call", "tool": "query_order"}
+{"text": "订单号 999999", "intent": "tool_call", "tool": "query_order"}
+{"text": "查订单 100001", "intent": "tool_call", "tool": "query_order"}
+{"text": "订单 100002 付款了吗", "intent": "tool_call", "tool": "query_order"}
+{"text": "我的订单 100003", "intent": "tool_call", "tool": "query_order"}
+{"text": "订单 100004 金额", "intent": "tool_call", "tool": "query_order"}
+{"text": "查下订单 100005", "intent": "tool_call", "tool": "query_order"}
+{"text": "订单 100006 商品", "intent": "tool_call", "tool": "query_order"}
+{"text": "订单 100007 地址", "intent": "tool_call", "tool": "query_order"}
+{"text": "订单 100008 下单时间", "intent": "tool_call", "tool": "query_order"}
+{"text": "订单 100009", "intent": "tool_call", "tool": "query_order"}
+{"text": "订单 100010 详情", "intent": "tool_call", "tool": "query_order"}
+{"text": "查快递 SF1234567890", "intent": "tool_call", "tool": "query_express"}
+{"text": "顺丰快递 SF1234567890", "intent": "tool_call", "tool": "query_express"}
+{"text": "快递单号 YT123456789", "intent": "tool_call", "tool": "query_express"}
+{"text": "帮我查物流 789456123012", "intent": "tool_call", "tool": "query_express"}
+{"text": "运单 123456789012 到哪了", "intent": "tool_call", "tool": "query_express"}
+{"text": "中通快递 753951852456", "intent": "tool_call", "tool": "query_express"}
+{"text": "圆通单号 111222333444", "intent": "tool_call", "tool": "query_express"}
+{"text": "查询快递 JD987654321", "intent": "tool_call", "tool": "query_express"}
+{"text": "快递 SF000111222", "intent": "tool_call", "tool": "query_express"}
+{"text": "物流信息 555666777888", "intent": "tool_call", "tool": "query_express"}
+{"text": "韵达快递 444555666777", "intent": "tool_call", "tool": "query_express"}
+{"text": "申通单号 888999000111", "intent": "tool_call", "tool": "query_express"}
+{"text": "查一下快递 EMS123456789", "intent": "tool_call", "tool": "query_express"}
+{"text": "顺丰单号 SF9876543210", "intent": "tool_call", "tool": "query_express"}
+{"text": "快递到哪了 123456789012", "intent": "tool_call", "tool": "query_express"}
+{"text": "我的快递 999888777666", "intent": "tool_call", "tool": "query_express"}
+{"text": "查快递 666555444333", "intent": "tool_call", "tool": "query_express"}
+{"text": "物流 222333444555", "intent": "tool_call", "tool": "query_express"}
+{"text": "快递单号 333444555666", "intent": "tool_call", "tool": "query_express"}
+{"text": "运单号 777888999000", "intent": "tool_call", "tool": "query_express"}
+{"text": "今天北京天气", "intent": "tool_call", "tool": "weather"}
+{"text": "查询上海天气", "intent": "tool_call", "tool": "weather"}
+{"text": "明天广州天气怎么样", "intent": "tool_call", "tool": "weather"}
+{"text": "深圳今天冷不冷", "intent": "tool_call", "tool": "weather"}
+{"text": "杭州热不热", "intent": "tool_call", "tool": "weather"}
+{"text": "成都天气", "intent": "tool_call", "tool": "weather"}
+{"text": "武汉下雨吗", "intent": "tool_call", "tool": "weather"}
+{"text": "南京天气如何", "intent": "tool_call", "tool": "weather"}
+{"text": "西安冷不冷", "intent": "tool_call", "tool": "weather"}
+{"text": "重庆明天天气", "intent": "tool_call", "tool": "weather"}
+{"text": "苏州天气怎么样", "intent": "tool_call", "tool": "weather"}
+{"text": "天津今天天气", "intent": "tool_call", "tool": "weather"}
+{"text": "长沙热不热", "intent": "tool_call", "tool": "weather"}
+{"text": "郑州天气", "intent": "tool_call", "tool": "weather"}
+{"text": "青岛明天冷吗", "intent": "tool_call", "tool": "weather"}
+{"text": "厦门天气", "intent": "tool_call", "tool": "weather"}
+{"text": "福州下雨吗", "intent": "tool_call", "tool": "weather"}
+{"text": "合肥天气情况", "intent": "tool_call", "tool": "weather"}
+{"text": "济南冷不冷", "intent": "tool_call", "tool": "weather"}
+{"text": "昆明天气", "intent": "tool_call", "tool": "weather"}
+{"text": "现在几点", "intent": "tool_call", "tool": "time"}
+{"text": "当前时间", "intent": "tool_call", "tool": "time"}
+{"text": "今天几号", "intent": "tool_call", "tool": "time"}
+{"text": "现在几点了", "intent": "tool_call", "tool": "time"}
+{"text": "今天日期", "intent": "tool_call", "tool": "time"}
+{"text": "现在是什么时间", "intent": "tool_call", "tool": "time"}
+{"text": "当前几点", "intent": "tool_call", "tool": "time"}
+{"text": "几点了", "intent": "tool_call", "tool": "time"}
+{"text": "现在时间是多少", "intent": "tool_call", "tool": "time"}
+{"text": "今天星期几", "intent": "tool_call", "tool": "time"}
+{"text": "现在时刻", "intent": "tool_call", "tool": "time"}
+{"text": "当前日期", "intent": "tool_call", "tool": "time"}
+{"text": "今天几月几号", "intent": "tool_call", "tool": "time"}
+{"text": "告诉我现在时间", "intent": "tool_call", "tool": "time"}
+{"text": "现在多少点", "intent": "tool_call", "tool": "time"}
+{"text": "合同违约金怎么算", "intent": "tool_call", "tool": "search_kb"}
+{"text": "质保期是多久", "intent": "tool_call", "tool": "search_kb"}
+{"text": "发票类型有哪些", "intent": "tool_call", "tool": "search_kb"}
+{"text": "公司报销流程", "intent": "tool_call", "tool": "search_kb"}
+{"text": "员工年假规定", "intent": "tool_call", "tool": "search_kb"}
+{"text": "采购审批流程", "intent": "tool_call", "tool": "search_kb"}
+{"text": "设备维修记录", "intent": "tool_call", "tool": "search_kb"}
+{"text": "项目验收标准", "intent": "tool_call", "tool": "search_kb"}
+{"text": "客户投诉处理办法", "intent": "tool_call", "tool": "search_kb"}
+{"text": "供应商准入条件", "intent": "tool_call", "tool": "search_kb"}
+{"text": "保密协议模板", "intent": "tool_call", "tool": "search_kb"}
+{"text": "考勤制度", "intent": "tool_call", "tool": "search_kb"}
+{"text": "加班申请流程", "intent": "tool_call", "tool": "search_kb"}
+{"text": "差旅费标准", "intent": "tool_call", "tool": "search_kb"}
+{"text": "合同盖章流程", "intent": "tool_call", "tool": "search_kb"}
+{"text": "资料归档规则", "intent": "tool_call", "tool": "search_kb"}
+{"text": "数据备份策略", "intent": "tool_call", "tool": "search_kb"}
+{"text": "权限申请流程", "intent": "tool_call", "tool": "search_kb"}
+{"text": "入职材料清单", "intent": "tool_call", "tool": "search_kb"}
+{"text": "离职手续", "intent": "tool_call", "tool": "search_kb"}
+{"text": "转人工", "intent": "human_handoff"}
+{"text": "我要投诉", "intent": "human_handoff"}
+{"text": "找人工客服", "intent": "human_handoff"}
+{"text": "真人客服", "intent": "human_handoff"}
+{"text": "我要找你们负责人", "intent": "human_handoff"}
+{"text": "投诉你们", "intent": "human_handoff"}
+{"text": "人工", "intent": "human_handoff"}
+{"text": "转接人工", "intent": "human_handoff"}
+{"text": "我要人工服务", "intent": "human_handoff"}
+{"text": "找真人", "intent": "human_handoff"}

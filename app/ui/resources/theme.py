@@ -18,7 +18,8 @@ from __future__ import annotations
 
 from nicegui import ui
 
-#: 全部样式。分区：token → 基础 → 左栏 → 顶栏 → 消息流 → 引用 → 输入区 → 右栏。
+#: 全部样式。分区：token → 基础 → 左栏 → 顶栏 → 消息流 → 引用 → 输入区 →
+#: 等待反馈/底栏统计 → 右栏。
 STYLE = """
 /* ============ 1. 设计 token（浅色，数值取自 DSH 主题包） ============ */
 :root {
@@ -105,7 +106,7 @@ body {
 .hp-measure { width: 100%; max-width: var(--hp-measure); margin-left: auto; margin-right: auto; }
 /* 设置页内容区：**按百分比**取宽（窄屏自然收、宽屏不空），上限只防超宽屏 */
 .hp-page { width: 94%; max-width: 1440px; margin-left: auto; margin-right: auto; }
-.hp-page-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.hp-page-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 
 /* ============ 3. 左栏（导航） ============ */
 .hp-sidebar { background: var(--hp-bg-base); border-right: .5px solid var(--hp-border-l2) !important; }
@@ -126,14 +127,40 @@ body {
 
 /* 会话列表（左栏）：一行一个会话，标题超长省略号。
    注意这些"行"是 **button**（不是 ui.item）：实测 `ui.item` 的点击在真实浏览器里不触发。 */
-.hp-conv-row { justify-content: flex-start; }
-.hp-conv-row .q-btn__content {
+.hp-conv-row { justify-content: flex-start; flex-wrap: nowrap; }
+.hp-conv-title { flex: 1 1 auto; min-width: 0; justify-content: flex-start; }
+/* 右侧动作组（重命名 + 删除）：固定成一组贴行尾，不参与标题的伸缩 */
+.hp-conv-actions {
+  display: flex; align-items: center; justify-content: flex-end;
+  gap: 0; flex: none; height: 100%;
+}
+.hp-conv-actions > .q-btn { flex: none; align-self: center; }
+.hp-conv-title .q-btn__content {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: left;
 }
+.hp-conv-delete {
+  opacity: 0;  /* 和重命名一样：鼠标移到该条会话才浮现 */
+  color: var(--hp-label-tertiary);
+  flex: none;
+  transition: opacity .12s ease, color .12s ease;
+}
+.hp-conv-row:hover .hp-conv-delete { opacity: 1; color: var(--hp-negative); }
+/* 重命名图标：只在 hover 浮现（比删除更轻；删除是常驻渐显） */
+.hp-conv-edit {
+  opacity: 0;
+  color: var(--hp-label-tertiary);
+  flex: none;
+  transition: opacity .12s ease, color .12s ease;
+}
+.hp-conv-row:hover .hp-conv-edit { opacity: 1; color: var(--hp-label-secondary); }
+/* 改名态的输入框：占满、去掉自带边框，跟普通标题一个语气 */
+.hp-conv-title-edit { flex: 1; min-width: 0; }
+.hp-conv-title-edit .q-field__control { min-height: 24px; padding: 0; }
+.hp-row-active .hp-conv-title { color: inherit !important; }
 /* 当前选中那一行（会话列表 / 功能导航 / 设置分区共用）。
    主色淡底 + 左侧 3px 色条 + 主色文字 → "我现在在哪"一眼可辨，不再是灰蒙蒙一片 */
 .hp-row-active {
@@ -183,6 +210,13 @@ body {
 
 /* ============ 7. 输入区 ============ */
 .hp-composer { background: var(--hp-bg-base); border-top: .5px solid var(--hp-border-l2); }
+/* 输入框上方的“待发送队列”条目：浅底 + 细边，和输入框区分开 */
+.hp-queue-item {
+  background: var(--hp-bg-layer-1);
+  border: .5px solid var(--hp-border-l2);
+  border-radius: 8px;
+  padding: 4px 8px;
+}
 .hp-composer-box {
   background: var(--hp-bg-layer-1);
   border: .5px solid var(--hp-border-l2);
@@ -198,6 +232,74 @@ body {
 .hp-composer-box .q-field__control:after { display: none !important; }
 .hp-composer-box .q-field__native { color: var(--hp-label-primary); }
 .hp-composer-box .q-field__native::placeholder { color: var(--hp-label-tertiary); }
+.hp-attachment-chip {
+  background: var(--hp-bg-layer-2);
+  border: .5px solid var(--hp-border-l2);
+  border-radius: 8px;
+  padding: 2px 6px;
+}
+.hp-attach-thumb {
+  width: 42px;
+  height: 42px;
+  object-fit: cover;
+  border-radius: 6px;
+}
+.hp-attach-thumb-sm {
+  width: 24px;
+  height: 24px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+.hp-attach-name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hp-attach-wrap {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  margin-bottom: 4px;
+  overflow: hidden;
+}
+.hp-attach-wrap .hp-attach-btn {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  color: var(--hp-label-tertiary);
+}
+.hp-attach-wrap .hp-attach-btn:hover { color: var(--hp-label-primary); }
+.hp-attach-wrap .hp-attach-btn .q-icon { font-size: 20px; }
+.hp-attach-wrap .hp-attach-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 36px;
+  height: 36px;
+  opacity: 0;
+  overflow: hidden;
+}
+.hp-attach-wrap .q-uploader {
+  width: 36px;
+  max-width: 36px;
+  min-width: 0 !important;
+  height: 36px;
+  max-height: 36px;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+}
+.hp-attach-wrap .q-uploader__header {
+  width: 36px;
+  max-width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  background: transparent;
+}
+.hp-attach-wrap .q-uploader__list { display: none; }
 
 /* 批量导入/导出文本框：右下角可鼠标纵向拖拽改变高度；超过视口 60% 后内部滚动 */
 .hp-resize-textarea textarea {
@@ -213,6 +315,167 @@ body {
   box-shadow: 0 1px 2px 0 color-mix(in srgb, var(--hp-accent) 30%, transparent);
 }
 .hp-send:hover, .hp-btn-primary:hover { background: var(--hp-accent-hover) !important; opacity: 1; }
+
+/* ============ 7.5 等待反馈与底栏统计（DSH 简化版） ============ */
+/* 等待中的"正在检索…"行：DSH 的 running status 是蓝色 + 微光扫过 + 鲸鱼图标。
+   没搬它的 PNG 资源，用主题图标 + 蓝色微光 + 跳动点 + 秒表，观感同一档。 */
+.hp-running-row { color: var(--hp-accent); }
+.hp-running-icon { color: var(--hp-accent); }
+.hp-running-text { font-size: 13px; line-height: 22px; }
+.hp-shimmer-accent {
+  background-image: linear-gradient(90deg, var(--hp-accent) 0%, var(--hp-accent) 35%,
+                    #7ba7f6 50%, var(--hp-accent) 65%, var(--hp-accent) 100%);
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: hp-shimmer 1.6s linear infinite;
+}
+/* 跳动点：纯 CSS，不占 JS 循环；reduced-motion 下退化成静态点 */
+.hp-dots { display: inline-flex; gap: 3px; align-items: center; flex: none; }
+.hp-dots > span {
+  width: 4px; height: 4px; border-radius: 50%;
+  background: currentColor; opacity: .35;
+  animation: hp-dot 1.2s ease-in-out infinite;
+}
+.hp-dots > span:nth-child(2) { animation-delay: .2s; }
+.hp-dots > span:nth-child(3) { animation-delay: .4s; }
+@keyframes hp-dot {
+  0%, 60%, 100% { opacity: .3; transform: none; }
+  30% { opacity: 1; transform: translateY(-1px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hp-shimmer-accent { animation: none; background-image: none; color: var(--hp-accent); }
+  .hp-dots > span { animation: none; opacity: .6; }
+}
+.hp-running-clock {
+  font-size: 12px; font-variant-numeric: tabular-nums;
+  color: var(--hp-accent); opacity: .75;
+}
+
+/* 底栏统计（DSH composer dock 简化版）：一行小字 + 上下文占用条。
+   进度条**不做动画**（软件渲染下动画掉帧，见任务页的说明），宽度直接按值定。 */
+.hp-composer-stats {
+  min-height: 22px;
+  padding: 3px 2px 0;
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+.hp-stat-pill {
+  font-size: 12px; line-height: 20px;
+  color: var(--hp-label-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* 上下文占用条：三段分别是 用户 / 回答 / 引用，宽度按"占参考窗口的比例"算 */
+.hp-context-bar {
+  width: 120px; height: 4px; border-radius: 2px;
+  background: var(--hp-border-l2);
+  overflow: hidden;
+  display: inline-flex;
+  flex: none;
+}
+.hp-context-bar > span { height: 100%; flex: none; }
+.hp-context-user { background: var(--hp-accent); }
+.hp-context-answer { background: var(--hp-accent-soft-strong); }
+.hp-context-ref { background: var(--hp-border-l4); }
+/* 上下文明细：点统计行数字弹出的小弹窗（贴着点击位置，不再撑开整行） */
+.hp-context-pop { max-width: 420px; }
+.hp-context-pop .q-menu__content { max-height: 60vh; overflow: auto; padding: 8px 10px; }
+
+/* 工作步骤展示（固定「标准」档）：过程组折起，点开看推理预览与步骤明细 */
+/* 过程组里的每一步：一行（图标 + 标题 + 箭头），点开看明细。
+   嵌套 Quasar expansion 默认带很大的 margin/padding，这里统一压平。 */
+.hp-step,
+.hp-reasoning {
+  width: 100%;
+  background: transparent;
+  margin: 0 !important;
+}
+.hp-step .q-expansion-item__container,
+.hp-reasoning .q-expansion-item__container { border: 0 !important; }
+.hp-step .q-item,
+.hp-reasoning .q-item { min-height: 22px; padding: 0; color: var(--hp-label-tertiary); }
+.hp-step .q-item__section--main,
+.hp-reasoning .q-item__section--main { padding: 0; }
+.hp-step .q-expansion-item__content,
+.hp-reasoning .q-expansion-item__content { padding: 0 0 2px 20px; }
+.hp-step .q-item__label,
+.hp-reasoning .q-item__label { font-size: 12.5px; line-height: 20px; }
+
+.hp-step-row,
+.hp-reasoning-row { color: var(--hp-label-tertiary); }
+.hp-step-row:hover,
+.hp-reasoning-row:hover { color: var(--hp-label-secondary); }
+.hp-reasoning > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+.hp-reasoning > summary::-webkit-details-marker { display: none; }
+.hp-reasoning > summary::after {
+  content: "▸";
+  margin-left: auto;
+  color: var(--hp-label-tertiary);
+  font-size: 12px;
+  transition: transform .12s ease;
+}
+.hp-reasoning[open] > summary::after {
+  content: "▾";
+}
+.hp-reasoning > .hp-md-compact {
+  padding: 4px 0 4px 20px;
+}
+.hp-step-icon, .hp-reasoning-icon { color: inherit; }
+.hp-step-title, .hp-reasoning-title { font-size: 12.5px; line-height: 20px; }
+.hp-step-error { color: var(--hp-negative); }
+.hp-reasoning-preview {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.hp-step-detail-text {
+  color: var(--hp-label-tertiary);
+  font-size: 12px; line-height: 20px;
+  white-space: pre-wrap;      /* 明细里的换行（查询词/原因/每条命中）要保住 */
+  word-break: break-word;
+}
+/* 推理块正文：比答案小一号、语气更轻（它是"过程"，不是结论） */
+.hp-md-compact { font-size: 12.5px; line-height: 20px; color: var(--hp-label-secondary); }
+.hp-md-compact ul { margin: 2px 0; padding-left: 18px; }
+
+/* ============ 7.7 资料区（引用折叠条） ============ */
+/* 默认收起：只露一行"资料 · N 段"，点开才列出每条出处。
+   不把来源整行铺在答案下面——长答案会拖出一条很长的清单。 */
+.hp-sources-row {
+  width: 100%;
+  background: transparent;
+  margin: 0 !important;
+}
+.hp-sources-row .q-expansion-item__container { border: 0 !important; }
+.hp-sources-row .q-item { min-height: 24px; padding: 0; color: var(--hp-label-tertiary); }
+.hp-sources-row .q-item__section--main { padding: 0; }
+.hp-sources-row .q-expansion-item__content { padding: 0; }
+.hp-sources-row .q-item__label { font-size: 12px; line-height: 20px; }
+.hp-sources-head:hover { color: var(--hp-label-secondary); }
+.hp-sources-title { font-size: 12px; line-height: 20px; }
+.hp-source-line { color: var(--hp-label-secondary); }
+.hp-source-name {
+  font-size: 12px; line-height: 20px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  cursor: pointer;
+}
+.hp-source-name:hover { color: var(--hp-accent); }
+/* 右栏里的"命中片段"：左侧主色竖条 + 淡底，指明到底哪一段命中了 */
+.hp-snippet {
+  border-left: 2px solid var(--hp-accent);
+  background: var(--hp-accent-soft);
+  border-radius: 0 var(--hp-radius-sm) var(--hp-radius-sm) 0;
+  padding: 6px 10px;
+  font-size: 12.5px; line-height: 20px;
+  color: var(--hp-label-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 
 /* ============ 8. 右栏（贴边面板） ============ */
 /* 详情页「分块明细」的行内展开：默认很占高，压扁成一行摘要；展开内容保持紧凑。 */
@@ -291,7 +554,27 @@ body.hp-panel-dragging, body.hp-panel-dragging * { cursor: col-resize !important
 .hp-process .q-expansion-item__content { padding: 0; }
 .hp-process-row { color: var(--hp-label-tertiary); font-size: 13px; }
 .hp-process-row:hover { color: var(--hp-label-secondary); }
-.hp-process-detail { color: var(--hp-label-tertiary); font-size: 12px; line-height: 20px; }
+
+/* 轮次轨道（学 DSH）：右侧一列刻度，一条 = 一轮；当前轮加长加深 */
+.hp-turn-rail {
+  width: 34px; flex: none; padding: 8px 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+  gap: 6px; overflow: hidden; user-select: none;
+}
+.hp-turn-rail-label { font-size: 11px; line-height: 1; color: var(--hp-label-tertiary); }
+.hp-turn-ticks {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 4px; overflow-x: hidden; overflow-y: auto;
+}
+.hp-turn-tick {
+  width: 16px; height: 4px; border-radius: 2px; flex: none;
+  background: var(--hp-border-l4); cursor: pointer; transition: width .12s, background .12s;
+}
+.hp-turn-tick:hover { background: var(--hp-label-secondary); }
+.hp-turn-tick--active { width: 26px; background: var(--hp-accent); }
+.hp-turn-tick--active:hover { background: var(--hp-accent); }
+/* 窄窗口（约 900px 以下）隐藏轨道：正文更重要 */
+@media (max-width: 720px) { .hp-turn-rail { display: none; } }
 
 /* 运行中的微光扫过（DSH 的 TextShimmer 简化版：一道从左到右的高光） */
 .hp-shimmer {
@@ -319,6 +602,7 @@ body.hp-panel-dragging, body.hp-panel-dragging * { cursor: col-resize !important
 
 /* 报错文字：用语义色，和"没找到"（hp-hint 灰）必须区分开 */
 .hp-note-error { color: var(--hp-negative); font-size: 13px; line-height: 22px; }
+.hp-note-warning { color: var(--hp-warning); font-size: 13px; line-height: 22px; }
 
 /* Markdown 渲染（片段与以后的模型回答都走它）：标题、列表、行内代码、代码块、表格、引用 */
 .hp-markdown { font-size: var(--hp-font-size); line-height: var(--hp-line-height); color: var(--hp-label-primary); }
@@ -411,7 +695,8 @@ body.hp-panel-dragging, body.hp-panel-dragging * { cursor: col-resize !important
   background: var(--hp-bg-base);
   border: 1px solid var(--hp-border-l2);
   border-radius: var(--hp-radius-md);
-  padding: 16px 20px;
+  /* 内边距收紧：卡片标题/边框占据的空白是设置页"太空"的主因，从 16/20 收到 11/15 */
+  padding: 11px 15px;
   box-shadow: 0 1px 2px 0 #0f111508;
   transition: box-shadow .15s ease, border-color .15s ease, transform .15s ease;
 }

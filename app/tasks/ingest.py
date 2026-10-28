@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from app.core import paths
 from app.core.jobs.model import JobCancelled, JobContext, JobError, JobInterrupted
 from app.core.jobs.task import Task, TaskResult
-from app.rag.ingest import importer
+from app.ingest import import_path
 
 
 def discard_staged(path: Path) -> None:
@@ -84,7 +84,7 @@ class Ingest(Task):
         #   真正的残留由 maintenance 的 remove_inbox_leftovers（1 小时 TTL）收尾。
         keep_staged = False
         try:
-            result = importer.import_path(
+            result = import_path(
                 path,
                 name,
                 on_progress=lambda done, total, note: ctx.report(done, total, note or "处理中…"),
@@ -114,7 +114,7 @@ class Ingest(Task):
                 )
 
             ctx.report(1, 1, "完成")
-            extra = f"；{result.notes[0]}" if result.notes else ""
+            extra = f"；{result.doc_title}" if result.doc_title else ""
             note = f"切出 {result.chunks} 个片段"
             if diagnostics:
                 note += f"（含 {len(diagnostics)} 条告警）"

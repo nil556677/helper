@@ -14,15 +14,10 @@ from app.services import knowledge as knowledge_service
 from app.ui.components.card import card_head  # noqa: F401  # 供本包其它模块用统一的卡片头
 from app.ui.components.card import stat as stat  # 统一数字格
 from app.ui.components.format import human_time
+from app.ui.components.status import DOC_STATUS_LABELS, doc_status_label
 
-#: 状态 → 界面文案（四个状态 + 退场版本）
-_STATUS_LABELS = {
-    "pending": "待处理",
-    "indexing": "处理中",
-    "ready": "就绪",
-    "failed": "失败",
-    "superseded": "已退场",
-}
+#: 状态 → 界面文案（**唯一出处**见 app/ui/components/status.py；此处只做再导出兼容）
+_STATUS_LABELS = DOC_STATUS_LABELS
 
 #: 片段类型 → 界面文案（详情页的分块明细用）
 KIND_LABELS = {
@@ -40,7 +35,7 @@ CODE_LABELS = {"clause": "条款号", "number": "编号", "date": "日期", "mon
 
 def status_label(status: str) -> str:
     """状态的中文名（未知状态原样返回，别吞掉信息）。"""
-    return _STATUS_LABELS.get(status, status)
+    return doc_status_label(status)
 
 
 def status_badge(status: str, *, done: int = -1, total: int = -1) -> str:
@@ -54,6 +49,7 @@ def status_badge(status: str, *, done: int = -1, total: int = -1) -> str:
 
 #: 状态 → Quasar 语义色（chip 的 color）
 _STATUS_TONE = {
+    "indexed": "positive",
     "ready": "positive",
     "indexing": "warning",
     "pending": "grey-6",

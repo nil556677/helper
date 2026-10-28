@@ -432,7 +432,7 @@ def _cleanup_unstarted_import(job: object) -> None:
     from loguru import logger
 
     from app.core import paths
-    from app.rag import store
+    from app.rag import kb_store
 
     payload = dict(getattr(job, "payload", None) or {})
     doc_id = payload.get("doc_id")
@@ -462,17 +462,15 @@ def _cleanup_unstarted_import(job: object) -> None:
 
     if doc_id is not None:
         try:
-            row = store.get(int(doc_id))
+            row = kb_store.get_document(int(doc_id))
         except Exception as exc:
             logger.warning("取消导入时读占位行失败（doc {}）：{}", doc_id, exc)
             row = None
         if row is not None:
-            stored = str(dict(row).get("stored_path") or "")
-            status = str(dict(row).get("status") or "")
+            stored = str(row["stored_path"] or "")
+            status = str(row["status"] or "")
             if status == "pending" and not stored and int(doc_id) not in active_docs:
-                from app.rag.ingest import importer
-
-                importer.delete_documents([int(doc_id)])
+                kb_store.delete_document(int(doc_id))
     # 暂存文件只删 inbox 里的那一个（防止 payload 被手工改成任意路径）
     if raw and raw not in active_paths:
         candidate = Path(raw)

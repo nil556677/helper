@@ -330,29 +330,41 @@ def custom(
     *,
     kind: str = "info",
     title: str | None = None,
+    content: Callable[[Callable[[], None]], None] | None = None,
+    width: str = "",
 ) -> tuple[ui.dialog, Callable[[], None]]:
     """复杂内容的弹窗（任务详情这类：正文不是一句 message，而是时间线/列表）。
 
     用法：
 
-        dialog, close = custom(title="任务详情", kind="info")
-        with dialog:
-            … 正文 …
-            ui.button("关闭", on_click=close).props("flat dense no-caps").classes(...)
+        def body(close: Callable[[], None]) -> None:
+            ui.label("…")
+            ui.button("关闭", on_click=close)
+
+        dialog, close = custom(title="任务详情", content=body)
         dialog.open()
 
-    工厂只负责统一壳（``hp-dialog``）+ 标题行（图标 + 标题 + 分隔线）+ ``close()`` 动作；
-    正文与底部动作由调用方在 ``with dialog`` 里填，沿用统一壳。
+    **正文必须画在卡片里**：``q-dialog`` 的内层是 flex 行布局，直接挂在 ``dialog`` 上的
+    内容会被挤到卡片旁边、看起来像"弹窗是空的"（实测）。所以这里用回调，在卡片槽位里画。
+
+    参数：
+        width: 想比默认（460px）更宽时给 CSS 尺寸，如 ``"760px"``。检索追踪的详情要
+            放多列元信息/时间线，默认太窄（实测排版很挤），所以这里可以放宽。
     """
     resolved = title or _TITLES.get(kind, "提示")
+    style = "max-height: 82vh; overflow-y: auto;"  # 基础样式
+    if width:  # 要放宽
+        style += f" width: {width}; max-width: {width};"  # 显式改宽
     with (
         _dialog_parent(),
         ui.dialog() as dialog,
-        ui.card().classes("hp-card hp-dialog gap-3"),
+        ui.card().classes("hp-card hp-dialog gap-3").style(style),
     ):
         # 与 show_dialog/confirm 同一个头（图标 + 标题 + 右上角 ×）：不能只有底部"关闭"一条路
         _dialog_head(kind, resolved, dialog, on_close=lambda: _destroy(dialog))
         ui.separator()
+        if content is not None:  # 正文在卡片槽位里画
+            content(lambda: _destroy(dialog))  # 传入"关闭"动作，正文里的按钮要用
     # 关闭时**删除元素**：任务详情/片段详情每点一次都新建一个，不删会越点越卡
     dialog.on("hide", lambda: _destroy(dialog))
     return dialog, lambda: _destroy(dialog)
