@@ -5,7 +5,7 @@
   序号，供 ``Last-Event-ID`` 续传；
 - ``cancel`` / ``approve``：POST。
 
-事件体是 ``events.Event.model_dump_json()``，这里用 ``Event.model_validate`` 还原。
+事件体是 ``events.EventEnvelope.model_dump_json()``，这里用 ``EventEnvelope.model_validate`` 还原。
 """
 
 from __future__ import annotations  # 类型注解延迟求值
@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator  # 异步迭代
 
 import httpx  # HTTP
 
-from app.agent.events import Event  # 事件模型
+from app.agent.events import EventEnvelope  # 事件模型
 from app.agent.run_client import RunInput  # 入参
 
 #: SSE 读超时（秒）：必须明显大于服务端心跳（``run_server._HEARTBEAT_S = 15``）。
@@ -57,7 +57,7 @@ class HttpClient:  # 远端客户端
 
     async def events(  # 订阅事件
         self, run_id: str, *, last_event_id: str = ""  # sse 续传点
-    ) -> AsyncIterator[tuple[int, Event]]:  # (seq, event)
+    ) -> AsyncIterator[tuple[int, EventEnvelope]]:  # (seq, event)
         """产出 ``(seq, event)``；服务端流结束后自然停止。"""
         headers = {}  # 请求头
         if last_event_id:  # 有续传点
@@ -88,7 +88,7 @@ class HttpClient:  # 远端客户端
 
 async def _parse_sse(  # 解析 SSE 行
     resp: httpx.Response,  # 响应
-) -> AsyncIterator[tuple[int, Event]]:  # (seq, event)
+) -> AsyncIterator[tuple[int, EventEnvelope]]:  # (seq, event)
     """逐行解析 SSE；完整（空行分隔）时还原成 Event 并产出。"""
     current_id: int | None = None  # 当前 seq
     data: list[str] = []  # data 行累积
@@ -96,7 +96,7 @@ async def _parse_sse(  # 解析 SSE 行
         if line == "":  # 空行 = 事件终
             if data:  # 有数据
                 payload = json.loads("".join(data))  # 解析 JSON
-                yield (current_id or 0), Event.model_validate(payload)  # 产出
+                yield (current_id or 0), EventEnvelope.model_validate(payload)  # 产出
                 data = []  # 复位
                 current_id = None  # 复位
             continue  # 下一个

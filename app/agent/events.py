@@ -14,18 +14,16 @@ from app.agent.contracts import (  # 契约层
     make,  # 事件构造器
 )  # 导入结束
 
-Event = EventEnvelope  # 类型别名：旧代码的 Event 即新信封（没有 .data，字段在 .payload）
-
 #: 对外的公共名（含再导出；列表里的名字 ruff 视为"已使用"，不会再报 F401）。
-__all__ = ["TERMINAL_TYPES", "Event", "EventType"]
+__all__ = ["TERMINAL_TYPES", "EventType"]
 
 
-def ack(run_id: str) -> Event:  # 已收到
+def ack(run_id: str) -> EventEnvelope:  # 已收到
     """前端立即上屏后就能收到；run_id 进信封。"""
     return make(EventType.ACK, run_id=run_id)  # 事件
 
 
-def state(before: str, after: str, trigger: str, reason: str = "") -> Event:  # 状态迁移
+def state(before: str, after: str, trigger: str, reason: str = "") -> EventEnvelope:  # 状态迁移
     """run 生命周期变化；trigger 是触发迁移的事件。"""
     return make(  # 事件
         EventType.STATE,  # 类型
@@ -44,7 +42,7 @@ def stage(  # 节点/步骤事件
     detail: str = "",  # 明细
     duration_ms: int | None = None,  # 耗时
     group: str = "",  # 用户级分组（空 = 只埋 trace 不展示）
-) -> Event:  # 事件
+) -> EventEnvelope:  # 事件
     """stage_id 固定，前端按它原地更新；group 由调用处声明，前端不再映射 id。"""
     return make(  # 事件
         EventType.STAGE,  # 类型
@@ -57,7 +55,7 @@ def stage(  # 节点/步骤事件
     )  # 事件结束
 
 
-def context(turns: int, tokens: int, trimmed: int = 0, **extra: Any) -> Event:  # 上下文事件
+def context(turns: int, tokens: int, trimmed: int = 0, **extra: Any) -> EventEnvelope:  # 上下文事件
     """只报数量与分块占用，不报正文；``extra`` 走完了其他可选字段。"""
     return make(EventType.CONTEXT, turns=turns, tokens=tokens, trimmed=trimmed, **extra)  # 事件
 
@@ -66,7 +64,7 @@ def basis(  # 检索依据
     keywords: list[str],  # 查询词
     hit_counts: dict[str, int],  # 各路命中计数
     sources: list[dict[str, Any]],  # 来源
-) -> Event:  # 事件
+) -> EventEnvelope:  # 事件
     """给用户看的“我是怎么找的”，不是思维链。"""
     return make(  # 事件
         EventType.BASIS,  # 类型
@@ -81,7 +79,7 @@ def settings(  # 本轮设置
     temperature: float,  # 温度
     system_prompt: str,  # 系统提示词
     extra: dict[str, Any] | None = None,  # 额外参数
-) -> Event:  # 事件
+) -> EventEnvelope:  # 事件
     """供“查看本轮设置”弹窗。"""
     return make(  # 事件
         EventType.SETTINGS,  # 类型
@@ -92,7 +90,7 @@ def settings(  # 本轮设置
     )  # 事件结束
 
 
-def pii(counts: dict[str, int]) -> Event:  # 脱敏事件
+def pii(counts: dict[str, int]) -> EventEnvelope:  # 脱敏事件
     """只报类型与次数，不报原值。"""
     return make(EventType.PII, counts=counts)  # 事件
 
@@ -107,7 +105,7 @@ def tool(  # 工具事件
     diff: str = "",  # 改动
     output: str = "",  # 输出
     call_id: str = "",  # 调用 id
-) -> Event:  # 事件
+) -> EventEnvelope:  # 事件
     """工具调用/结果；file 工具带 variant/path/diff。"""
     return make(  # 事件
         EventType.TOOL,  # 类型
@@ -128,7 +126,7 @@ def approval(  # 审批
     risk: str,  # 风险说明
     detail: str = "",  # 明细
     diff: str = "",  # 改动预览
-) -> Event:  # 事件
+) -> EventEnvelope:  # 事件
     """文件写入/编辑/命令执行前询问。"""
     return make(  # 事件
         EventType.APPROVAL,  # 类型
@@ -140,27 +138,27 @@ def approval(  # 审批
     )  # 事件结束
 
 
-def delta(text: str) -> Event:  # 答案增量
+def delta(text: str) -> EventEnvelope:  # 答案增量
     """一个 token/chunk。"""
     return make(EventType.DELTA, text=text)  # 事件
 
 
-def reasoning(text: str) -> Event:  # 思考增量
+def reasoning(text: str) -> EventEnvelope:  # 思考增量
     """模型返回的 reasoning 内容；没有就不发。"""
     return make(EventType.REASONING, text=text)  # 事件
 
 
-def conflict(message: str) -> Event:  # 资料冲突
+def conflict(message: str) -> EventEnvelope:  # 资料冲突
     """资料答案与通用知识不一致时提示用户核对。"""
     return make(EventType.CONFLICT, message=message)  # 事件
 
 
-def citation(items: list[dict[str, Any]]) -> Event:  # 引用
+def citation(items: list[dict[str, Any]]) -> EventEnvelope:  # 引用
     """结构化引用，避免前端正则抠角标。"""
     return make(EventType.CITATION, items=items)  # 事件
 
 
-def replace(text: str) -> Event:  # 整段替换
+def replace(text: str) -> EventEnvelope:  # 整段替换
     """校验不通过时把已流出的正文替换掉（只能出现一次，且在 done 之前）。"""
     return make(EventType.REPLACE, text=text)  # 事件
 
@@ -172,7 +170,7 @@ def verify_report(  # 校验结果
     coverage: float,  # 引用覆盖率
     reasons: list[str] | None = None,  # 原因码
     unsupported: list[int] | None = None,  # 没被证据支撑的句子序号
-) -> Event:  # 事件
+) -> EventEnvelope:  # 事件
     """L1/L3/L2 的结论：前端据此把角标标灰/标失效。"""
     return make(  # 事件
         EventType.VERIFY,  # 类型
@@ -191,7 +189,7 @@ def usage(  # 用量
     completion_tokens: int,  # 输出
     total_tokens: int | None = None,  # 总数
     extra: dict[str, Any] | None = None,  # 缓存等明细
-) -> Event:  # 事件
+) -> EventEnvelope:  # 事件
     """token 统计；缓存字段放进 extra。"""
     total = prompt_tokens + completion_tokens if total_tokens is None else total_tokens  # 总数
     return make(  # 事件
@@ -203,7 +201,7 @@ def usage(  # 用量
     )  # 事件结束
 
 
-def done(ttft_ms: int, total_ms: int, usage_data: dict[str, Any] | None = None) -> Event:  # 完成
+def done(ttft_ms: int, total_ms: int, usage_data: dict[str, Any] | None = None) -> EventEnvelope:  # 完成
     """正常结束。"""
     return make(  # 事件
         EventType.DONE,  # 类型
@@ -213,17 +211,17 @@ def done(ttft_ms: int, total_ms: int, usage_data: dict[str, Any] | None = None) 
     )  # 事件结束
 
 
-def note(text: str, kind: str = "plain") -> Event:  # 说明
+def note(text: str, kind: str = "plain") -> EventEnvelope:  # 说明
     """没有答案/未标注出处时的一句话。"""
     return make(EventType.NOTE, text=text, note_kind=kind)  # 事件
 
 
-def cancelled(reason: str = "user") -> Event:  # 已停止
+def cancelled(reason: str = "user") -> EventEnvelope:  # 已停止
     """用户取消或客户端断开。"""
     return make(EventType.CANCELLED, reason=reason)  # 事件
 
 
-def error(code: str, message: str, stage_id: str = "") -> Event:  # 失败
+def error(code: str, message: str, stage_id: str = "") -> EventEnvelope:  # 失败
     """失败必须带位置，方便定位。"""
     return make(EventType.ERROR, code=code, message=message, stage=stage_id)  # 事件
 
@@ -236,7 +234,7 @@ def retry(  # 重试事件
     error_message: str = "",  # 原始信息
     delay_ms: int = 0,  # 等多久再试
     scope: str = "model",  # 谁的请求
-) -> Event:  # 事件
+) -> EventEnvelope:  # 事件
     """每次重试一条：前端显示「第 2/3 次重试：429 限流，1.2s 后继续」。"""
     return make(  # 构造
         EventType.RETRY,  # 类型

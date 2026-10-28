@@ -38,7 +38,7 @@ def run_context(ctx: RunContext) -> Iterator[RunContext]:  # 绑定当前 run
 
 
 
-def _drop(_event: events.Event) -> None:  # 默认事件消费者
+def _drop(_event: events.EventEnvelope) -> None:  # 默认事件消费者
     """没有 UI/SSE 消费者时丢弃事件。"""
     return None  # 空操作
 
@@ -50,7 +50,7 @@ class RunContext:  # 一轮运行的运行时上下文
     run_id: str  # 运行 id
     question: str  # 用户问题
     conversation_id: str = ""  # 会话 id
-    emit: Callable[[events.Event], None] = _drop  # 事件出口
+    emit: Callable[[events.EventEnvelope], None] = _drop  # 事件出口
     machine: RunMachine = field(default_factory=RunMachine)  # 状态机
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)  # 取消信号
     trace: Any = None  # 追踪 sink（core/trace 适配器）

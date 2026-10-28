@@ -33,7 +33,7 @@ class _EventSink:  # 事件出口
         self._closed = False  # 是否已发过终态
         self._run_id = ""  # 归属 run（start_stream / drive 回填）
 
-    def __call__(self, event: events.Event) -> None:  # 发一个事件
+    def __call__(self, event: events.EventEnvelope) -> None:  # 发一个事件
         """终态之后的事件直接丢弃；顺手给缺 run_id 的事件盖章。"""
         if self._closed:  # 已经结束
             return  # 丢掉
