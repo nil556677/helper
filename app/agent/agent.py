@@ -6,6 +6,7 @@ from typing import Any  # 任意类型
 
 from langgraph.graph import END, START, StateGraph  # 图原语
 
+from app.agent.contracts import DecisionTarget  # 决策目标
 from app.agent.nodes.answer.node import answer_node  # 生成
 from app.agent.nodes.context.node import load_context  # 上下文
 from app.agent.nodes.finalize.node import finalize_node  # 收尾
@@ -15,13 +16,17 @@ from app.agent.state import ChatState  # 状态
 
 
 def after_rag(state: dict[str, Any]) -> str:  # RAG 后的分支
-    """检索节点已算好 ``answerable``，这里只读它。
+    """只读唯一决策对象 ``route``（旧状态退回 ``answerable``）。
 
     不能再用 ``state["evidence"]`` 判断：门限可能「reject 但 kept 非空」，检索节点已经
     迁移到 NO_EVIDENCE（FINALIZING），若这里仍按 evidence 路由到 answer，answer 再发
     GENERATION_DONE 就会 ``InvalidTransition: finalizing 不允许事件 generation_done``。
     """
-    return "answer" if state.get("answerable") else "finalize"  # 唯一判断源
+    route = state.get("route")  # 唯一决策对象（模型或 dict）
+    if route is not None:  # 新路径：读 RouteDecision.next
+        target = route.get("next") if isinstance(route, dict) else getattr(route, "next", None)  # 兼容反序列化
+        return "answer" if str(target) == DecisionTarget.ANSWER.value else "finalize"  # 按决策路由
+    return "answer" if state.get("answerable") else "finalize"  # 旧状态兜底
 
 
 def build_agent_graph(runner: RagRunner, *, checkpointer: Any = None):  # 建父图

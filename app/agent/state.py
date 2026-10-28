@@ -48,7 +48,8 @@ class ChatState(TypedDict, total=False):  # 图状态（字段都可缺省）
     # 检索
     hits: list[dict[str, Any]]  # 召回命中
     evidence: list[dict[str, Any]]  # 证据片段
-    answerable: bool  # 检索后是否可进入生成（FSM 迁移与边路由共用这一个判断）
+    answerable: bool  # 检索后是否可进入生成（RouteDecision.next 的投影）
+    route: Any  # 唯一决策对象（RouteDecision；迁移与边路由都读它）
 
     # 答复
     answer: str  # 回答正文

@@ -7,6 +7,7 @@ from typing import Any  # 任意值
 
 from app.agent import agent as agent_mod  # 父图（after_rag）
 from app.agent.context import RunContext, run_context  # 上下文
+from app.agent.contracts import DecisionTarget  # 决策目标
 from app.agent.fsm.states import RunEvent, RunState  # 状态机
 from app.agent.nodes.context.node import _history  # 被测：历史成对
 from app.agent.nodes.rag import entry as entry_mod  # 被测：检索节点
@@ -82,6 +83,7 @@ def test_reject_with_partial_evidence_routes_to_finalize(monkeypatch) -> None:  
     out, ctx = _run_rag(monkeypatch, _result("reject", evidence))  # 跑
     assert out["answerable"] is False  # 不可答
     assert out["evidence"] == []  # 证据清空，避免按 evidence 误路由
+    assert out["route"].next is DecisionTarget.FINALIZE  # 决策对象也指向收尾
     assert ctx.machine.state is RunState.FINALIZING  # 状态机已收尾
     assert agent_mod.after_rag(out) == "finalize"  # 路由一致
 
@@ -92,6 +94,7 @@ def test_pass_routes_to_answer(monkeypatch) -> None:  # 正常路径
     out, ctx = _run_rag(monkeypatch, _result("pass", evidence))  # 跑
     assert out["answerable"] is True  # 可答
     assert out["evidence"] == evidence  # 证据保留
+    assert out["route"].next is DecisionTarget.ANSWER  # 决策对象指向生成
     assert ctx.machine.state is RunState.GENERATING  # 进入生成
     assert agent_mod.after_rag(out) == "answer"  # 路由一致
 

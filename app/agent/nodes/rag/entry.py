@@ -8,7 +8,7 @@ from typing import Any  # 任意值
 from langchain_core.runnables import RunnableConfig  # 图配置
 
 from app.agent.context import ctx_from_config  # 上下文
-from app.agent.contracts import StageGroup  # 步骤分组
+from app.agent.contracts import DecisionTarget, RouteDecision, StageGroup  # 契约（决策/分组）
 from app.agent.events import basis as basis_event  # 检索依据
 from app.agent.fsm.states import RunEvent  # 状态事件
 from app.agent.nodes.rag.node import RagRunner  # 子图运行器
@@ -94,6 +94,13 @@ def make_rag_node(runner: RagRunner):  # 工厂
             attachments.load_text(item).strip() for item in (state.get("attachments") or [])  # 逐个判可读
         )  # 附件判断结束
         answerable = has_files or (decision != "reject" and bool(result.evidence))  # 可答的唯一判断（FSM 与边路由共用）
+        route = RouteDecision(  # 唯一决策对象：迁移与边路由都读它
+            next=DecisionTarget.ANSWER if answerable else DecisionTarget.FINALIZE,  # 下一步
+            confidence=None,  # 规则判断不表信心
+            needs_clarification=False,  # 本轮不需要追问
+            reason=decision or "no_evidence",  # 人话原因（进 trace）
+            version=1,  # 输出契约版本
+        )  # 决策结束
         if ctx is not None:  # 新链路
             basis = {  # 检索依据
                 "keywords": _keywords(question),  # 关键词
@@ -122,7 +129,8 @@ def make_rag_node(runner: RagRunner):  # 工厂
             "evidence": result.evidence if answerable else [],  # 不可答时清空，保证边路由与状态机一致
             "hits": result.hits,  # 命中
             "note": ctx.note if ctx is not None else "",  # 说明
-            "answerable": answerable,  # 边路由的唯一依据
+            "answerable": answerable,  # 边路由的唯一依据（RouteDecision.next 的投影）
+            "route": route,  # 唯一决策对象
         }  # 返回结束
 
     return rag_node  # 返回节点
