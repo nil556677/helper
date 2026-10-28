@@ -96,7 +96,7 @@ async def _run(handle: StreamHandle) -> None:  # 后台执行
         initial = {  # 初始状态
             "question": ctx.question,  # 问题
             "conversation_id": ctx.conversation_id,  # 会话
-            "history": [],  # 历史由 load_context 填
+            "turns": [],  # 历史由 load_context 填
             "attachments": [attachments.public(item) for item in ctx.attachments],  # 附件公开元数据（正文不入 state）
         }  # 状态结束
         await drive(_graph(), ctx, initial_state=initial, emit=ctx.emit)  # 驱动

@@ -9,7 +9,8 @@ from langchain_core.runnables import RunnableConfig  # 图配置
 from app.agent.context import RunCancelled, ctx_from_config  # 上下文
 from app.agent.contexts import AgentContextSpec  # 上下文声明
 from app.agent.contexts import build as assemble_context  # 上下文装配器
-from app.agent.contracts import StageGroup  # 步骤分组
+from app.agent.contexts.history import messages_from  # 轮次 -> 消息
+from app.agent.contracts import StageGroup, Turn  # 步骤分组/轮次
 from app.agent.events import citation as citation_event  # 引用事件
 from app.agent.events import conflict as conflict_event  # 冲突事件
 from app.agent.events import context as context_event  # 上下文事件
@@ -144,7 +145,7 @@ async def answer_node(state: dict[str, Any], config: RunnableConfig) -> dict[str
     ]  # 列表结束
     built = assemble_context(  # 装配
         ANSWER_SPEC,  # 声明
-        history=list(state.get("history") or []),  # F3 最近轮次
+        history=messages_from([Turn.model_validate(item) for item in (state.get("turns") or [])]),  # F3 最近轮次（只喂 done）
         summary_text=str(state.get("summary") or ""),  # F2 压缩摘要（投影）
         tool_results=tool_items,  # V1
         attachments=attach_items,  # V2

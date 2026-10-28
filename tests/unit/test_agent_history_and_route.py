@@ -7,9 +7,9 @@ from typing import Any  # 任意值
 
 from app.agent import agent as agent_mod  # 父图（after_rag）
 from app.agent.context import RunContext, run_context  # 上下文
+from app.agent.contexts.history import messages_from, turns_from_rows  # 被测：轮次成对
 from app.agent.contracts import DecisionTarget  # 决策目标
 from app.agent.fsm.states import RunEvent, RunState  # 状态机
-from app.agent.nodes.context.node import _history  # 被测：历史成对
 from app.agent.nodes.rag import entry as entry_mod  # 被测：检索节点
 from app.agent.nodes.rag.entry import make_rag_node  # 工厂
 from app.agent.nodes.rag.node import RagResult  # 检索结果
@@ -26,8 +26,10 @@ def test_history_drops_orphan_user_turns() -> None:  # 历史成对
         {"id": 6, "role": "assistant", "content": "答案 [1]"},  # 回答
         {"id": 7, "role": "user", "content": "还没回答的新问题"},  # 结尾未配对
     ]  # 数据结束
-    items = _history(0, rows)  # 读历史
-    assert [item["content"] for item in items] == ["成都下面有哪些区县", "答案 [1]"]  # 只留成对
+    turns = turns_from_rows(0, rows)  # 读轮次
+    assert [t.user for t in turns] == ["成都市是哪个省的", "广元市下面有哪些县区", "成都下面有哪些区县"]  # 成对：问题不再悬空
+    assert [t.status.value for t in turns] == ["unanswered", "unanswered", "done"]  # 空回答标未答
+    assert [m["content"] for m in messages_from(turns)] == ["成都下面有哪些区县", "答案 [1]"]  # 只喂 done
 
 
 class _Runner:  # 假检索器

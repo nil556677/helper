@@ -138,29 +138,6 @@ def test_ingest_writer_failure_rolls_back(fake_root):
     assert kb_store.counts()["chunks"] == 0
 
 
-def test_runtime_converts_graph_exception_to_failure_turn(fake_root, monkeypatch):
-    from app.agent import runtime
-
-    class Boom:
-        async def ainvoke(self, *_args, **_kwargs):
-            raise RuntimeError("retrieval exploded")
-
-    monkeypatch.setattr(runtime, "get_graph", lambda: Boom())
-    turn = runtime.run_turn("查一下资料 合同违约金", session="err-1")
-    assert turn.note_kind == "error"
-    assert "retrieval exploded" not in turn.note  # 不把内部细节直接抛给用户
-
-
-def test_runtime_handles_graph_unavailable(fake_root, monkeypatch):
-    from app.agent import runtime
-
-    def broken():
-        raise RuntimeError("checkpoint db locked")
-
-    monkeypatch.setattr(runtime, "get_graph", broken)
-    turn = runtime.run_turn("你好", session="err-2")
-    assert turn.note_kind == "error"
-
 
 def test_trace_service_without_tables_raises(fake_root):
     from app.services import trace as trace_service

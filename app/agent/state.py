@@ -4,9 +4,6 @@ from __future__ import annotations  # 类型注解延迟求值
 
 from typing import Annotated, Any, TypedDict  # 状态类型工具
 
-from langchain_core.messages import AnyMessage  # 任意消息类型
-from langgraph.graph.message import add_messages  # 消息追加 reducer
-
 
 def merge_steps(current: list[dict[str, Any]], update: list[dict[str, Any]]) -> list[dict[str, Any]]:  # 步骤合并
     """按 ``id`` 合并步骤：同 id 覆盖、否则追加。
@@ -37,8 +34,7 @@ class ChatState(TypedDict, total=False):  # 图状态（字段都可缺省）
     conversation_id: str  # 会话 id
 
     # 多轮
-    messages: Annotated[list[AnyMessage], add_messages]  # 多轮消息（按 id 追加）
-    history: list[dict[str, Any]]  # 新链路的纯字典历史
+    turns: list[dict[str, Any]]  # 对话历史（Turn 的 JSON 形态；成对、只喂 done）
 
     # 路由
     route: dict[str, Any]  # 路由决策

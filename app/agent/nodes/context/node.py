@@ -9,48 +9,29 @@ from langchain_core.runnables import RunnableConfig  # 图配置
 from app.agent.context import ctx_from_config  # 上下文
 from app.agent.contexts.budget import Budget  # 预算
 from app.agent.contexts.compact import compact  # 压缩引擎
-from app.agent.contexts.history import trim as trim_history  # token 裁剪
+from app.agent.contexts.history import (  # 历史投影
+    messages_from,  # 轮次 -> 消息
+    turns_from_rows,  # 行 -> 轮次
+)  # 导入结束
+from app.agent.contexts.history import (
+    trim as trim_history,  # token 裁剪
+)
 from app.agent.contexts.summarize import build_summarizer  # 摘要生成器（不可用返回 None）
 from app.agent.contexts.tokens import count_messages  # token 估算
-from app.agent.contracts import StageGroup  # 步骤分组
+from app.agent.contracts import StageGroup, TurnStatus  # 契约（分组/轮次状态）
 from app.agent.events import context as context_event  # 事件
 from app.agent.fsm.states import RunEvent  # 状态事件
 from app.agent.stages import stage  # 步骤事件
-from app.services import (
+from app.services import (  # 服务
     attachments,  # 附件
     conversations,  # 会话服务
-)
+)  # 导入结束
 
 MAX_HISTORY_MESSAGES = 200  # 读取上限（I/O 安全阀）；真正收紧靠 token 裁剪
 
 
-def _history(since: int, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:  # 读历史
-    """按「一问一答」成对收集覆盖点之后的历史。
-
-    不能只收非空消息：某轮 assistant 回答为空（无证据/失败）时，它的 user 问题会被留下，
-    模型看到一串悬空提问就会把旧问题一起答了（真实踩过：问成都却答了上一轮的广元）。
-    这里先挂起 user，等非空 assistant 才成对入列；空回答的那轮整对丢弃。
-    """
-    items: list[dict[str, Any]] = []  # 结果
-    pending: dict[str, Any] | None = None  # 暂存等待配对的 user
-    for row in rows[-MAX_HISTORY_MESSAGES:]:  # 最近一批
-        ident = int(row.get("id") or 0)  # 消息 id
-        if ident <= since:  # 已被摘要覆盖
-            continue  # 跳过
-        role = str(row.get("role") or "")  # 角色
-        content = str(row.get("content") or "")  # 内容
-        if role == "user":  # 用户问题
-            pending = {"role": "user", "content": content, "id": ident} if content else None  # 暂存（空问题丢弃）
-        elif role == "assistant":  # 助手回答
-            if content and pending is not None:  # 有回答且有配对问题
-                items.append(pending)  # 先放问题
-                items.append({"role": "assistant", "content": content, "id": ident})  # 再放回答
-            pending = None  # 无论成败都清空（空回答的整对丢弃）
-    return items  # 返回（结尾未配对的 user 自动丢弃）
-
-
 async def load_context(state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:  # 上下文节点
-    """返回 messages 与滚动摘要；状态机进入 retrieving。"""
+    """返回 turns 与滚动摘要；状态机进入 retrieving。"""
     ctx = ctx_from_config(config)  # 上下文
     conversation_id = str(state.get("conversation_id") or "")  # 会话 id
     with stage("准备对话", group=StageGroup.PREPARE):  # 步骤
@@ -65,7 +46,8 @@ async def load_context(state: dict[str, Any], config: RunnableConfig) -> dict[st
                 rows = []  # 空历史
         summary_text = str(snapshot.get("summary") or "")  # 滚动摘要
         since = int(snapshot.get("until_message_id") or 0)  # 摘要覆盖终点
-        messages = _history(since, rows)  # 覆盖点之后的历史
+        turns = turns_from_rows(since, rows, limit=MAX_HISTORY_MESSAGES)  # 成对轮次
+        messages = messages_from(turns, with_ids=True)  # 压缩/裁剪用消息投影
         files = list(state.get("attachments") or [])  # 附件（正文不入 state）
         if files:  # 有附件
             with stage("读取附件", group=StageGroup.PREPARE, name="attachments") as info:  # 附件步骤
@@ -94,11 +76,13 @@ async def load_context(state: dict[str, Any], config: RunnableConfig) -> dict[st
             estimate = count_messages(messages)  # 统一估算
             ctx.emit(  # 上下文事件
                 context_event(  # 构造
-                    len(messages),  # 轮数
+                    len(messages),  # 条数
                     estimate,  # token
                     trimmed=dropped,  # 裁剪条数
                     window=budget.window,  # 窗口
                 )  # 事件结束
             )  # emit 结束
             ctx.transition(RunEvent.CONTEXT_LOADED)  # 状态
-    return {"history": messages, "summary": summary_text}  # 写回
+        kept_ids = {int(item["id"]) for item in messages if "id" in item}  # 裁剪后保留的轮次 id
+        turns = [t for t in turns if t.status is TurnStatus.DONE and int(t.turn_id) in kept_ids]  # 只留保留轮次
+    return {"turns": [t.model_dump(mode="json") for t in turns], "summary": summary_text}  # 写回

@@ -8,7 +8,13 @@ from typing import Any  # 任意值
 from langchain_core.runnables import RunnableConfig  # 图配置
 
 from app.agent.context import ctx_from_config  # 上下文
-from app.agent.contracts import DecisionTarget, RouteDecision, StageGroup  # 契约（决策/分组）
+from app.agent.contexts.history import messages_from  # 轮次 -> 消息
+from app.agent.contracts import (  # 契约（决策/分组/轮次）
+    DecisionTarget,
+    RouteDecision,
+    StageGroup,
+    Turn,
+)
 from app.agent.events import basis as basis_event  # 检索依据
 from app.agent.fsm.states import RunEvent  # 状态事件
 from app.agent.nodes.rag.node import RagRunner  # 子图运行器
@@ -76,7 +82,7 @@ def make_rag_node(runner: RagRunner):  # 工厂
         """跑 RAG 子图，写 evidence/hits，并发检索依据。"""
         ctx = ctx_from_config(config)  # 上下文
         question = str(state.get("question") or "")  # 问题
-        history = list(state.get("history") or [])  # 历史（改写要用上一轮补主语）
+        history = messages_from([Turn.model_validate(item) for item in (state.get("turns") or [])])  # 历史（只喂 done）
         with stage("查找资料", group=StageGroup.SEARCH):  # 父图步骤
             with stage("改写问题", group=StageGroup.PREPARE, name="rewrite"):  # 改写单独一段（慢的话能一眼看出来）
                 planned = await asyncio.to_thread(  # 丢线程：里面可能有同步 HTTP 调用
