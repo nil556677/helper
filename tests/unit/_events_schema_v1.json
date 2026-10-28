@@ -50,7 +50,10 @@
       "title": "str=''",
       "detail": "str=''",
       "duration_ms": "int | None=None",
-      "group": "str=''"
+      "group": "str=''",
+      "agent_id": "str=''",
+      "parent_run_id": "str=''",
+      "branch": "str=''"
     },
     "basis": {
       "keywords": "list[str]",

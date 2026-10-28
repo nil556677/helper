@@ -2,6 +2,14 @@
 
 from __future__ import annotations  # 类型注解延迟求值
 
+from app.agent.contracts.collab import (  # 任务委派契约
+    TASK_TRANSITIONS,  # 任务迁移
+    TERMINAL_TASK_STATUSES,  # 任务终态
+    AgentCard,  # Agent 卡
+    TaskEnvelope,  # 任务信封
+    TaskStatus,  # 任务状态
+    task_can_transition,  # 迁移判断
+)  # 委派导入结束
 from app.agent.contracts.events import PAYLOAD_BY_TYPE, EventEnvelope  # 事件信封与载荷映射
 from app.agent.contracts.kinds import (  # 枚举、终态与步骤分组
     GROUP_LABELS,  # 分组 → 组名
@@ -12,28 +20,76 @@ from app.agent.contracts.kinds import (  # 枚举、终态与步骤分组
     StageGroup,  # 步骤分组
     StageStatus,  # 步骤状态
 )  # 导入结束
+from app.agent.contracts.messages import MessageRole, ToolCall, ToolResult  # 消息契约
 from app.agent.contracts.naming import Namer  # 命名器
+
+# ---- 新契约域（六域集中定义；域与域零 import）----
+from app.agent.contracts.output import (  # 模型输出契约
+    Candidate,  # 澄清候选
+    DecisionTarget,  # 决策目标枚举
+    RouteDecision,  # 决策对象
+    candidate_id,  # 候选 id 生成
+)  # 输出导入结束
 from app.agent.contracts.reducers import merge_by_id, merge_usage  # 合并规则
 from app.agent.contracts.registry import DuplicateIdError, IdRegistry  # id 注册表
 from app.agent.contracts.serialize import from_dict, make, to_dict, validate_sequence  # 序列化
+from app.agent.contracts.state import (  # 共享状态契约
+    WRITE_TABLE,  # 写契约表
+    Turn,  # 轮次
+    TurnStatus,  # 轮次状态
+    TurnToolCall,  # 工具审计
+    WriteRule,  # 写规则
+    merge_turns,  # 轮次合并
+    only_done,  # 只喂 done
+)  # 状态导入结束
+from app.agent.contracts.tools import (  # 工具契约
+    ErrorCode,
+    Mutation,
+    ResultEnvelope,
+    ToolDescriptor,
+)
 
 __all__ = [  # 对外导出
     "GROUP_LABELS",  # 分组组名
     "GROUP_ORDER",  # 分组顺序
     "PAYLOAD_BY_TYPE",  # 载荷映射
     "RETRY_KIND_LABELS",  # 重试类别说明
+    "TASK_TRANSITIONS",  # 任务迁移
+    "TERMINAL_TASK_STATUSES",  # 任务终态
     "TERMINAL_TYPES",  # 终态集合
+    "WRITE_TABLE",  # 写契约表
+    "AgentCard",  # Agent 卡
+    "Candidate",  # 澄清候选
+    "DecisionTarget",  # 决策目标枚举
     "DuplicateIdError",  # 重复 id 异常
+    "ErrorCode",  # 错误码常量
     "EventEnvelope",  # 事件信封
     "EventType",  # 事件类型
     "IdRegistry",  # id 注册表
+    "MessageRole",  # 消息角色
+    "Mutation",  # 变更画像
     "Namer",  # 命名器
+    "ResultEnvelope",  # 结果包络
+    "RouteDecision",  # 决策对象
     "StageGroup",  # 步骤分组
     "StageStatus",  # 步骤状态
+    "TaskEnvelope",  # 任务信封
+    "TaskStatus",  # 任务状态
+    "ToolCall",  # 工具调用
+    "ToolDescriptor",  # 工具描述符
+    "ToolResult",  # 工具结果
+    "Turn",  # 轮次
+    "TurnStatus",  # 轮次状态
+    "TurnToolCall",  # 工具审计
+    "WriteRule",  # 写规则
+    "candidate_id",  # 候选 id 生成
     "from_dict",  # 反序列化
     "make",  # 构造
     "merge_by_id",  # 按 id 合并
+    "merge_turns",  # 轮次合并
     "merge_usage",  # 用量合并
+    "only_done",  # 只喂 done
+    "task_can_transition",  # 任务迁移判断
     "to_dict",  # 序列化
     "validate_sequence",  # 序列校验
 ]  # 导出结束

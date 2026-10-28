@@ -38,6 +38,9 @@ class StagePayload(BaseModel):  # 节点/步骤事件
     detail: str = ""  # 明细
     duration_ms: int | None = None  # 耗时
     group: str = ""  # 用户级分组（prepare/search/filter/tool/generate；空 = 只埋 trace 不展示）
+    agent_id: str = ""  # 归属哪个 Agent（多 Agent 委派；空 = 主链路）
+    parent_run_id: str = ""  # 父 run（并行子 Agent 用它组树）
+    branch: str = ""  # 并行分支标识（同父多路区分）
 
 
 class BasisPayload(BaseModel):  # 检索依据
