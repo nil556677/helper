@@ -252,29 +252,3 @@ def test_connection(
         detail=result.detail,
         elapsed_ms=result.elapsed_ms,
     )
-
-
-@dataclass(frozen=True)
-class LLMRuntime:
-    """一次调用要用的已解密配置（**只给内部用，绝不进日志/界面**）。"""
-
-    base_url: str
-    model: str
-    api_key: str
-
-
-def llm_runtime() -> LLMRuntime | None:
-    """读 ``llm`` 槽位并解密 key；没配全/解不开返回 ``None``（重写直接跳过）。"""
-    row = _row("llm")
-    if row is None:
-        return None
-    base_url = str(row["base_url"] or "").strip()
-    model = str(row["model"] or "").strip()
-    cipher = row["api_key_cipher"]
-    if not base_url or not model or not cipher:
-        return None
-    try:
-        api_key = unprotect(bytes(cipher)).decode("utf-8")
-    except (SecurityError, OSError, ValueError):
-        return None
-    return LLMRuntime(base_url=base_url, model=model, api_key=api_key)

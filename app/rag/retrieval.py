@@ -12,9 +12,24 @@ from app.core.trace.recorder import trace_hit  # 命中留痕
 from app.integrations.embeddings import OnnxBgeM3Embeddings  # 查询嵌入
 from app.integrations.qdrant import build_stores, qdrant_client  # Qdrant
 from app.integrations.rerank import OnnxReranker  # 精排
-from app.integrations.retrievers import active_filter  # status 过滤
 from app.integrations.sparse import JiebaBm25SparseEmbeddings  # 关键词
 from app.rag.evidence import build_evidence, compose_candidates  # 证据
+
+#: 检索时的 active 状态过滤（仅命中 status=active 的 chunk，避免搜到未发布/待删数据）。
+ACTIVE_STATUS = "active"
+
+
+def active_filter() -> Any:  # 构造 Qdrant active 过滤条件
+    """只搜 ``status == "active"`` 的点（入库时由 writer 设置，重排/删除会改状态）。"""
+    from qdrant_client import models  # 延迟导入（仅查询期需要）
+
+    return models.Filter(  # 过滤
+        must=[  # 必须满足
+            models.FieldCondition(  # 字段条件
+                key="status", match=models.MatchValue(value=ACTIVE_STATUS)  # 状态
+            )  # 条件结束
+        ]  # 必须结束
+    )  # 返回
 
 DENSE_CANDIDATES = 40  # 语义候选
 SPARSE_CANDIDATES = 50  # 关键词候选

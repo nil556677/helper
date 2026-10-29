@@ -18,7 +18,7 @@
 ## 两种调用方式（同一套逻辑）
 
 - **整份**：:func:`apply` 先算全文档正文基准字号，再一次 ``feed``——小文件/测试走这条；
-- **流式**：:class:`Structurer` 直接逐单元 ``feed``（``app.rag.ingest.streaming`` 走这条）。
+- **流式**：:class:`Structurer` 直接逐单元 ``feed``（``app.ingest.pipeline`` 走这条）。
   此时没有"全文档基准"，只能用**运行众数**（每来一个正文块就重算一次，见 ``_sample``）。
 
 **优先级**（用户拍板："原生结构优先，启发式只兜底"）：
@@ -337,7 +337,7 @@ class Structurer:
         参数：
             toc: PDF 内置书签 ``[(层级, 标题, 页码), ...]``；传了就把"哪页有什么标题"
                 建成索引（同一页多个书签按顺序保留）。流式调用可以晚一点拿到书签
-                再建一个新实例（``toc`` 传 None 起手，见 ``app.rag.ingest.streaming``）。
+                再建一个新实例（``toc`` 传 None 起手，见 ``app.ingest.pipeline``）。
             baseline_size: 已知的正文基准字号（整份路径用 :func:`body_size` 先算好）；
                 不传则退化为运行时逐块累积众数（:meth:`_sample`）。
             doc_title_from_h1: 是否把"文档开头第一个 1 级标题"当文档大标题。

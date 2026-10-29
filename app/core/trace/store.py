@@ -1,6 +1,6 @@
 """trace 的 SQLite 存储（唯一读写入口）。
 
-约定与 `app/rag/store` 一致：写走 `transaction()`；读返回 ``sqlite3.Row`` 或
+约定与 :mod:`app.rag.kb_store` 一致：写走 `transaction()`；读返回 ``sqlite3.Row`` 或
 :mod:`app.core.trace.model` 的值对象。**本模块不捕获异常**——fail-open 由
 recorder 层做（trace 写失败只记日志，不影响回答）。
 """

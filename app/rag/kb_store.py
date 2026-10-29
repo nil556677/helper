@@ -323,25 +323,3 @@ def rows_for(
         )
         grouped.setdefault(key, []).append(item)
     return grouped
-
-
-def child_texts(doc_id: int, version: int) -> list[list[str]]:
-    """某版本全部 child 的正文（重建 sparse 统计用）。"""
-    rows = get_connection().execute(
-        "SELECT text FROM chunks WHERE doc_id = ? AND version = ? AND is_parent = 0",
-        (int(doc_id), int(version)),
-    ).fetchall()
-    return [str(row["text"]) for row in rows]
-
-
-def counts() -> dict[str, int]:
-    conn = get_connection()
-    docs = int(conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
-    chunks = int(conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
-    parents = int(
-        conn.execute("SELECT COUNT(*) FROM chunks WHERE is_parent = 1").fetchone()[0]
-    )
-    active = int(
-        conn.execute("SELECT COUNT(*) FROM chunks WHERE status = 'active'").fetchone()[0]
-    )
-    return {"documents": docs, "chunks": chunks, "parents": parents, "active": active}

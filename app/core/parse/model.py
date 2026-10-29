@@ -11,7 +11,7 @@
 - **下游**：结构识别填 ``level``/``section_path``；切分（:mod:`app.core.chunk`）把块切成
   parent/child 并把定位带进 ``ChunkRecord``（序列化口径见 :func:`loc_payload`）。
   历史 SQLite 里它落在 ``chunks.loc_json``；当前 Qdrant payload 只带 ``page`` /
-  ``section_path`` / ``level``（见 :mod:`app.rag.store.chunks`）——引用跳转读的就是它。
+  ``section_path`` / ``level``（见 :mod:`app.rag.kb_store`）——引用跳转读的就是它。
 
 ## 输入输出
 
@@ -331,7 +331,7 @@ class Unit:
     """给用户看的提示（空白页、扫描页待 OCR、图片未 OCR 的张数…）。
 
     由 :func:`app.core.parse.parse_file` 累加进文档；流式路径里由
-    ``app.rag.ingest.streaming`` 收进导入结果。**内容是可展示的中文句子**，不是日志。
+    ``app.ingest.pipeline`` 收进导入结果。**内容是可展示的中文句子**，不是日志。
     """
 
     pages: int | None = None

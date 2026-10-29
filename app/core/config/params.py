@@ -28,7 +28,7 @@ class Aspect(StrEnum):
     - :attr:`CHUNKING` —— 影响**切出来的块边界**（语义兜底开关、标题前缀开关）。
       它进**两个**指纹：块边界变了，词法与向量都得重来。
       **注意**：parent/child 的**尺寸与重叠不在这里配**——它们由嵌入宽度推导，
-      见 ``app/core/features/rag/splitter/derived.py``。
+      见 ``app/core/chunk/derived.py``。
     - :attr:`VECTOR` —— 影响**向量**（嵌入模型、维度、固定宽度、批量、线程）。
       它只进向量指纹；其中线程数只影响速度，所以 ``into`` 是空的（**不进指纹**）。
     - :attr:`LEXICAL` —— 影响**词法列**（jieba 词库）。只进词法指纹：
@@ -147,7 +147,7 @@ _VEC = (Aspect.VECTOR,)
 #: 为什么尺寸不在这里配：parent/child 的尺寸与重叠不是"用户偏好"，而是由向量模型
 #: 决定的——子块必须塞得进模型的固定输入宽度（``embed.model.PAD_TO``），其余都是围绕它的固定比例。
 #: 让用户手填会出现"``child_size > pad_to`` → 尾部静默截断"这类静默错误。
-#: 推导处（唯一）：``app/core/features/rag/splitter/derived.py``。
+#: 推导处（唯一）：``app/core/chunk/derived.py``。
 #:
 #: 保留下来的两个开关都**影响块边界**，所以进两个指纹：只改一个开关，块就变了，
 #: 词法与向量都得重来。
@@ -185,7 +185,7 @@ CHUNKING: tuple[Param, ...] = (
 #: 每段文本先按 token 填/截到那个宽度再喂模型，超出尾部会被截掉。之所以不让用户改：
 #: 实测模型输出会随输入宽度漂移（宽度差 1 token → 向量最大差 1.4%、余弦 0.992），
 #: 它属于"模型形状"而不是"偏好"，改了等于换了一个向量空间。
-#: 子块尺寸也由它推导（见 ``app/core/features/rag/splitter/derived.py``），
+#: 子块尺寸也由它推导（见 ``app/core/chunk/derived.py``），
 #: 所以它仍会通过 :func:`app.core.config.store.aspect_extra` 进两个指纹。
 VECTOR: tuple[Param, ...] = (
     _p(
@@ -327,7 +327,7 @@ RETRIEVAL: tuple[Param, ...] = (
 LEXICAL: tuple[Param, ...] = ()
 
 #: **存储**（连接方式不进指纹：向量内容不变，只是存在哪）。
-#: 注意：``vector.backend`` 已删除——向量层重构后只有 Qdrant 一个后端（见 `app/core/vector/api.py`），
+#: 注意：``vector.backend`` 已删除——向量层重构后只有 Qdrant 一个后端（见 `app/integrations/qdrant.py`），
 #: 那个配置项已经没有读者，留着只会让人以为还有 matrix-only 模式。
 STORAGE: tuple[Param, ...] = (
     _p(

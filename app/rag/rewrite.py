@@ -203,11 +203,6 @@ def rewrite(  # 主入口
     return RewriteResult(queries, "used", name)  # 返回
 
 
-def clear_cache() -> None:  # 清缓存（测试/换模型用）
-    """设置页换模型后调用。"""
-    _CACHE.clear()  # 清空
-
-
 def _default_factory() -> Any:  # 默认工厂
     """复用现有 `llm` 槽位：温度 0、小 max_tokens、800ms 超时。"""
     from app.integrations.llm import chat_model  # 延迟导入
