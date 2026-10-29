@@ -217,14 +217,14 @@ def rebuild_all(doc_ids: list[int] | None = None) -> int:
 _STATUS_CACHE: dict[str, Any] = {}
 
 
-def _status_key() -> tuple[Any, str, str]:
-    """缓存键：**参数快照 + 词条内容哈希 + 已记录的动态字段版本**。"""
+def _status_key() -> tuple[Any, str]:
+    """缓存键：**参数快照 + 词条内容哈希**。"""
     from app.core.retrieval import terms
 
     config = params_store.load()
     values = getattr(config, "values", {}) or {}
     snapshot = tuple(sorted((str(key), str(value)) for key, value in dict(values).items()))
-    return snapshot, terms.terms_hash(), params_store.stored_attrs_version()
+    return snapshot, terms.terms_hash()
 
 
 def invalidate_index_status() -> None:
@@ -252,7 +252,6 @@ def index_status() -> dict[str, Any]:
         labels.extend(params_store.param_labels(list(keys)))
     result = {
         "action": report["action"],
-        "attrs_stale": bool(report.get("attrs_stale")),
         "detail": report["detail"],
         "changed_labels": labels,
         "stored": report["stored"],

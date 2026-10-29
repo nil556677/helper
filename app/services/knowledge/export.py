@@ -7,6 +7,17 @@ from pathlib import Path
 from app.rag import kb_store
 
 
+def export_target(hint: Path) -> Path:
+    """计算不覆盖的导出落盘路径（界面只调服务层，不直接碰 core）。
+
+    界面用 ``Path.home()/Downloads/xxx.zip`` 之类的提示路径，此处保证同名时不覆盖，
+    交给 `app/core/paths.unique_path` 处理（core 属于服务层可依赖的下层）。
+    """
+    from app.core.paths import unique_path  # 延迟导入：只在需要时触达 core
+
+    return unique_path(hint)
+
+
 def export(doc_ids: list[int], target: Path) -> dict[str, object]:
     """**批量导出**（P1.17）：把选中的资料**副本 + 清单**打成一个 zip。
 

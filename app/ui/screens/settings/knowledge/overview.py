@@ -45,13 +45,12 @@ def render(container: ui.column, *, open_doc: Any) -> Callable[..., None]:
 def _banner(banner: ui.column, seen: dict[str, Any], force: bool) -> None:
     """索引过期提示条：只在指纹对不上时出现，点任一条即记指纹消失。"""
     status = settings_service.index_status()
-    attrs_stale = bool(status.get("attrs_stale"))
-    mark = (status["action"], attrs_stale, tuple(status["changed_labels"]))
+    mark = (status["action"], tuple(status["changed_labels"]))
     if not force and mark == seen["banner"]:
         return
     seen["banner"] = mark
     banner.clear()
-    if status["action"] == "none" and not attrs_stale:
+    if status["action"] == "none":
         return
     with (
         banner,
@@ -67,10 +66,6 @@ def _banner(banner: ui.column, seen: dict[str, Any], force: bool) -> None:
             ui.button("只重算词法", icon="bolt", on_click=_rebuild_lexical).props(
                 "flat dense no-caps"
             ).mark("kb-rebuild-lexical").tooltip("不重新解析、不动向量，秒级完成")
-        if attrs_stale:
-            ui.button("回填动态字段", icon="rule", on_click=_backfill_attrs).props(
-                "flat dense no-caps"
-            ).mark("kb-backfill-attrs").tooltip("按当前字段字典重算属性，不重嵌（秒级）")
         ui.button("全量重建", icon="restart_alt", on_click=_rebuild_all_index).props(
             "flat dense no-caps"
         ).mark("kb-rebuild-all").tooltip("重新解析 + 重新切分 + 重建向量（小时级，走队列）")
@@ -182,9 +177,3 @@ def _rebuild_all_index() -> None:
     """全量重建（走队列：小时级的活不能在界面线程里跑）。"""
     job_id = settings_service.rebuild_all()
     notify(f"已排队全量重建（任务 #{job_id}，任务页可见进度）", kind="positive")
-
-
-def _backfill_attrs() -> None:
-    """回填动态字段（只重算 attrs，不重新解析、不动向量；走队列）。"""
-    job_id = knowledge_service.enqueue_backfill_attrs()
-    notify(f"已排队回填动态字段（任务 #{job_id}，任务页可见进度）", kind="positive")

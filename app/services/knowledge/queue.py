@@ -107,11 +107,6 @@ def enqueue_rebuild_many(doc_ids: list[int]) -> int:
     return len({enqueue_rebuild(doc_id, run_id=run_id) for doc_id in unique})
 
 
-def enqueue_backfill_attrs() -> int:
-    """v1 已移除动态字段（attrs）数据面；保留入口返回 0，界面不会排空任务。"""
-    return 0
-
-
 def migrate_server_store_if_needed() -> int:
     """服务端库为空、但 SQLite 里已有就绪资料时，自动排一轮重建。
 

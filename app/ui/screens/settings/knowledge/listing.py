@@ -16,7 +16,6 @@ from typing import Any
 
 from nicegui import run, ui
 
-from app.core.paths import unique_path  # 导出不覆盖同名文件
 from app.services import knowledge as knowledge_service
 from app.ui.components.dialog import confirm, notify
 from app.ui.components.format import human_size
@@ -316,7 +315,7 @@ class _List:
         if not self.picked:
             return
         picked = sorted(self.picked)
-        target = unique_path(Path.home() / "Downloads" / "知识库导出.zip")
+        target = knowledge_service.export_target(Path.home() / "Downloads" / "知识库导出.zip")  # 唯一路径
         try:
             report = await run.io_bound(knowledge_service.export, picked, target)
         except Exception as exc:

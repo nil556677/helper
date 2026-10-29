@@ -14,7 +14,6 @@ from typing import Any
 
 from nicegui import run, ui
 
-from app.core.paths import unique_path  # 导出不覆盖
 from app.services import knowledge as knowledge_service
 from app.ui.components.dialog import confirm, notify
 from app.ui.components.format import human_size, human_time
@@ -487,7 +486,7 @@ def _rollback(version_doc_id: int, on_refresh: Any) -> None:
 async def _export_one(doc_id: int, name: str) -> None:
     """导出单份（线程池 + 不覆盖同名文件）。"""
     safe = name.rsplit(".", 1)[0]  # 去掉扩展名
-    target = unique_path(Path.home() / "Downloads" / f"{safe}.zip")  # 唯一路径
+    target = knowledge_service.export_target(Path.home() / "Downloads" / f"{safe}.zip")  # 唯一路径
     try:
         report = await run.io_bound(knowledge_service.export, [doc_id], target)
     except Exception as exc:

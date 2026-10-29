@@ -5,8 +5,13 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from app.agent.contracts import GROUP_LABELS, GROUP_ORDER, RETRY_KIND_LABELS
-from app.agent.events import Event, EventType
+from app.agent.contracts import (  # 契约层直连（消除对旧门面的协议耦合）
+    GROUP_LABELS,
+    GROUP_ORDER,
+    RETRY_KIND_LABELS,
+    EventEnvelope,
+    EventType,
+)
 from app.ui.screens.chat.citations import _render_citations
 from app.ui.screens.chat.live import (
     _refresh_header,
@@ -77,7 +82,7 @@ def _render_live_reasoning(view: dict[str, Any]) -> None:  # 画思考（实时�
     view["reasoning_dirty"] = False  # 清标记
 
 
-def _apply_live_event(view: dict[str, Any], event: Event) -> None:  # 处理事件
+def _apply_live_event(view: dict[str, Any], event: EventEnvelope) -> None:  # 处理事件
     """按事件类型更新视图；载荷在 event.payload（类型化模型）。"""
     payload = event.payload  # 类型化载荷
     if event.type is EventType.ACK:  # 已收到

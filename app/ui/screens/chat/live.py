@@ -10,6 +10,7 @@ from app.agent.contracts import GROUP_LABELS, GROUP_ORDER, StageGroup
 from app.services import settings as settings_service
 from app.ui.screens.chat.dialogs import _open_settings_dialog
 from app.ui.screens.chat.state import _GROUP_KEYS, _alive, _LiveState
+from app.ui.screens.chat.widgets import _render_basis_content  # 依据正文（历史/实时共用）
 
 
 def _build_live(live_state: _LiveState, box: Any, scroll: Any = None) -> dict[str, Any]:  # 建实时视图
@@ -322,17 +323,6 @@ def _render_basis(view: dict[str, Any]) -> None:  # 画检索依据
     if view["basis_box"] is None or not _alive(view):  # 没 UI
         return  # 跳过
     view["basis_box"].clear()  # 清空
-    counts = basis.get("hit_counts") or {}  # 计数
-    keywords = " / ".join(basis.get("keywords") or []) or "（未提取到关键词）"  # 词
-    with view["basis_box"]:  # 画
-        ui.label(f"关键词：{keywords}").classes("hp-field-help")  # 关键词
-        ui.label(  # 计数
-            f"找到 {counts.get('semantic', 0)} 段 + {counts.get('keyword', 0)} 段"
-            f" → 合并 {counts.get('merged', 0)} 段 → 精选 {counts.get('selected', 0)} 段"
-        ).classes("hp-field-help")  # 计数
-        for item in basis.get("sources") or []:  # 来源
-            snippet = str(item.get("snippet") or "").strip().replace("\n", " ")[:80]  # 摘要
-            ui.label(f"· {item.get('source_name', '资料')} · {item.get('origin', '')}".rstrip()).classes("hp-field-help")  # 行
-            if snippet:  # 有摘要
-                ui.label(f"  {snippet}").classes("hp-field-help")  # 摘要
+    with view["basis_box"]:  # 画（与历史共用同一份渲染，避免双份实现漂移）
+        _render_basis_content(basis)  # 关键词/计数/来源（单一实现）
     view["basis_box"].update()  # 刷新

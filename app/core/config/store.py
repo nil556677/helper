@@ -23,7 +23,6 @@ from loguru import logger
 from app.core.config import fingerprint
 from app.core.config.params import (
     BY_KEY,
-    KEY_ATTRS_VERSION,
     KEY_LEXICAL_FINGERPRINT,
     KEY_VECTOR_FINGERPRINT,
     PER_ITEM_PREFIX,
@@ -32,9 +31,6 @@ from app.core.config.params import (
     Param,
 )
 from app.core.db.connection import get_connection, transaction
-
-#: 动态字段提取版本的进程级"已打标"缓存：避免每批写入都 upsert 一次 index_meta。
-_attrs_marked = False
 
 #: 密文在 ``settings.value_json`` 里的前缀（JSON 字符串形如 ``"enc:<base64>"``）。
 #: 有前缀 ⇒ 密文；没有前缀 ⇒ 明文（正常只有 DPAPI 加密环境异常降级时才会这样）。
@@ -219,29 +215,13 @@ def store_fingerprints(fingerprints: dict[Aspect, str], config: Config) -> None:
                     " updated_at = excluded.updated_at",
                     (fingerprint.item_key(f"{aspect.value}.{name}"), str(item), now),
                 )
-        # 动态字段版本一起记（没有独立 Aspect，用一个普通键，见 params.KEY_ATTRS_VERSION）
-        conn.execute(
-            "INSERT INTO index_meta(key, value, updated_at) VALUES (?, ?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value,"
-            " updated_at = excluded.updated_at",
-            (KEY_ATTRS_VERSION, str(_attrs_version()), now),
-        )
-    global _attrs_marked
-    _attrs_marked = True
-
-
-def _attrs_version() -> int:
-    """动态字段当前版本（进 index_meta 用；本地导入避免循环）。"""
-    from app.core.attrs.version import ATTRS_VERSION
-
-    return ATTRS_VERSION
 
 
 def stored_fingerprints() -> dict[str, str]:
     """读回已存的指纹（键名 → 值）。没有就是空 dict（＝还没建过索引）。"""
     rows = get_connection().execute(
-        "SELECT key, value FROM index_meta WHERE key IN (?, ?, ?)",
-        (KEY_VECTOR_FINGERPRINT, KEY_LEXICAL_FINGERPRINT, KEY_ATTRS_VERSION),
+        "SELECT key, value FROM index_meta WHERE key IN (?, ?)",
+        (KEY_VECTOR_FINGERPRINT, KEY_LEXICAL_FINGERPRINT),
     ).fetchall()
     return {str(row["key"]): str(row["value"]) for row in rows}
 
@@ -257,13 +237,11 @@ def stored_items(aspect: Aspect) -> dict[str, str]:
 
 def clear_fingerprints() -> None:
     """清掉指纹与逐项留痕（"清空集合 / 从头重建"时用）。"""
-    global _attrs_marked
     with transaction() as conn:
         conn.execute(
-            "DELETE FROM index_meta WHERE key = ? OR key = ? OR key = ? OR key LIKE ?",
-            (KEY_VECTOR_FINGERPRINT, KEY_LEXICAL_FINGERPRINT, KEY_ATTRS_VERSION, f"{PER_ITEM_PREFIX}%"),
+            "DELETE FROM index_meta WHERE key = ? OR key = ? OR key LIKE ?",
+            (KEY_VECTOR_FINGERPRINT, KEY_LEXICAL_FINGERPRINT, f"{PER_ITEM_PREFIX}%"),
         )
-    _attrs_marked = False
 
 
 def _upsert_meta(key: str, value: str, now: float = 0.0) -> None:
@@ -275,29 +253,6 @@ def _upsert_meta(key: str, value: str, now: float = 0.0) -> None:
             " updated_at = excluded.updated_at",
             (key, value, now or time.time()),
         )
-
-
-def mark_attrs_version(*, force: bool = False) -> None:
-    """把当前动态字段版本记进 ``index_meta``（幂等；进程序内缓存避免每批写库）。
-
-    写入侧（``writer.store_records`` / ``backfill_attrs``）在写过带属性的数据后调用它——
-    这样界面才知道"索引里的动态字段是按哪版建的"，版本一变就提示回填。
-    """
-    from app.core.attrs.version import ATTRS_VERSION
-
-    global _attrs_marked
-    if _attrs_marked and not force:
-        return
-    _upsert_meta(KEY_ATTRS_VERSION, str(ATTRS_VERSION))
-    _attrs_marked = True
-
-
-def stored_attrs_version() -> str:
-    """读回已记录的动态字段版本；没记过返回空串（＝可能是老数据或没导入过）。"""
-    row = get_connection().execute(
-        "SELECT value FROM index_meta WHERE key = ?", (KEY_ATTRS_VERSION,)
-    ).fetchone()
-    return str(row["value"]) if row is not None else ""
 
 
 def describe_staleness(
@@ -333,31 +288,21 @@ def describe_staleness(
         changed = fingerprint.diff(items, stored_items(aspect))
         stale[aspect.value] = changed or ["（指纹算法变了）"]
 
-    # 动态字段版本独立判定：它只影响 attrs*（回填即可，不重嵌入）。
-    attrs_stale = stored.get(KEY_ATTRS_VERSION, "") != str(_attrs_version())
-    if attrs_stale:
-        stale["attrs"] = ["attrs.version"]
-
     if Aspect.VECTOR.value in stale:
         action = "full"
         detail = "索引已过期：影响向量的参数变了，需要全量重建。"
     elif Aspect.LEXICAL.value in stale:
         action = "lexical"
         detail = "索引已过期：只有词法相关的东西变了，重算词法即可（秒级）。"
-    elif not stale:
+    else:
         action = "none"
         detail = "索引与当前参数一致，不需要重建。"
-    else:
-        # 只剩 attrs 过期：不重建、不重嵌，回填动态字段即可
-        action = "none"
-        detail = "动态字段规则已更新：建议回填动态字段（不重嵌，秒级）。"
 
     return {
         "stored": stored,
         "current": {aspect.value: value for aspect, value in current.items()},
         "stale": stale,
         "action": action,
-        "attrs_stale": attrs_stale,
         "detail": detail,
     }
 
@@ -366,9 +311,6 @@ def param_labels(keys: list[str]) -> list[str]:
     """把参数键翻成界面上的中文名（"到底哪个变了"要说人话）。"""
     labels: list[str] = []
     for key in keys:
-        if key == "attrs.version":
-            labels.append("动态字段规则")
-            continue
         param: Param | None = BY_KEY.get(key)
         labels.append(param.label if param is not None else key)
     return labels

@@ -47,10 +47,6 @@ class Aspect(StrEnum):
 KEY_VECTOR_FINGERPRINT = "fingerprint.vector"
 KEY_LEXICAL_FINGERPRINT = "fingerprint.lexical"
 
-#: ``index_meta`` 里记录的**动态字段提取版本**（不是参数，是代码常量；见 app/core/attrs/version.py）。
-#: 改字段字典/提取器/归一化 → 版本变 → 界面提示"回填动态字段"（不重嵌入）。
-KEY_ATTRS_VERSION = "attrs.version"
-
 #: ``index_meta`` 里逐项留痕的前缀（排查"到底哪个参数变了"用）。
 PER_ITEM_PREFIX = "fingerprint.item."
 

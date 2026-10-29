@@ -54,17 +54,18 @@ def test_merge_steps_empty_inputs() -> None:  # 反/边界：空输入
     assert merge_steps(None, None) == []  # None 防御
 
 
-# ---------- tool_contract 包络 key 完整性 ----------
+# ---------- 工具结果包络（契约层 ResultEnvelope）字段完整性 ----------
 
 def test_envelopes_always_have_full_keys() -> None:  # 反：字段齐全
-    from app.agent.tool_contract import error_envelope, success_envelope  # 局部导入
+    from app.agent.contracts import ResultEnvelope  # 契约层包络（权威，已取代 E4 tool_contract）
 
-    s = success_envelope(None)  # 成功
-    e = error_envelope("protocol.x", "m")  # 错误
+    s = ResultEnvelope(ok=True, code="ok")  # 成功
+    e = ResultEnvelope(ok=False, code="protocol.x", message="m")  # 错误
     for ev in (s, e):  # 两者
+        data = ev.model_dump()  # 转字典
         for key in ("ok", "code", "message", "retryable", "retry_after_s", "data", "meta"):  # 必含键
-            assert key in ev  # 在
-    assert s["code"] == "ok" and e["code"] == "protocol.x"  # code 语义
+            assert key in data  # 在
+    assert s.code == "ok" and e.code == "protocol.x"  # code 语义
 
 
 # ---------- reconcile 反/边界 ----------

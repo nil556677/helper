@@ -18,7 +18,7 @@ from ._shared import (
     KnowledgeStats,
     RebuildOutcome,
 )
-from .export import export
+from .export import export, export_target
 from .lifecycle import delete, rebuild, revectorize, rollback_to_version
 from .queries import (
     PREVIEW_CHARS,
@@ -32,7 +32,6 @@ from .queries import (
     stats,
 )
 from .queue import (
-    enqueue_backfill_attrs,
     enqueue_import,
     enqueue_rebuild,
     enqueue_rebuild_many,
@@ -74,12 +73,12 @@ __all__ = [
     "document_preview",
     "documents",
     "documents_page",
-    "enqueue_backfill_attrs",
     "enqueue_import",
     "enqueue_rebuild",
     "enqueue_rebuild_many",
     "enqueue_reindex",
     "export",
+    "export_target",
     "inbox_target",
     "is_supported_format",
     "rebuild",

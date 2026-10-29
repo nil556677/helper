@@ -55,7 +55,6 @@ from app.core.chunk._shared import (
     TOKENS_PER_CHAR,
 )
 from app.core.chunk.core import Splitter, _semantic_runner
-from app.core.chunk.entry import split_blocks, to_json
 from app.core.chunk.estimate import (
     _REAL_COUNTERS,
     estimate_tokens,
@@ -95,7 +94,5 @@ __all__ = [
     "_trim",
     "estimate_tokens",
     "real_token_counter",
-    "split_blocks",
     "split_sentences",
-    "to_json",
 ]
