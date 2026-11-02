@@ -60,11 +60,10 @@ def _build_live(live_state: _LiveState, box: Any, scroll: Any = None) -> dict[st
     with box:  # 重建
         header = ui.row().classes("w-full items-center gap-2 no-wrap hp-process-row")  # 组头
         with header:  # 组头内容
-            ui.icon("travel_explore").classes("text-base hp-process-icon")  # 图标
             view["busy"] = ui.icon("autorenew").classes(  # 运行中：转圈，让用户知道没卡住
                 "text-base hp-process-icon animate-spin"
             )  # 转圈结束
-            view["headline"] = ui.label("已收到，正在处理…").classes("hp-process-title")  # 文案
+            view["headline"] = ui.label("正在思考中···").classes("hp-process-title")  # 文案
             view["meta"] = ui.label("").classes("hp-field-help")  # 右侧
             ui.space()  # 撑开
             view["chevron"] = ui.label("▸").classes("hp-field-help")  # 展开符号
