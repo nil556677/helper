@@ -26,7 +26,6 @@ from app.agent.context import RunCancelled, RunContext, run_context  # 上下文
 from app.agent.fsm.projection import project_event  # 节点完成 → 迁移事件
 from app.agent.fsm.states import RunEvent, RunState  # 状态
 from app.agent.middleware import default_chain  # 中间件
-from app.agent.persist import persist_turn  # 统一落库
 from app.core.trace import store as trace_store  # trace 写库
 from app.core.trace import writer as trace_writer  # trace 异步写
 from app.core.trace.recorder import trace_run  # trace 会话
@@ -56,16 +55,28 @@ def _mark_cancelled(ctx: RunContext) -> None:  # 收敛到取消终态
         ctx.transition(RunEvent.CANCEL_ACK)  # 进入 CANCELLED
 
 
-def _persist(ctx: RunContext, question: str, answer: str) -> None:  # 落库
-    """取消/失败也落一轮（与正常 finalize 共用同一套形状与原子写）。"""
-    persist_turn(  # 统一落库
-        ctx,  # 上下文
-        conversation_id=ctx.conversation_id,  # 会话
-        question=question,  # 问题
-        answer=answer,  # 已生成部分（可为空）
-        note=ctx.note,  # 说明
-        fragments=ctx.citations,  # 引用
-    )
+async def _persist(ctx: RunContext, question: str, answer: str) -> None:  # 落库（异步优先）
+    """取消/失败也落一轮；ctx 挂了 AsyncDB 就异步落库（单一异步写者），否则同步。"""
+    from app.agent.persist import persist_turn, persist_turn_async  # 落库
+
+    if getattr(ctx, "db", None) is not None:  # 有异步连接
+        await persist_turn_async(  # 异步
+            ctx,
+            conversation_id=ctx.conversation_id,
+            question=question,
+            answer=answer,
+            note=ctx.note,
+            fragments=ctx.citations,
+        )  # 结束
+    else:  # 同步回退
+        persist_turn(
+            ctx,
+            conversation_id=ctx.conversation_id,
+            question=question,
+            answer=answer,
+            note=ctx.note,
+            fragments=ctx.citations,
+        )  # 结束
 
 
 def _update_trace(ctx: RunContext, state: dict[str, Any]) -> None:  # 补 trace 摘要
@@ -206,13 +217,13 @@ async def drive(  # 驱动图
             except RunCancelled:  # 用户取消
                 session.set_status("cancelled")  # trace
                 _mark_cancelled(ctx)  # 收敛状态
-                _persist(ctx, question, ctx.partial_answer)  # 保存部分
+                await _persist(ctx, question, ctx.partial_answer)  # 保存部分
                 emit(events.cancelled("user"))  # 事件
                 status = "cancelled"  # 终态
             except asyncio.CancelledError:  # 任务被取消
                 session.set_status("cancelled")  # trace
                 _mark_cancelled(ctx)  # 收敛状态
-                _persist(ctx, question, ctx.partial_answer)  # 保存部分
+                await _persist(ctx, question, ctx.partial_answer)  # 保存部分
                 emit(events.cancelled("task"))  # 事件
                 status = "cancelled"  # 终态
             except GraphRecursionError as exc:  # 工具循环超限
@@ -221,7 +232,7 @@ async def drive(  # 驱动图
                 if ctx.machine.can(RunEvent.FAIL):  # 可迁移
                     ctx.transition(RunEvent.FAIL, reason="recursion_limit")  # 失败
                 emit(events.error("recursion_limit", "工具循环超过上限，已停止。", "run"))  # 事件
-                _persist(ctx, question, ctx.partial_answer)  # 保存部分
+                await _persist(ctx, question, ctx.partial_answer)  # 保存部分
                 status = "failed"  # 终态
                 error = exc  # 错误
             except Exception as exc:  # 其他失败
@@ -230,7 +241,7 @@ async def drive(  # 驱动图
                 if ctx.machine.can(RunEvent.FAIL):  # 可迁移
                     ctx.transition(RunEvent.FAIL, reason=str(exc)[:120])  # 失败
                 emit(events.error("run_failed", str(exc)[:300], "run"))  # 事件
-                _persist(ctx, question, ctx.partial_answer)  # 保存部分
+                await _persist(ctx, question, ctx.partial_answer)  # 保存部分
                 status = "failed"  # 终态
                 error = exc  # 错误
             finally:  # 中间件收尾
