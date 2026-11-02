@@ -298,13 +298,13 @@ def _elapsed_text(seconds: float) -> str:  # 中文时长（无空格/不补零�
 
 
 def _running_line(view: dict[str, Any]) -> str:  # 运行中的那行文案
-    """``努力求索中，用时X ···``；从发送（含检索阶段）起算。"""
+    """``正在思考中，用时X ···``；从发送（含检索阶段）起算。"""
     elapsed = time.perf_counter() - view["started_at"]  # 已用时
-    return f"努力求索中，用时{_elapsed_text(elapsed)} ···"  # 文案
+    return f"正在思考中，用时{_elapsed_text(elapsed)} ···"  # 文案
 
 
 def _refresh_header(view: dict[str, Any]) -> None:  # 更新组头
-    """运行中显示“努力求索中，用时X ···”，结束显示“已…”，并用转圈图标表示还活着。"""
+    """运行中显示“正在思考中，用时X ···”，结束显示“已…”，并用转圈图标表示还活着。"""
     if view["headline"] is None or not _alive(view):  # 没 UI
         if view.get("ticker") is not None:  # 有计时器也要停（防泄漏）
             with contextlib.suppress(Exception):  # 停表失败不阻断
@@ -332,6 +332,9 @@ def _refresh_header(view: dict[str, Any]) -> None:  # 更新组头
     else:  # 初始
         text = _running_line(view)  # 努力求索中，用时X ···
     terminal = view["run_state"] in ("done", "error", "cancelled")  # 是否已到终态
+    view["headline"].style(  # 运行中"文案+时间"用强调色，终态恢复默认
+        f"color: {'var(--hp-accent)' if not terminal else 'inherit'}"
+    )  # 样式结束
     if terminal and view.get("ticker") is not None:  # 到终态：停表
         with contextlib.suppress(Exception):  # 停表失败不阻断
             view["ticker"].cancel()  # 停止
