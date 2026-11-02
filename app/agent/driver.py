@@ -288,10 +288,14 @@ async def drive(  # 驱动图
             from app.core.trace.recorder import trace_run_async  # 异步会话
 
             async with trace_run_async(  # 异步 trace
-                ctx.db, question=question, conversation_id=ctx.conversation_id
+                ctx.db, question=question, conversation_id=ctx.conversation_id,
+                run_id=ctx.run_id or None,  # 复用发送即落库的 run_id
             ) as session:  # 会话
                 return await _body(session)  # 执行
-        with trace_run(question=question, conversation_id=ctx.conversation_id) as session:  # 同步 trace
+        with trace_run(  # 同步 trace
+            question=question, conversation_id=ctx.conversation_id,
+            run_id=ctx.run_id or None,  # 复用发送即落库的 run_id
+        ) as session:  # 会话
             return await _body(session)  # 执行
     except Exception as exc:  # 连 trace/链都起不来
         emit(events.error("bootstrap_failed", str(exc)[:300], "run"))  # 事件

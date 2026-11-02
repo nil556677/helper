@@ -222,9 +222,10 @@ def trace_run(
     conversation_id: str = "",
     parent_run_id: str | None = None,
     kind: str = "chat",
+    run_id: str | None = None,
 ):
-    """一轮运行的生命周期；异常时记 error 并重新抛出。"""
-    run_id = uuid.uuid4().hex
+    """一轮运行的生命周期；异常时记 error 并重新抛出。``run_id`` 传入则复用（与发送即落库对齐）。"""
+    run_id = run_id or uuid.uuid4().hex
     session = TraceSession(
         run_id=run_id,
         question=question,
@@ -261,12 +262,14 @@ async def trace_run_async(
     conversation_id: str = "",
     parent_run_id: str | None = None,
     kind: str = "chat",
+    run_id: str | None = None,
 ):
     """异步版 ``trace_run``：create/finish 走 AsyncDB（单一异步写者）。
 
     spans/hits/events 仍走同步 store（worker 单 loop 下顺序写，无争用）。
+    ``run_id`` 传入则复用（与发送即落库对齐）。
     """
-    run_id = uuid.uuid4().hex  # 运行 id
+    run_id = run_id or uuid.uuid4().hex  # 运行 id（外部优先）
     session = TraceSession(  # 会话
         run_id=run_id,
         question=question,
