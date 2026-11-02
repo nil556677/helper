@@ -111,7 +111,6 @@ def _render_process(turn: Turn) -> None:
         row.add_slot('header'),
         ui.row().classes('w-full items-center gap-2 no-wrap hp-process-row'),
     ):
-        ui.icon('travel_explore').classes('text-base')
         ui.label(title).classes('hp-process-title')
     with row:
         _render_process_body(process)
