@@ -133,12 +133,13 @@ def start_stream(  # 启动
     *,
     session: str = "",  # 会话
     attachments: list[dict[str, Any]] | None = None,  # 附件
+    run_id: str = "",  # 运行 id（路由先生成则复用，保证与发送即落库一致）
 ) -> StreamHandle:  # 句柄
     """立即返回句柄；后台任务开始跑。"""
     queue: asyncio.Queue = asyncio.Queue()  # 事件队列
     sink = _EventSink(queue)  # 事件出口：终态之后自动闭嘴
     ctx = RunContext(  # 上下文
-        run_id=uuid.uuid4().hex,  # 临时 id
+        run_id=run_id or uuid.uuid4().hex,  # 复用传入 id，否则生成
         question=question,  # 问题
         conversation_id=session or "default",  # 会话
         emit=sink,  # 事件出口

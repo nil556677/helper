@@ -16,3 +16,4 @@ class RunInput:  # 一次运行的入参
     question: str  # 问题
     conversation_id: str  # 会话 id
     attachments: list[dict[str, Any]] = field(default_factory=list)  # 附件元数据（含 path）
+    run_id: str = ""  # 运行 id（路由先生成，agent 复用；空则由 start_stream 生成）

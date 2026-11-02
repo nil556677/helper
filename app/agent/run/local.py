@@ -26,6 +26,7 @@ class LocalBackend:  # worker 内部后端
             run_input.question,  # 问题
             session=run_input.conversation_id,  # 会话
             attachments=list(run_input.attachments),  # 附件
+            run_id=run_input.run_id,  # 复用路由生成的 run_id（与发送即落库一致）
         )  # 返回句柄
         self._handles[handle.run_id] = handle  # 记录
         return handle.run_id  # run id
