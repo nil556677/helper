@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+import contextlib  # 停表容错
+import time  # 实时耗时
+from typing import Any  # 任意值
 
 from nicegui import ui
 
@@ -49,6 +51,8 @@ def _build_live(live_state: _LiveState, box: Any, scroll: Any = None) -> dict[st
         "run_state": "",  # 运行状态
         "total_ms": 0,  # 总耗时
         "ttft_ms": 0,  # 首字耗时
+        "started_at": time.perf_counter(),  # 本轮开始时刻（算实时耗时）
+        "ticker": None,  # 实时耗时的刷新计时器
     }  # 视图结束
     if box is None or box.is_deleted:  # 不在当前页
         return view  # 只收集数据
@@ -107,6 +111,7 @@ def _build_live(live_state: _LiveState, box: Any, scroll: Any = None) -> dict[st
                     duration_ms=view.get("total_ms"),  # 总耗时
                     ttft_ms=view.get("ttft_ms"),  # 首字耗时
                 )).props("flat dense no-caps").classes("hp-field-help")  # 弱化样式
+    view["ticker"] = ui.timer(0.5, lambda: _refresh_header(view))  # 每 0.5s 刷新"正在…耗时"
     live_state.views.append(view)  # 注册（本页自己管，不跨窗口）
     return view  # 返回
 
@@ -278,6 +283,10 @@ def _meta_text(view: dict[str, Any]) -> str:  # 组头右侧
 def _refresh_header(view: dict[str, Any]) -> None:  # 更新组头
     """运行中显示“正在查找资料”，结束显示“已…”，并用转圈图标表示还活着。"""
     if view["headline"] is None or not _alive(view):  # 没 UI
+        if view.get("ticker") is not None:  # 有计时器也要停（防泄漏）
+            with contextlib.suppress(Exception):  # 停表失败不阻断
+                view["ticker"].cancel()  # 停
+            view["ticker"] = None  # 置空
         return  # 跳过
     running = next((g for g in view["groups"].values() if g.get("status") == "running"), None)  # 运行中
     failed = any(g.get("status") == "failed" for g in view["groups"].values())  # 失败
@@ -299,6 +308,13 @@ def _refresh_header(view: dict[str, Any]) -> None:  # 更新组头
         text = "已完成"  # 文案
     else:  # 初始
         text = "已收到，正在处理…"  # 文案
+    terminal = view["run_state"] in ("done", "error", "cancelled")  # 是否已到终态
+    if not terminal:  # 还在跑：拼上实时耗时（DSH 风格）
+        text = f"{text} {time.perf_counter() - view['started_at']:.1f}s"  # 实时耗时
+    elif view.get("ticker") is not None:  # 到终态：停表
+        with contextlib.suppress(Exception):  # 停表失败不阻断
+            view["ticker"].cancel()  # 停止
+        view["ticker"] = None  # 置空
     view["headline"].text = text  # 写
     view["meta"].text = _meta_text(view)  # 右侧
     view["headline"].update()  # 刷新
