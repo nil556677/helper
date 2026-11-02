@@ -193,13 +193,9 @@ def gate_hits(  # 判决
             hard_missing=[], soft_missing=soft_missing,  # 缺项
             count=len(kept), reasons=["qa_low"], ms=_ms(started),  # 原因
         )  # 结束
-    if len(kept) < need:  # 条数不够
-        return GateDecision(  # 拒绝
-            REJECT, kept=kept, top1=top1, top3_max=top3_max, qa=qa,  # 关键字段
-            hard_missing=[], soft_missing=soft_missing,  # 缺项
-            count=len(kept), reasons=["too_few"], ms=_ms(started),  # 原因
-        )  # 结束
     weak_reasons: list[str] = []  # 只影响"降级为 WEAK"的信号
+    if len(kept) < need:  # 条数少：只降级为 WEAK，不拒答（拒答只看无证据/低分）
+        weak_reasons.append("too_few")  # 证据条数少 → 提示对照原文
     if soft_missing:  # 金额没命中（可能是中文数字）
         weak_reasons.append("amount_missing")  # 降级原因
     if qa is not None and qa < QA_WEAK:  # 方向性偏弱
