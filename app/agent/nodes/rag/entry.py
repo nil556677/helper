@@ -95,10 +95,18 @@ def make_rag_node(runner: RagRunner):  # 工厂
                 result = _better(result, other)  # 取更好的一路
         gate = dict(result.gate or {})  # 门限判决（新老路径都要算）
         decision = str(gate.get("decision") or "")  # pass / weak / reject
+        reasons = set(gate.get("reasons") or [])  # 门限原因集合
         has_files = any(  # 附件可读（按 disk 现读）
             attachments.load_text(item).strip() for item in (state.get("attachments") or [])  # 逐个判可读
         )  # 附件判断结束
-        answerable = has_files or (decision != "reject" and bool(result.evidence))  # 可答的唯一判断（FSM 与边路由共用）
+        # 放开"证据太少"门限：只要检索到片段（too_few 但 evidence 非空）就尝试回答，
+        # 不再因"只 1 条"直接拒答；完全没证据 / 答非所问（kept 已清空）仍拒。
+        too_few_relaxed = "too_few" in reasons and bool(result.evidence)  # 证据少但可答
+        answerable = (  # 可答的唯一判断（FSM 与边路由共用）
+            has_files  # 有可读附件
+            or (decision != "reject" and bool(result.evidence))  # 正常通过/偏弱
+            or too_few_relaxed  # 放开：证据少但有片段
+        )  # 判断结束
         route = RouteDecision(  # 唯一决策对象：迁移与边路由都读它
             next=DecisionTarget.ANSWER if answerable else DecisionTarget.FINALIZE,  # 下一步
             confidence=None,  # 规则判断不表信心
@@ -124,7 +132,9 @@ def make_rag_node(runner: RagRunner):  # 工厂
             ctx.gate = gate  # 记录（落库/轨迹用）
             ctx.emit(basis_event(basis["keywords"], basis["hit_counts"], basis["sources"]))  # 事件
             if answerable:  # 有可用证据或可读附件
-                if decision == "weak" and not has_files:  # 证据偏弱
+                if too_few_relaxed:  # 放开证据少：提示对照原文
+                    ctx.note = "证据较少：以下回答请对照引用原文核对。"  # 提示
+                elif decision == "weak" and not has_files:  # 证据偏弱
                     ctx.note = "证据较弱：以下回答请对照引用原文核对。"  # 提示
             else:  # 不可答
                 ctx.note = _reject_note(gate) if decision == "reject" else "没有在本地资料里找到相关内容，换个说法试试。"  # 说明
