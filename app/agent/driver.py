@@ -104,6 +104,34 @@ def _update_trace(ctx: RunContext, state: dict[str, Any]) -> None:  # 补 trace 
         )  # 写结束
 
 
+async def _update_trace_async(ctx: RunContext, state: dict[str, Any]) -> None:  # 补 trace（异步）
+    """与 ``_update_trace`` 同内容，经 ``ctx.db`` 异步写（单一异步写者）。"""
+    with contextlib.suppress(Exception):  # trace 失败不影响
+        usage = dict(state.get("usage") or ctx.usage)  # 用量
+        gate = dict(state.get("gate") or ctx.gate)  # 门限
+        basis = dict(state.get("basis") or ctx.basis)  # 依据
+        status = str(state.get("status") or ctx.machine.state.value)  # 终态
+        metadata = {  # 元数据
+            "turn_id": str(state.get("turn_id") or ctx.turn_id),  # 轮次 id
+            "status": status,  # 状态
+            "attempt": int(state.get("attempt") or ctx.attempt),  # 尝试
+            "usage": usage,  # 用量
+            "gate": gate,  # 门限
+            "basis": basis,  # 依据
+        }  # 结束
+        from app.core.trace import store as _store  # 异步写
+
+        await _store.update_run_async(  # 异步写
+            ctx.db,  # 异步连接
+            ctx.run_id,  # run
+            route_json='{"mode": "rag"}',  # 固定 RAG
+            answer=str(state.get("answer") or ctx.partial_answer),  # 已生成
+            model="llm",  # 模型槽位
+            ttft_ms=ctx.first_token_ms or 0,  # 首 token
+            metadata_json=json.dumps(metadata, ensure_ascii=False),  # 元数据
+        )  # 写结束
+
+
 def _seal_state(ctx: RunContext, state: dict[str, Any], status: str) -> None:  # 封业务字段进 state
     """把 ctx 里还没进 state 的业务字段补进最终 state（E3：state 为最终快照）。
 
@@ -187,68 +215,84 @@ async def drive(  # 驱动图
     initial_state: dict[str, Any],  # 初始状态
     emit: Any | None = None,  # 事件出口（默认用 ctx.emit）
 ) -> DriverResult:  # 结果
-    """驱动图跑到终态；任何路径都收敛、落部分、发终态。"""
+    """驱动图跑到终态；ctx.db 存在则 trace 走 async（单一异步写者），否则同步。"""
     emit = emit if emit is not None else ctx.emit  # 事件出口
     question = ctx.question  # 问题
     state: dict[str, Any] = {}  # 图最终状态
     status = "failed"  # 终态，先按失败
     error: BaseException | None = None  # 可选错误
+
+    async def _body(session: Any) -> DriverResult:  # 执行体（sync/async trace 共用）
+        nonlocal state, status, error  # 改外层
+        ctx.run_id = session.run_id  # 对齐 id
+        _sink_run_id(emit, ctx.run_id)  # 回填事件出口
+        emit(events.ack(ctx.run_id))  # 先回执
+        if ctx.cancel_event.is_set():  # 启动前就取消
+            session.set_status("cancelled")  # trace
+            emit(events.cancelled("user"))  # 事件
+            return DriverResult({}, "cancelled")  # 短路
+        try:  # 图执行
+            ctx.transition(RunEvent.START)  # 进入上下文
+            await _CHAIN.before_run(ctx)  # 中间件（如取消边界）
+            with run_context(ctx):  # 绑定当前 run
+                state = await _run_graph(  # 跑父图 + 驱动状态机
+                    graph,  # 编译父图
+                    initial_state,  # 初始状态
+                    ctx,  # 上下文（投影用）
+                    emit,  # 事件出口（driver 收权后发 state/done）
+                )  # 图结束
+            status = "done"  # 正常结束
+            _seal_state(ctx, state, status)  # 封业务字段进最终 state
+        except RunCancelled:  # 用户取消
+            session.set_status("cancelled")  # trace
+            _mark_cancelled(ctx)  # 收敛状态
+            await _persist(ctx, question, ctx.partial_answer)  # 保存部分
+            emit(events.cancelled("user"))  # 事件
+            status = "cancelled"  # 终态
+        except asyncio.CancelledError:  # 任务被取消
+            session.set_status("cancelled")  # trace
+            _mark_cancelled(ctx)  # 收敛状态
+            await _persist(ctx, question, ctx.partial_answer)  # 保存部分
+            emit(events.cancelled("task"))  # 事件
+            status = "cancelled"  # 终态
+        except GraphRecursionError as exc:  # 工具循环超限
+            logger.opt(exception=exc).warning("run 递归超限（recursion_limit={}）", RECURSION_LIMIT)  # 记堆栈
+            session.set_status("error")  # trace
+            if ctx.machine.can(RunEvent.FAIL):  # 可迁移
+                ctx.transition(RunEvent.FAIL, reason="recursion_limit")  # 失败
+            emit(events.error("recursion_limit", "工具循环超过上限，已停止。", "run"))  # 事件
+            await _persist(ctx, question, ctx.partial_answer)  # 保存部分
+            status = "failed"  # 终态
+            error = exc  # 错误
+        except Exception as exc:  # 其他失败
+            logger.opt(exception=exc).error("run 执行失败：{}", type(exc).__name__)  # 记堆栈
+            session.set_status("error")  # trace
+            if ctx.machine.can(RunEvent.FAIL):  # 可迁移
+                ctx.transition(RunEvent.FAIL, reason=str(exc)[:120])  # 失败
+            emit(events.error("run_failed", str(exc)[:300], "run"))  # 事件
+            await _persist(ctx, question, ctx.partial_answer)  # 保存部分
+            status = "failed"  # 终态
+            error = exc  # 错误
+        finally:  # 中间件收尾
+            with contextlib.suppress(Exception):  # 收尾失败不阻断
+                await _CHAIN.after_run(ctx)  # 逆序
+            if getattr(ctx, "db", None) is not None:  # 有异步连接
+                await _update_trace_async(ctx, state)  # 异步补 trace
+            else:  # 同步
+                _update_trace(ctx, state)  # 同步补 trace
+            await trace_writer.flush()  # 排空异步 span
+        return DriverResult(state=state, status=status, error=error)  # 返回
+
     try:  # 外层兜底（连 trace 都起不来）
-        with trace_run(question=question, conversation_id=ctx.conversation_id) as session:  # trace
-            ctx.run_id = session.run_id  # 对齐 id
-            _sink_run_id(emit, ctx.run_id)  # 回填事件出口
-            emit(events.ack(ctx.run_id))  # 先回执
-            if ctx.cancel_event.is_set():  # 启动前就取消
-                session.set_status("cancelled")  # trace
-                emit(events.cancelled("user"))  # 事件
-                return DriverResult({}, "cancelled")  # 短路
-            try:  # 图执行
-                ctx.transition(RunEvent.START)  # 进入上下文
-                await _CHAIN.before_run(ctx)  # 中间件（如取消边界）
-                with run_context(ctx):  # 绑定当前 run
-                    state = await _run_graph(  # 跑父图 + 驱动状态机
-                        graph,  # 编译父图
-                        initial_state,  # 初始状态
-                        ctx,  # 上下文（投影用）
-                        emit,  # 事件出口（driver 收权后发 state/done）
-                    )  # 图结束
-                status = "done"  # 正常结束
-                _seal_state(ctx, state, status)  # 封业务字段进最终 state
-            except RunCancelled:  # 用户取消
-                session.set_status("cancelled")  # trace
-                _mark_cancelled(ctx)  # 收敛状态
-                await _persist(ctx, question, ctx.partial_answer)  # 保存部分
-                emit(events.cancelled("user"))  # 事件
-                status = "cancelled"  # 终态
-            except asyncio.CancelledError:  # 任务被取消
-                session.set_status("cancelled")  # trace
-                _mark_cancelled(ctx)  # 收敛状态
-                await _persist(ctx, question, ctx.partial_answer)  # 保存部分
-                emit(events.cancelled("task"))  # 事件
-                status = "cancelled"  # 终态
-            except GraphRecursionError as exc:  # 工具循环超限
-                logger.opt(exception=exc).warning("run 递归超限（recursion_limit={}）", RECURSION_LIMIT)  # 记堆栈
-                session.set_status("error")  # trace
-                if ctx.machine.can(RunEvent.FAIL):  # 可迁移
-                    ctx.transition(RunEvent.FAIL, reason="recursion_limit")  # 失败
-                emit(events.error("recursion_limit", "工具循环超过上限，已停止。", "run"))  # 事件
-                await _persist(ctx, question, ctx.partial_answer)  # 保存部分
-                status = "failed"  # 终态
-                error = exc  # 错误
-            except Exception as exc:  # 其他失败
-                logger.opt(exception=exc).error("run 执行失败：{}", type(exc).__name__)  # 记堆栈（排障关键）
-                session.set_status("error")  # trace
-                if ctx.machine.can(RunEvent.FAIL):  # 可迁移
-                    ctx.transition(RunEvent.FAIL, reason=str(exc)[:120])  # 失败
-                emit(events.error("run_failed", str(exc)[:300], "run"))  # 事件
-                await _persist(ctx, question, ctx.partial_answer)  # 保存部分
-                status = "failed"  # 终态
-                error = exc  # 错误
-            finally:  # 中间件收尾
-                with contextlib.suppress(Exception):  # 收尾失败不阻断
-                    await _CHAIN.after_run(ctx)  # 逆序
-                _update_trace(ctx, state)  # 补 trace（读最终 state）
-                await trace_writer.flush()  # 排空异步 span，保证 run 收尾前落库
+        if getattr(ctx, "db", None) is not None:  # 有异步连接 → 异步 trace
+            from app.core.trace.recorder import trace_run_async  # 异步会话
+
+            async with trace_run_async(  # 异步 trace
+                ctx.db, question=question, conversation_id=ctx.conversation_id
+            ) as session:  # 会话
+                return await _body(session)  # 执行
+        with trace_run(question=question, conversation_id=ctx.conversation_id) as session:  # 同步 trace
+            return await _body(session)  # 执行
     except Exception as exc:  # 连 trace/链都起不来
         emit(events.error("bootstrap_failed", str(exc)[:300], "run"))  # 事件
         error = exc  # 记录

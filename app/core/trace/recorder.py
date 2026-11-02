@@ -45,6 +45,15 @@ def _silent(what: str, fn: Any, *args: Any, **kwargs: Any) -> Any:
         return None
 
 
+async def _silent_async(what: str, fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """异步版 fail-open：await 写库失败只记日志。"""
+    try:
+        return await fn(*args, **kwargs)
+    except Exception as exc:
+        logger.opt(exception=exc).warning("trace 写入失败（{}）", what)
+        return None
+
+
 @dataclass
 class _SpanHandle:
     session: TraceSession
@@ -180,6 +189,31 @@ class TraceSession:
             error_detail=str(error) if error else "",
         )
 
+    async def finish_async(self, db: Any, *, status: str | None = None, error: BaseException | None = None) -> None:
+        """异步收尾（经 AsyncDB 单一异步写者）；与同步 finish 同状态规则。"""
+        if self._finished:  # 幂等
+            return  # 已收
+        self._finished = True  # 标记
+        if error is not None:  # 异常
+            final = "error"  # 失败
+        elif status is not None:  # 显式
+            final = status  # 用之
+        elif self._status == "running":  # 正常跑完
+            final = "ok"  # 成功
+        else:  # 显式状态保持
+            final = self._status  # 用之
+        from app.core.trace import store as _store  # 异步写
+
+        await _silent_async(  # 异步写（fail-open）
+            "finish_run",
+            _store.finish_run_async,
+            db,
+            self.run_id,
+            status=final,
+            error_kind=getattr(error, "__class__", type(error)).__name__ if error else "",
+            error_detail=str(error) if error else "",
+        )  # 结束
+
 
 @contextlib.contextmanager
 def trace_run(
@@ -217,6 +251,51 @@ def trace_run(
         session.finish()
     finally:
         _CURRENT.reset(token)
+
+
+@contextlib.asynccontextmanager
+async def trace_run_async(
+    db: Any,
+    *,
+    question: str,
+    conversation_id: str = "",
+    parent_run_id: str | None = None,
+    kind: str = "chat",
+):
+    """异步版 ``trace_run``：create/finish 走 AsyncDB（单一异步写者）。
+
+    spans/hits/events 仍走同步 store（worker 单 loop 下顺序写，无争用）。
+    """
+    run_id = uuid.uuid4().hex  # 运行 id
+    session = TraceSession(  # 会话
+        run_id=run_id,
+        question=question,
+        conversation_id=conversation_id,
+        parent_run_id=parent_run_id,
+        kind=kind,
+    )  # 结束
+    from app.core.trace import store as _store  # 异步写
+
+    await _silent_async(  # 异步建 run
+        "create_run",
+        _store.create_run_async,
+        db,
+        run_id,
+        question=question,
+        conversation_id=conversation_id,
+        parent_run_id=parent_run_id,
+        kind=kind,
+    )  # 结束
+    token = _CURRENT.set(session)  # 绑定当前会话
+    try:  # 交给调用方
+        yield session  # 返回会话
+    except BaseException as exc:  # 异常
+        await session.finish_async(db, error=exc)  # 异步收尾
+        raise  # 重抛
+    else:  # 正常
+        await session.finish_async(db)  # 异步收尾
+    finally:  # 恢复
+        _CURRENT.reset(token)  # 重置
 
 
 @contextlib.contextmanager

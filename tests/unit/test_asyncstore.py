@@ -111,3 +111,26 @@ async def test_async_append_turn_and_dedup(_db) -> None:  # 异步写轮次 + �
         "SELECT role FROM messages WHERE conversation_id='c1' ORDER BY id"  # 条件
     ).fetchall()  # 行
     assert [r["role"] for r in c1] == ["user", "assistant"]  # 整轮
+
+
+async def test_trace_run_async_cm(_db) -> None:  # 异步 trace 会话
+    """trace_run_async 用 AsyncDB 建/收 trace_runs，正常结束标 ok。"""
+    from app.core import paths  # 数据目录
+    from app.core.db.aio import AsyncDB  # 异步连接
+    from app.core.db.connection import get_connection  # 同步读回
+    from app.core.trace.recorder import trace_run_async  # 异步会话
+
+    db = AsyncDB(paths.db_file())  # 建
+    await db.connect()  # 连接
+    try:  # 用后关
+        async with trace_run_async(db, question="问题", conversation_id="c1") as session:  # 会话
+            assert session.run_id  # 有 id
+        run_id = session.run_id  # 记
+    finally:  # 收尾
+        await db.close()  # 关连接
+    row = get_connection().execute(  # 同步读回
+        "SELECT status, question FROM trace_runs WHERE id = ?", (run_id,)  # 条件
+    ).fetchone()  # 行
+    assert row is not None  # 存在
+    assert row["status"] == "ok"  # 正常结束
+    assert row["question"] == "问题"  # 问题
