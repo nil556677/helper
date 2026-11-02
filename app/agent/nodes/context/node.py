@@ -34,12 +34,22 @@ async def load_context(state: dict[str, Any], config: RunnableConfig) -> dict[st
     ctx = ctx_from_config(config)  # 上下文
     conversation_id = str(state.get("conversation_id") or "")  # 会话 id
     with stage("准备对话", group=StageGroup.PREPARE):  # 步骤
+        # 单异步写者：ctx 挂了 AsyncDB 就用异步读（aiosqlite）；否则同步回退。
+        store = None  # 异步仓储
+        if ctx is not None and ctx.db is not None:  # 有异步连接
+            from app.core.db.asyncstore import ConversationAsyncStore  # 异步仓储
+
+            store = ConversationAsyncStore(ctx.db)  # 建
         snapshot: dict[str, Any] = {"summary": "", "until_message_id": 0}  # 默认投影头
         rows: list[dict[str, Any]] = []  # 原始行
         if conversation_id:  # 有会话
             try:  # 库异常不阻断
-                snapshot = conversations.load_summary(conversation_id)  # 读摘要投影头
-                rows = conversations.load_messages(conversation_id)  # 读全部消息
+                if store is not None:  # 异步
+                    snapshot = await store.load_summary(conversation_id)  # 读摘要投影头
+                    rows = await store.load_messages(conversation_id)  # 读全部消息
+                else:  # 同步
+                    snapshot = conversations.load_summary(conversation_id)  # 读摘要投影头
+                    rows = conversations.load_messages(conversation_id)  # 读全部消息
             except Exception:  # 读失败
                 snapshot = {"summary": "", "until_message_id": 0}  # 复位
                 rows = []  # 空历史

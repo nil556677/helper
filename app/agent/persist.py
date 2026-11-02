@@ -111,3 +111,55 @@ def persist_turn(  # 写一轮
     except Exception as exc:  # 写失败
         logger.opt(exception=exc).warning("会话落库失败（{}）", conversation)  # 告警，不阻断
         return False  # 失败
+
+
+async def persist_turn_async(  # 异步落库（单一异步写者）
+    ctx: Any,  # RunContext
+    *,
+    conversation_id: str,  # 会话
+    question: str,  # 问题
+    answer: str,  # 答案
+    note: str = "",  # 说明
+    note_kind: str = "plain",  # 样式
+    fragments: list[dict[str, Any]] | None = None,  # 引用
+) -> bool:  # 是否写成功
+    """经 ``ctx.db``（AsyncDB）异步落库；ctx.db 为空则回退同步 ``persist_turn``。"""
+    from app.core.db.asyncstore import ConversationAsyncStore  # 异步仓储
+
+    if ctx is None or ctx.db is None:  # 没有异步连接
+        return persist_turn(  # 回退同步
+            ctx, conversation_id=conversation_id, question=question, answer=answer,
+            note=note, note_kind=note_kind, fragments=fragments,
+        )  # 回退结束
+    if ctx.persisted:  # 幂等
+        return True  # 已落
+    conversation = conversation_id or "default"  # 会话兜底
+    title = question[:18] if question else conversations.DEFAULT_TITLE  # 标题
+    steps = grouped(list(ctx.steps))  # 步骤
+    payload = build_turn_json(  # 统一形状
+        answer=answer, note=note, note_kind=note_kind, fragments=fragments or [], steps=steps,
+        basis=dict(ctx.basis), settings=dict(ctx.settings), usage=dict(ctx.usage),
+        reasoning=ctx.reasoning, conflict=ctx.conflict,
+        context_usage=(ctx.context_usage.to_dict() if ctx.context_usage is not None else {}),
+        attachments=[attachment_service.public(item) for item in ctx.attachments],
+    )  # 形状结束
+    store = ConversationAsyncStore(ctx.db)  # 异步仓储
+    try:  # 写失败只告警
+        linked = None  # 预写 user
+        if ctx.run_id:  # 有 run
+            linked = await store.pending_user_by_run(conversation, ctx.run_id)  # 查预写
+        if linked is not None:  # 已预写
+            user_id, _assistant_id = await store.append_turn_existing_user(  # 只补 assistant
+                conversation, turn_id=str(linked["turn_id"]), answer=answer,
+                title=title, turn_json=payload,
+            )  # 写
+        else:  # 未预写
+            user_id, _assistant_id = await store.append_turn(  # 整轮
+                conversation, question=question, answer=answer, title=title, turn_json=payload,
+            )  # 写
+        ctx.turn_id = str(user_id)  # 轮次 id
+        ctx.persisted = True  # 标记
+        return True  # 成功
+    except Exception as exc:  # 写失败
+        logger.opt(exception=exc).warning("会话落库失败（异步 {}）", conversation)  # 告警
+        return False  # 失败

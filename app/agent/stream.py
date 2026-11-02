@@ -89,9 +89,21 @@ def _graph() -> Any:  # 取父图
 
 
 async def _run(handle: StreamHandle) -> None:  # 后台执行
-    """委托驱动器跑图，事件进队列；任何失败都保证 sentinel。"""
+    """委托驱动器跑图，事件进队列；任何失败都保证 sentinel。
+
+    为**本轮**开一条 AsyncDB 挂到 ctx.db（单一异步写者），随 run 关；供
+    load_context 读历史/摘要、persist/trace 写入。仅在真实 worker 单 loop 下验证。
+    """
     ctx = handle.ctx  # 上下文
     handle.started = True  # 标记任务已开始（cancel 才能 cancel 任务）
+    owned_db = None  # 本轮开的连接
+    if ctx.db is None:  # 没有挂连接
+        from app.core import paths  # 数据目录
+        from app.core.db.aio import AsyncDB  # 异步连接
+
+        owned_db = AsyncDB(paths.db_file())  # 建（按 run）
+        await owned_db.connect()  # 连接（绑定当前 loop）
+        ctx.db = owned_db  # 挂到上下文供节点用
     try:  # 委托驱动器
         initial = {  # 初始状态
             "question": ctx.question,  # 问题
@@ -102,6 +114,12 @@ async def _run(handle: StreamHandle) -> None:  # 后台执行
         await drive(_graph(), ctx, initial_state=initial, emit=ctx.emit)  # 驱动
         handle.run_id = ctx.run_id  # 句柄同步真实 run id
     finally:  # 一定结束队列
+        if owned_db is not None:  # 本轮开的
+            import contextlib  # 抑制
+
+            with contextlib.suppress(Exception):  # 关失败不影响收尾
+                await owned_db.close()  # 关
+            ctx.db = None  # 摘掉
         handle.events.put_nowait(SENTINEL)  # 结束标记
 
 
