@@ -15,8 +15,7 @@ from typing import Any
 from loguru import logger
 
 from app.agent.events import error as event_error
-from app.agent.run_client import RunInput
-from app.agent.run_session import RunSession, get_run_client
+from app.agent.run import RunInput, RunSession, get_run_client
 from app.ui.components.dialog import notify
 from app.ui.screens.chat.events import _apply_live_event, _turn_from_live
 from app.ui.screens.chat.live import _build_live, _refresh_header
@@ -67,8 +66,8 @@ async def execute(refs: StreamRefs, item: QueuedMessage) -> None:  # 执行一�
         _schedule_scroll(refs.scroll)  # 兜底：JS 没装上时也滚一次
         _set_follow(True)  # 提交输入 → 恢复贴底跟随（DSH 的做法）
         try:  # 启动失败不要留下空等待
-            handle = await RunSession.create(  # 经 RunClient 启动（worker/本进程）
-                get_run_client(),  # 进程级客户端
+            handle = await RunSession.create(  # 经 RunClient 启动（只走 worker）
+                get_run_client(),  # 进程级客户端（只走 worker 的 HTTP+SSE）
                 RunInput(  # 入参
                     question=text,  # 问题
                     conversation_id=conversation_id,  # 会话

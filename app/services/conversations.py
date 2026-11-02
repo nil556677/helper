@@ -121,6 +121,61 @@ def append_turn(
         return int(user_cursor.lastrowid), int(assistant_cursor.lastrowid)  # 两个消息 id
 
 
+def pending_user_by_run(conversation_id: str, run_id: str) -> dict[str, Any] | None:
+    """按 run_id 找发送时预写的「进行中」user 消息（供 finalize 追加 assistant）。"""
+    row = get_connection().execute(
+        "SELECT id, turn_id FROM messages"
+        " WHERE conversation_id = ? AND run_id = ? AND role = 'user'"
+        " ORDER BY id LIMIT 1",
+        (conversation_id, run_id),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def append_turn_existing_user(
+    conversation_id: str,
+    *,
+    turn_id: str,
+    answer: str,
+    title: str = DEFAULT_TITLE,
+    turn_json: dict[str, Any] | None = None,
+) -> tuple[int, int]:
+    """发送即落库时：user 已预写，只补 assistant 并把 user 标成完成。
+
+    返回：``(user_id, assistant_id)``。同样原子写（在一个事务里）。
+    """
+    ensure_conversation(conversation_id, title=title)  # 保证会话存在
+    stamp = time.time()  # 时间戳
+    payload = json.dumps(turn_json, ensure_ascii=False) if turn_json else None  # 序列化
+    with transaction() as conn:  # 单事务
+        seq = int(  # 起始序号
+            conn.execute(
+                "SELECT COALESCE(MAX(seq), -1) + 1 AS seq FROM messages WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()["seq"]
+        )
+        assistant_cursor = conn.execute(  # 助手消息
+            "INSERT INTO messages(conversation_id, seq, role, channel, turn_id, content, turn_json, run_id, created_at)"
+            " VALUES (?, ?, 'assistant', 'chat', ?, ?, ?,"
+            " (SELECT run_id FROM messages WHERE id = ?), ?)",
+            (conversation_id, seq, turn_id, answer, payload, int(turn_id), stamp),
+        )
+        conn.execute(  # 把预写的 user 消息标完成
+            "UPDATE messages SET status = 'ok' WHERE conversation_id = ? AND role = 'user' AND turn_id = ?",
+            (conversation_id, turn_id),
+        )
+        conn.execute(  # 会话标题/更新时间
+            "UPDATE conversations SET updated_at = ?, title = CASE WHEN title = ? THEN ? ELSE title END"
+            " WHERE id = ?",
+            (stamp, DEFAULT_TITLE, title, conversation_id),
+        )
+        conn.execute(  # 轮次幂等标记（同一事务）
+            "INSERT OR IGNORE INTO turn_commits(conversation_id, turn_id, created_at) VALUES (?, ?, ?)",
+            (conversation_id, turn_id, stamp),
+        )
+        return int(turn_id), int(assistant_cursor.lastrowid)  # 两个消息 id
+
+
 def list_conversations() -> list[dict[str, Any]]:
     rows = get_connection().execute(
         "SELECT id, title, created_at, updated_at FROM conversations"

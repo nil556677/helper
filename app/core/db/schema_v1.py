@@ -158,6 +158,7 @@ CREATE TABLE IF NOT EXISTS messages (
     role            TEXT    NOT NULL,                   -- 角色（user 用户 / assistant 助手）
     channel         TEXT    NOT NULL DEFAULT 'chat',    -- 轨迹类别（chat 对话消息 / tool 工具轨迹消息）
     turn_id         TEXT,                               -- 逻辑轮次 id（= 该轮 user 消息 id；整轮配对/幂等/按轮加载）
+    run_id          TEXT,                               -- 运行 id（发送即落库时，user 消息标记进行中 run；finalize 补 assistant）
     tool_call_id    TEXT,                               -- 工具结果消息对应哪次调用（trajectory 轨迹）
     name            TEXT,                               -- 工具名（tool 消息）
     status          TEXT    NOT NULL DEFAULT 'ok',      -- 轨迹消息状态（ok 成功 / error 失败）
@@ -419,6 +420,7 @@ def _ensure_messages_columns(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
     additions = {
         "turn_id": "TEXT",
+        "run_id": "TEXT",
         "channel": "TEXT NOT NULL DEFAULT 'chat'",
         "tool_call_id": "TEXT",
         "name": "TEXT",
@@ -431,6 +433,8 @@ def _ensure_messages_columns(conn: sqlite3.Connection) -> None:
     conn.executescript(  # 幂等索引
         "CREATE INDEX IF NOT EXISTS idx_messages_turn"
         " ON messages(conversation_id, turn_id);"
+        "CREATE INDEX IF NOT EXISTS idx_messages_run"
+        " ON messages(conversation_id, run_id);"
         "CREATE INDEX IF NOT EXISTS idx_messages_channel"
         " ON messages(conversation_id, channel);"
     )

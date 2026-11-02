@@ -20,16 +20,16 @@ import time
 def _serve_run_rpc() -> None:  # 启动对话 RPC 服务（E0.2）
     """在守护线程跑 uvicorn，监听 127.0.0.1 动态端口，端口写给 data/worker.port。
 
-    后端是本进程的 ``InProcessClient``（真实业务）；UI 用 ``HttpClient`` 经此调用。
+    后端是本进程的 ``LocalBackend``（真实业务，唯一的图执行实现）；UI 用 ``HttpClient`` 经此调用。
     """
     try:  # 失败只告警，不让 worker 因它崩
-        from app.agent.run_client import InProcessClient
-        from app.agent.run_server import serve_in_thread
+        from app.agent.run import LocalBackend
         from app.agent.worker_cp import setup_loop
         from app.core import paths
+        from app.http.server import serve_in_thread
 
         _server, _port = serve_in_thread(  # 起服务
-            InProcessClient(),  # 本进程后端
+            LocalBackend(),  # 本进程后端
             port_file=str(paths.data_dir() / "worker.port"),  # 端口文件
             startup=setup_loop,  # 服务 loop 里建 checkpointed 图 + 对账（E2/E5）
         )  # 服务结束

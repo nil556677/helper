@@ -13,7 +13,7 @@ from app.agent import (
     checkpoint,  # 检查点
     reconcile,  # 对账
 )
-from app.agent.run_session import RunSession  # 运行会话
+from app.agent.run import RunSession  # 运行会话
 from app.agent.state import merge_steps  # reducer
 from app.core.db import schema_v1  # 建表
 from app.core.db.connection import connect, get_connection  # 连接

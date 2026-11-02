@@ -84,13 +84,26 @@ def persist_turn(  # 写一轮
         attachments=[attachment_service.public(item) for item in (ctx.attachments if ctx is not None else [])],  # 附件
     )  # 形状结束
     try:  # 写失败只告警
-        user_id, _assistant_id = conversations.append_turn(  # 原子写一整轮
-            conversation,  # 会话
-            question=question,  # 问题
-            answer=answer,  # 答案
-            title=title,  # 标题
-            turn_json=payload,  # 形状
-        )
+        # 发送即落库：HTTP POST 已预写 user 消息（带 run_id）时，这里只补 assistant、不重复插 user。
+        linked = None  # 命中的预写 user
+        if ctx is not None and ctx.run_id:  # 有 run 上下文
+            linked = conversations.pending_user_by_run(conversation, ctx.run_id)  # 查预写
+        if linked is not None:  # 已预写
+            user_id, _assistant_id = conversations.append_turn_existing_user(  # 只补 assistant
+                conversation,  # 会话
+                turn_id=str(linked["turn_id"]),  # 轮次 id（= 预写 user id）
+                answer=answer,  # 答案
+                title=title,  # 标题
+                turn_json=payload,  # 形状
+            )  # 写
+        else:  # 未预写 → 原子写一整轮（非 HTTP 路径 / 测试）
+            user_id, _assistant_id = conversations.append_turn(  # 原子写一整轮
+                conversation,  # 会话
+                question=question,  # 问题
+                answer=answer,  # 答案
+                title=title,  # 标题
+                turn_json=payload,  # 形状
+            )  # 写
         if ctx is not None:  # 有上下文
             ctx.turn_id = str(user_id)  # 逻辑轮次 id = user 消息 id
             ctx.persisted = True  # 标记

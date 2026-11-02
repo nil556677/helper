@@ -10,8 +10,9 @@ from __future__ import annotations
 import json
 import time
 
-from app.core.db.connection import get_connection, transaction
-from app.core.trace.model import TraceDetail, TraceEvent, TraceHit, TraceRun, TraceSpan
+from app.core.db.aio import AsyncDB  # 异步连接（全库单异步写者方案）
+from app.core.db.connection import get_connection, transaction  # 同步连接
+from app.core.trace.model import TraceDetail, TraceEvent, TraceHit, TraceRun, TraceSpan  # 模型
 
 #: 单字段 JSON 截断长度（后台展示够用，又不会把库撑爆）。
 _JSON_CAP = 8000
@@ -130,6 +131,100 @@ def finish_run(
                 run_id,
             ),
         )
+
+
+async def create_run_async(  # 异步建 run（全库单异步写者用）
+    db: AsyncDB,  # 异步连接
+    run_id: str,  # run id
+    *,  # 仅关键字
+    question: str,  # 问题
+    conversation_id: str = "",  # 会话
+    parent_run_id: str | None = None,  # 父 run
+    kind: str = "chat",  # 类型
+    started_at: float | None = None,  # 开始时间
+    metadata: dict | None = None,  # 元数据
+) -> None:  # 无返回
+    """与同步 ``create_run`` 同 SQL；事务用 db.write_lock + BEGIN IMMEDIATE。"""
+    stamp = time.time() if started_at is None else started_at  # 时间戳
+    async with db.write_lock:  # 串行写
+        conn = db.conn  # 连接
+        try:  # 事务
+            await conn.execute("BEGIN IMMEDIATE")  # 拿写锁
+            await conn.execute(  # 插入
+                "INSERT INTO trace_runs(id, parent_run_id, conversation_id, kind, question,"
+                " started_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (run_id, parent_run_id, conversation_id, kind, _cap(question, 4000), stamp, _json(metadata) or "{}"),
+            )  # 插入结束
+            await conn.commit()  # 提交
+        except BaseException:  # 失败
+            await conn.rollback()  # 回滚
+            raise  # 重抛
+
+
+async def update_run_async(db: AsyncDB, run_id: str, **fields: object) -> None:  # 异步更新
+    """与同步 ``update_run`` 同白名单；事务用异步连接。"""
+    allowed = {key: value for key, value in fields.items() if key in _RUN_FIELDS}  # 白名单
+    if not allowed:  # 空
+        return  # 跳过
+    sets = ", ".join(f"{_RUN_FIELDS[key]} = ?" for key in allowed)  # SET 子句
+    values = [str(value) for value in allowed.values()]  # 值
+    async with db.write_lock:  # 串行写
+        conn = db.conn  # 连接
+        try:  # 事务
+            await conn.execute("BEGIN IMMEDIATE")  # 拿写锁
+            await conn.execute(f"UPDATE trace_runs SET {sets} WHERE id = ?", [*values, run_id])  # 更新
+            await conn.commit()  # 提交
+        except BaseException:  # 失败
+            await conn.rollback()  # 回滚
+            raise  # 重抛
+
+
+async def finish_run_async(  # 异步收尾 run
+    db: AsyncDB,  # 异步连接
+    run_id: str,  # run id
+    *,  # 仅关键字
+    status: str = "ok",  # 状态
+    error_kind: str = "",  # 失败类型
+    error_detail: str = "",  # 失败详情
+    finished_at: float | None = None,  # 结束时间
+    ttft_ms: int | None = None,  # 首 token
+    prompt_tokens: int = 0,  # 输入
+    completion_tokens: int = 0,  # 输出
+    total_tokens: int | None = None,  # 总数
+    cache_hit: bool = False,  # 缓存命中
+) -> None:  # 无返回
+    """与同步 ``finish_run`` 同 SQL；事务用异步连接。"""
+    stamp = time.time() if finished_at is None else finished_at  # 时间戳
+    async with db.write_lock:  # 串行写
+        conn = db.conn  # 连接
+        try:  # 事务
+            await conn.execute("BEGIN IMMEDIATE")  # 拿写锁
+            row = await (  # 查开始时间
+                await conn.execute(  # 查询
+                    "SELECT started_at FROM trace_runs WHERE id = ?", (run_id,)
+                )  # 查询结束
+            ).fetchone()  # 取
+            started = float(row["started_at"]) if row else stamp  # 开始时间
+            duration = int((stamp - started) * 1000)  # 耗时
+            total = (  # 总 token
+                total_tokens  # 给定
+                if total_tokens is not None  # 有
+                else int(prompt_tokens) + int(completion_tokens)  # 计算
+            )  # 结束
+            await conn.execute(  # 更新终态
+                "UPDATE trace_runs SET status = ?, error_kind = ?, error_detail = ?,"
+                " finished_at = ?, duration_ms = ?, ttft_ms = COALESCE(?, ttft_ms), prompt_tokens = ?,"
+                " completion_tokens = ?, total_tokens = ?, cache_hit = ? WHERE id = ?",
+                (
+                    status, _cap(error_kind, 60), _cap(error_detail, 2000), stamp, duration,
+                    ttft_ms, int(prompt_tokens), int(completion_tokens), int(total),
+                    1 if cache_hit else 0, run_id,
+                ),
+            )  # 更新结束
+            await conn.commit()  # 提交
+        except BaseException:  # 失败
+            await conn.rollback()  # 回滚
+            raise  # 重抛
 
 
 def add_span(

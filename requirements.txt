@@ -65,6 +65,13 @@ cn2an>=0.5.0
 # docling：合并单元格/复杂版式；paddleocr：中文/扫描件。文本层 PDF 继续用 pdfplumber。
 # 全部惰性导入，失败自动回退 pdfplumber，不影响默认安装。
 
+# ---------- 传输层：FastAPI / aiosqlite / SSE（worker 的 RPC 服务） ----------
+# run_server 用 FastAPI；HTTP+agent 请求路径异步化用 aiosqlite；SSE 交给 sse-starlette（不自研帧/心跳）。
+fastapi>=0.120
+uvicorn>=0.30
+aiosqlite>=0.20,<1
+sse-starlette>=2.1,<4
+
 # ---------- 编排层：LangChain / LangGraph（v2 净室） ----------
 # 只用于编排/模型/检索接口；解析、切分、ONNX、Qdrant 数据面仍是自研。
 # 版本是**兼容集**：langchain 1.4.7 要求 langgraph <1.3.0，升级必须一起升。
