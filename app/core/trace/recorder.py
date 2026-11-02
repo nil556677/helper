@@ -242,9 +242,6 @@ def trace_run(
         parent_run_id=parent_run_id,
         kind=kind,
     )
-    from app.core.flow import flow  # 全路径流程日志
-
-    flow("trace.create_run", run_id=run_id, sync=True)  # 全路径日志（trace 建 run 同步写）
     token = _CURRENT.set(session)
     try:
         yield session

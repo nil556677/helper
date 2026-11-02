@@ -33,9 +33,6 @@ async def load_context(state: dict[str, Any], config: RunnableConfig) -> dict[st
     """返回 turns 与滚动摘要；状态机进入 retrieving。"""
     ctx = ctx_from_config(config)  # 上下文
     conversation_id = str(state.get("conversation_id") or "")  # 会话 id
-    from app.core.flow import flow  # 全路径流程日志
-
-    flow("node.load_context", conversation=conversation_id, async_db=ctx is not None and ctx.db is not None)  # 全路径日志
     with stage("准备对话", group=StageGroup.PREPARE):  # 步骤
         # 单异步写者：ctx 挂了 AsyncDB 就用异步读（aiosqlite）；否则同步回退。
         store = None  # 异步仓储

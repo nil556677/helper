@@ -13,7 +13,6 @@ from app.agent import (
 )
 from app.agent.context import RunContext  # 上下文
 from app.agent.driver import drive  # 驱动器（图驱动 + 终态收敛）
-from app.core.flow import flow  # 全路径流程日志
 from app.services import attachments  # 附件公开字段
 
 SENTINEL = object()  # 队列结束标记
@@ -101,7 +100,6 @@ async def _run(handle: StreamHandle) -> None:  # 后台执行
     load_context 读历史/摘要、persist/trace 写入。仅在真实 worker 单 loop 下验证。
     """
     ctx = handle.ctx  # 上下文
-    flow("stream._run", run_id=ctx.run_id, async_db=ASYNC_DB_ENABLED)  # 全路径日志
     handle.started = True  # 标记任务已开始（cancel 才能 cancel 任务）
     owned_db = None  # 本轮开的连接
     if ASYNC_DB_ENABLED and ctx.db is None:  # 仅 worker 单 loop 下开（pytest 默认关）
@@ -148,7 +146,6 @@ def start_stream(  # 启动
         attachments=list(attachments or []),  # 附件
     )  # 上下文结束
     sink._run_id = ctx.run_id  # 事件出口预先知道临时 run id
-    flow("stream.start_stream", run_id=ctx.run_id, conversation=ctx.conversation_id)  # 全路径日志
     handle = StreamHandle(run_id=ctx.run_id, ctx=ctx, events=queue)  # 句柄
     handle.task = asyncio.create_task(_run(handle))  # 后台跑
     return handle  # 返回
