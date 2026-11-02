@@ -17,6 +17,12 @@ async def _persist(state: dict[str, Any], ctx: Any) -> None:  # 落库（异步�
     conversation_id = str(state.get("conversation_id") or "default")  # 会话
     question = str(state.get("question") or "")  # 问题
     answer = str(state.get("answer") or "")  # 答案
+    fragments = list(state.get("fragments") or [])  # 引用
+    # checkpoint 会按会话保留上一轮的 answer/fragments；本轮若没真正生成（拒绝/仅说明），
+    # ctx.partial_answer 为空，必须落空答案并清引用，避免把上一轮旧答案写进新消息。
+    if ctx is not None and not ctx.partial_answer and not ctx.citations:  # 本轮未生成
+        answer = ""  # 清掉旧答案
+        fragments = []  # 清掉旧引用
     note = str(state.get("note") or (ctx.note if ctx is not None else ""))  # 说明
     kwargs = {  # 共用参数
         "conversation_id": conversation_id,  # 会话
@@ -24,7 +30,7 @@ async def _persist(state: dict[str, Any], ctx: Any) -> None:  # 落库（异步�
         "answer": answer,  # 答案
         "note": note,  # 说明
         "note_kind": str(state.get("note_kind") or "plain"),  # 样式
-        "fragments": list(state.get("fragments") or []),  # 引用
+        "fragments": fragments,  # 引用（本轮未生成时已清空）
     }  # 参数结束
     if ctx is not None and getattr(ctx, "db", None) is not None:  # 有异步连接
         await persist_turn_async(ctx, **kwargs)  # 异步
