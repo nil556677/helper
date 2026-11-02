@@ -6,6 +6,7 @@ from typing import Any  # 任意值
 
 from app.agent import stream as agent_stream  # 底层流
 from app.agent.run.types import RunInput  # 入参
+from app.core.flow import flow  # 全路径流程日志
 
 
 class LocalBackend:  # worker 内部后端
@@ -22,6 +23,7 @@ class LocalBackend:  # worker 内部后端
         self._handles: dict[str, Any] = {}  # run_id → handle
 
     async def start(self, run_input: RunInput) -> str:  # 启动
+        flow("local.start", run_id=run_input.run_id, conversation=run_input.conversation_id)  # 全路径日志
         handle = self._factory(  # 开流
             run_input.question,  # 问题
             session=run_input.conversation_id,  # 会话

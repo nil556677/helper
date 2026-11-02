@@ -26,6 +26,7 @@ from app.agent.context import RunCancelled, RunContext, run_context  # 上下文
 from app.agent.fsm.projection import project_event  # 节点完成 → 迁移事件
 from app.agent.fsm.states import RunEvent, RunState  # 状态
 from app.agent.middleware import default_chain  # 中间件
+from app.core.flow import flow  # 全路径流程日志
 from app.core.trace import store as trace_store  # trace 写库
 from app.core.trace import writer as trace_writer  # trace 异步写
 from app.core.trace.recorder import trace_run  # trace 会话
@@ -218,6 +219,7 @@ async def drive(  # 驱动图
     """驱动图跑到终态；ctx.db 存在则 trace 走 async（单一异步写者），否则同步。"""
     emit = emit if emit is not None else ctx.emit  # 事件出口
     question = ctx.question  # 问题
+    flow("driver.drive", run_id=ctx.run_id, conversation=ctx.conversation_id, db=ctx.db is not None)  # 全路径日志
     state: dict[str, Any] = {}  # 图最终状态
     status = "failed"  # 终态，先按失败
     error: BaseException | None = None  # 可选错误

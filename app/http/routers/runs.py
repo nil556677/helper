@@ -6,6 +6,7 @@ import uuid  # 先生成 run_id
 from fastapi import APIRouter, Depends, Request  # 依赖/请求
 
 from app.agent.run.types import RunInput  # 入参
+from app.core.flow import flow  # 全路径流程日志
 from app.http import errors  # 错误码
 from app.http.deps import get_backend, get_messages_repo, get_runs_repo  # 依赖注入
 from app.http.errors import ApiError  # 业务异常
@@ -32,11 +33,13 @@ async def create_run(  # 建 run
     且两边用同一 run_id，收尾去重能命中。
     """
     run_id = uuid.uuid4().hex  # 先生成 run id
+    flow("http.create_run", run_id=run_id, conversation=payload.conversation_id)  # 全路径日志
     message_id = await messages.insert_user(  # 发送即落库（异步写 user，先提交）
         payload.conversation_id,  # 会话
         payload.question,  # 问题
         run_id,  # run id
     )  # 落 user（已提交）
+    flow("http.insert_user", message_id=message_id)  # 全路径日志
     run_input = RunInput(  # 组入参
         question=payload.question,  # 问题
         conversation_id=payload.conversation_id,  # 会话
@@ -44,6 +47,7 @@ async def create_run(  # 建 run
         run_id=run_id,  # 复用同一 run id
     )  # 结束
     started = await backend.create(run_input)  # 再启动（复用同一 run_id）
+    flow("http.backend.create", started=started)  # 全路径日志
     return ok(  # 成功体
         {"run_id": started, "message_id": message_id},  # 数据
         request_id=request_id_of(request),  # 追踪

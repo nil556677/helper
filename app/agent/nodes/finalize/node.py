@@ -35,6 +35,9 @@ async def _persist(state: dict[str, Any], ctx: Any) -> None:  # 落库（异步�
 async def finalize_node(state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:  # 收尾节点
     """先落库，再发说明；done 终态事件由 driver 统一发（保证最后一帧）。"""
     ctx = ctx_from_config(config)  # 上下文
+    from app.core.flow import flow  # 全路径流程日志
+
+    flow("node.finalize", conversation=str(state.get("conversation_id") or ""))  # 全路径日志
     with stage("收尾"):  # 步骤（不给 group：只埋 trace，收尾不属于用户步骤）
         await _persist(state, ctx)  # 落库（异步优先）
         if ctx is not None and ctx.note:  # 新链路且有说明
