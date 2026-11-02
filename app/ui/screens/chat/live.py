@@ -280,8 +280,31 @@ def _meta_text(view: dict[str, Any]) -> str:  # 组头右侧
     return " · ".join(parts)  # 拼接
 
 
+def _elapsed_text(seconds: float) -> str:  # 中文时长（无空格/不补零）
+    """把秒数写成 ``4秒`` / ``2分4秒`` / ``1小时2分4秒``（0 的分/秒省略）。"""
+    total = int(max(0.0, seconds))  # 取整秒
+    if total < 60:  # 一分钟内
+        return f"{total}秒"  # 4秒
+    minutes, sec = divmod(total, 60)  # 分/秒
+    if minutes < 60:  # 一小时内
+        return f"{minutes}分{sec}秒" if sec else f"{minutes}分"  # 2分4秒 / 2分
+    hours, minutes = divmod(minutes, 60)  # 时/分
+    parts = [f"{hours}小时"]  # 时
+    if minutes:  # 有分
+        parts.append(f"{minutes}分")  # 分
+    if sec:  # 有秒
+        parts.append(f"{sec}秒")  # 秒
+    return "".join(parts)  # 1小时2分4秒
+
+
+def _running_line(view: dict[str, Any]) -> str:  # 运行中的那行文案
+    """``努力求索中，用时X ···``；从发送（含检索阶段）起算。"""
+    elapsed = time.perf_counter() - view["started_at"]  # 已用时
+    return f"努力求索中，用时{_elapsed_text(elapsed)} ···"  # 文案
+
+
 def _refresh_header(view: dict[str, Any]) -> None:  # 更新组头
-    """运行中显示“正在查找资料”，结束显示“已…”，并用转圈图标表示还活着。"""
+    """运行中显示“努力求索中，用时X ···”，结束显示“已…”，并用转圈图标表示还活着。"""
     if view["headline"] is None or not _alive(view):  # 没 UI
         if view.get("ticker") is not None:  # 有计时器也要停（防泄漏）
             with contextlib.suppress(Exception):  # 停表失败不阻断
@@ -297,21 +320,19 @@ def _refresh_header(view: dict[str, Any]) -> None:  # 更新组头
     elif view["run_state"] == "cancelling":  # 正在停止（已点停止、还没收到终态）
         text = "正在停止…"  # 文案
     elif running is not None:  # 运行中
-        text = f"正在{running['label']}…"  # 文案
+        text = _running_line(view)  # 努力求索中，用时X ···
     elif view["groups"].get(StageGroup.GENERATE.value) is not None:  # 生成过
         text = "已查找资料并生成回答"  # 文案
     elif view["groups"].get(StageGroup.SEARCH.value) is not None:  # 查过
         text = "已查找资料"  # 文案
-    elif view["run_state"] in ("context_loading", "retrieving"):  # 准备/检索
-        text = "正在准备…"  # 文案
+    elif view["run_state"] in ("context_loading", "retrieving"):  # 准备/检索（从检索起就计时）
+        text = _running_line(view)  # 努力求索中，用时X ···
     elif view["run_state"] == "done":  # 完成
         text = "已完成"  # 文案
     else:  # 初始
-        text = "已收到，正在处理…"  # 文案
+        text = _running_line(view)  # 努力求索中，用时X ···
     terminal = view["run_state"] in ("done", "error", "cancelled")  # 是否已到终态
-    if not terminal:  # 还在跑：拼上实时耗时（DSH 风格）
-        text = f"{text} {time.perf_counter() - view['started_at']:.1f}s"  # 实时耗时
-    elif view.get("ticker") is not None:  # 到终态：停表
+    if terminal and view.get("ticker") is not None:  # 到终态：停表
         with contextlib.suppress(Exception):  # 停表失败不阻断
             view["ticker"].cancel()  # 停止
         view["ticker"] = None  # 置空
