@@ -1,10 +1,10 @@
-"""通用重试：错误分类 + 指数退避 + 重试事件（类 B 的 #10）。
+"""通用重试：错误分类 + 指数退避 + 重试事件（通用基础设施，供模型/HTTP/工具等共用）。
 
 只重试「对外请求」的瞬时失败（限流/5xx/超时/连接）；**配置错不重试**——重试三次只会
-让用户多等六秒。:func:`retry_async` 与模型无关，embedding / rerank / Qdrant 也能直接用。
+让用户多等几秒。:func:`retry_async` 与模型无关，embedding / rerank / HTTP / 工具都能直接用。
 """
 
-from __future__ import annotations
+from __future__ import annotations  # 延迟求值注解
 
 import asyncio  # 默认 sleep
 import random  # 抖动
@@ -18,7 +18,7 @@ RETRYABLE_KINDS = frozenset({"rate_limit", "server", "timeout", "connection"})  
 
 @dataclass(frozen=True)
 class RetryPolicy:  # 重试策略
-    """**最多重试 3 次**（不含首次），退避一律指数增长；0.5s 起、上限 8s、带抖动。"""
+    """**最多重试 3 次**（不含首次），退避一律指数增长；0.5s 起、上限、带抖动。"""
 
     max_retries: int = 3  # 最多重试几次（不含第一次请求）
     base_delay_s: float = 0.5  # 第 1 次重试前等多久
@@ -27,7 +27,7 @@ class RetryPolicy:  # 重试策略
 
     def delay_s(self, retry_index: int, *, rng: random.Random | None = None) -> float:  # 本次退避
         """第 ``retry_index`` 次**重试**前等多久：base × 2^(n-1)，封顶后加抖动。"""
-        exponent = max(0, retry_index - 1)  # 0,1,2… → 0.5s / 1s / 2s
+        exponent = max(0, retry_index - 1)  # 0,1,2… → base / 2base / 4base
         raw = self.base_delay_s * (2 ** exponent)  # 指数增长
         base = min(raw, self.max_delay_s)  # 封顶
         if self.jitter_s <= 0:  # 不要抖动
@@ -45,7 +45,7 @@ class RetryInfo:  # 一次重试的事实
     error_kind: str  # 错误类别
     error_message: str  # 原始信息（截断）
     delay_ms: int  # 等多久再试
-    scope: str = "model"  # 谁的请求（model / structured / embedding…）
+    scope: str = "model"  # 谁的请求（model / http / structured / embedding…）
 
 
 def classify_error(exc: BaseException) -> str:  # 错误分类
@@ -55,7 +55,7 @@ def classify_error(exc: BaseException) -> str:  # 错误分类
         return "rate_limit"  # 可重试
     if status is not None and 500 <= status < 600:  # 服务端
         return "server"  # 可重试
-    if status in (400, 401, 403, 404):  # 配置错
+    if status in (400, 401, 403, 404):  # 配置/请求错
         return "config"  # 不重试
     if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):  # 超时
         return "timeout"  # 可重试
@@ -68,7 +68,7 @@ def classify_error(exc: BaseException) -> str:  # 错误分类
 
 
 def _status_code(exc: BaseException) -> int | None:  # 取 HTTP 状态码
-    """OpenAI SDK 把码放 ``status_code``；也兼容 ``response.status_code``。"""
+    """SDK 常把码放 ``status_code``；也兼容 ``response.status_code``。"""
     value = getattr(exc, "status_code", None)  # 直接属性
     if isinstance(value, int):  # 有效
         return value  # 返回

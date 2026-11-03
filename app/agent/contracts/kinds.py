@@ -66,18 +66,22 @@ class StageGroup(StrEnum):  # 用户级步骤分组
     GENERATE = "generate"  # 生成回答
 
 
-#: 单一事实来源：一行同时给定「展示顺序 + 中文组名」，GROUP_ORDER / GROUP_LABELS 都由它派生。
-_GROUPS: tuple[tuple[StageGroup, str], ...] = (  # （分组, 组名）
-    (StageGroup.PREPARE, "理解问题"),  # 先理解
-    (StageGroup.SEARCH, "查找资料"),  # 再查找
-    (StageGroup.FILTER, "筛选重点"),  # 再筛选
-    (StageGroup.TOOL, "使用工具"),  # 工具调用
-    (StageGroup.GENERATE, "生成回答"),  # 最后生成
+#: 单一事实来源：一行同时给定「展示顺序 + 中文组名 + 图标」，GROUP_ORDER / GROUP_LABELS /
+#: GROUP_ICONS 都由它派生，不手动重复（顺序/文案/图标不会互相不一致）。
+_GROUPS: tuple[tuple[StageGroup, str, str], ...] = (  # （分组, 组名, 图标）
+    (StageGroup.PREPARE, "理解问题", "psychology"),  # 先理解（思考）
+    (StageGroup.SEARCH, "查找资料", "search"),  # 再查找（搜索）
+    (StageGroup.FILTER, "筛选重点", "filter_alt"),  # 再筛选（过滤/精排）
+    (StageGroup.TOOL, "使用工具", "handyman"),  # 工具调用（工具）
+    (StageGroup.GENERATE, "生成回答", "auto_awesome"),  # 最后生成（AI 生成）
 )  # 清单结束
 
 
 #: 分组的展示顺序（按 _GROUPS 声明序派生，不重复手列）。
-GROUP_ORDER: tuple[StageGroup, ...] = tuple(group for group, _ in _GROUPS)  # 顺序
+GROUP_ORDER: tuple[StageGroup, ...] = tuple(group for group, _, _ in _GROUPS)  # 顺序
 
 #: 分组 → 用户看到的组名（同样从 _GROUPS 派生，保证与顺序不会不一致）。
-GROUP_LABELS: dict[StageGroup, str] = dict(_GROUPS)  # 标签
+GROUP_LABELS: dict[StageGroup, str] = {group: label for group, label, _ in _GROUPS}  # 标签
+
+#: 分组 → 图标（quasar/material 名）；与顺序/组名同源，UI 渲染步骤/分组时消费它。
+GROUP_ICONS: dict[StageGroup, str] = {group: icon for group, _, icon in _GROUPS}  # 图标

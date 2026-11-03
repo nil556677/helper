@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.agent.contracts import GROUP_ORDER, StageGroup
+from app.agent.contracts import GROUP_ICONS, GROUP_ORDER, StageGroup
 
 
 @dataclass
@@ -92,12 +92,8 @@ _SCROLL_TASKS: set[asyncio.Task] = set()  # 任务集合
 
 
 _STEP_ICONS: dict[str, str] = {
-    StageGroup.PREPARE.value: 'psychology',  # 理解问题
-    StageGroup.SEARCH.value: 'search',  # 查找资料
-    StageGroup.FILTER.value: 'sort',  # 筛选重点
-    StageGroup.TOOL.value: 'build',  # 使用工具
-    StageGroup.GENERATE.value: 'forum',  # 生成回答
-    'plan': 'psychology',  # 旧数据
+    **{group.value: icon for group, icon in GROUP_ICONS.items()},  # 分组图标（契约层单源）
+    'plan': 'psychology',  # 旧数据（历史步骤 id 兜底）
     'read': 'menu_book',  # 旧数据
     'rerank': 'sort',  # 旧数据
     'embed': 'hub',  # 旧数据

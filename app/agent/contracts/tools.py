@@ -44,7 +44,13 @@ class ResultEnvelope(BaseModel):  # 工具 / 任务统一返回包络
 
 
 class ErrorCode:  # 错误码常量（唯一分类来源）
-    """输出层、事件层、retry 分类都引用这些 code 字符串（跨域只走 ID，不 import）。"""
+    """输出层、事件层、retry 分类都引用这些 code 字符串（跨域只走 ID，不 import）。
+
+    三个层级共处一处，避免"工具一套、retry 一套、run 一套"漂移：
+    - ``protocol.*`` / ``execution.*`` / ``internal.*``：工具/业务错（ResultEnvelope 用）；
+    - ``rate_limit / server / timeout / connection / config / unknown``：上游/瞬时分类，
+      与 ``core.retry.classify_error`` 的输出对齐（retry 事件、ModelError 用它）。
+    """
 
     # 协议层：工具不可用 / 参数错 / 无权限（不重试）
     PROTOCOL_TOOL_NOT_FOUND = "protocol.tool_not_found"  # 工具不存在
@@ -55,6 +61,15 @@ class ErrorCode:  # 错误码常量（唯一分类来源）
     EXECUTION_FAILED = "execution.failed"  # 执行失败
     EXECUTION_RATE_LIMIT = "execution.rate_limit"  # 被限流（可等后重试）
     EXECUTION_TIMEOUT = "execution.timeout"  # 超时
+    # 内部层：工具实现 BUG / 未知异常（重试无用，标记不可重试，便于暴露问题）
+    INTERNAL_ERROR = "internal.error"  # 内部错误（疑似代码 Bug）
+    # 上游/瞬时分类：与 core.retry.classify_error 的输出一一对应（retry 事件、ModelError 共用）
+    RATE_LIMIT = "rate_limit"  # 限流 429
+    SERVER = "server"  # 服务端 5xx
+    TIMEOUT = "timeout"  # 请求超时
+    CONNECTION = "connection"  # 连接断开/重置
+    CONFIG = "config"  # 配置/鉴权错（400/401/403/404，不重试）
+    UNKNOWN = "unknown"  # 认不出的兜底
 
     @staticmethod  # 静态方法
     def is_protocol(code: str) -> bool:  # 是否协议层错误

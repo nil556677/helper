@@ -21,33 +21,16 @@ class ModelRequest:  # 一次模型请求
 
 @dataclass(frozen=True)
 class ModelResponse:  # 一次模型响应
-    """非流式给 text，流式给 stream；两者至少一个。"""
+    """非流式给 text，流式给 stream；两者至少一个。tools 时给 tool_calls。"""
 
     text: str = ""  # 完整文本（非流式）
     usage: dict[str, Any] = field(default_factory=dict)  # token 用量
     first_token_ms: int | None = None  # 首 token 耗时
     stream: AsyncIterator[str] | None = None  # token 流
-
-
-@dataclass(frozen=True)
-class ToolCallRequest:  # 一次工具调用请求
-    """工具名 + 参数。"""
-
-    name: str  # 工具名
-    args: dict[str, Any] = field(default_factory=dict)  # 参数
-
-
-@dataclass(frozen=True)
-class ToolCallResult:  # 工具调用结果
-    """成功/失败都用它，避免抛异常穿透图。"""
-
-    ok: bool  # 是否成功
-    text: str = ""  # 结果文本
-    error_kind: str = ""  # 失败类型
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)  # 工具调用（决策轮用）
 
 
 ModelCall = Callable[[ModelRequest], Awaitable[ModelResponse]]  # 模型调用签名
-ToolCall = Callable[[ToolCallRequest], Awaitable[ToolCallResult]]  # 工具调用签名
 
 
 class Middleware:  # 中间件基类
@@ -71,16 +54,6 @@ class Middleware:  # 中间件基类
         request: ModelRequest,  # 请求
         call_next: ModelCall,  # 下一个中间件/模型
     ) -> ModelResponse:  # 响应
-        """默认直接放行。"""
-        del ctx  # 默认不读上下文
-        return await call_next(request)  # 放行
-
-    async def wrap_tool_call(  # 包住工具调用
-        self,  # 中间件实例
-        ctx: RunContext,  # 运行上下文
-        request: ToolCallRequest,  # 请求
-        call_next: ToolCall,  # 下一个中间件/工具
-    ) -> ToolCallResult:  # 结果
         """默认直接放行。"""
         del ctx  # 默认不读上下文
         return await call_next(request)  # 放行
@@ -128,30 +101,3 @@ class MiddlewareChain:  # 中间件链
             return await self._run_model(index + 1, ctx, next_request, call)  # 递归
 
         return await middleware.wrap_model_call(ctx, request, call_next)  # 当前层
-
-    async def tool_call(  # 调工具
-        self,  # 链
-        ctx: RunContext,  # 上下文
-        request: ToolCallRequest,  # 请求
-        call: ToolCall,  # 最内层真实调用
-    ) -> ToolCallResult:  # 结果
-        """组合所有 wrap_tool_call。"""
-        return await self._run_tool(0, ctx, request, call)  # 从最外层开始
-
-    async def _run_tool(  # 递归执行工具链
-        self,  # 链
-        index: int,  # 当前下标
-        ctx: RunContext,  # 上下文
-        request: ToolCallRequest,  # 请求
-        call: ToolCall,  # 最内层
-    ) -> ToolCallResult:  # 结果
-        """下标越界就调真实工具。"""
-        if index >= len(self._items):  # 到底了
-            return await call(request)  # 调真实工具
-        middleware = self._items[index]  # 当前中间件
-
-        async def call_next(next_request: ToolCallRequest) -> ToolCallResult:  # 下一层
-            """把请求交给下一个中间件。"""
-            return await self._run_tool(index + 1, ctx, next_request, call)  # 递归
-
-        return await middleware.wrap_tool_call(ctx, request, call_next)  # 当前层

@@ -16,10 +16,11 @@ from typing import Any  # 任意值
 from app.agent.contracts import DecisionTarget  # 决策目标枚举（route.next 判断）
 from app.agent.fsm.states import RunEvent  # 迁移事件
 
-#: 父图顶层节点名 → 完成时触发的事件；rag 需要读 route 才能定（answer/finalize）。
+#: 父图顶层节点名 → 完成时触发的事件；rag 需要读 route 才能定（agent/finalize）。
 SIMPLE_NODE_EVENT: dict[str, RunEvent] = {  # 固定映射
     "load_context": RunEvent.CONTEXT_LOADED,  # 上下文就绪（loading → retrieving）
     "answer": RunEvent.GENERATION_DONE,  # 生成完成（generating → finalizing）
+    "agent": RunEvent.GENERATION_DONE,  # 工具循环完成（generating → finalizing）
     "finalize": RunEvent.FINALIZED,  # 收尾完成（finalizing → done）
 }  # 固定映射结束
 

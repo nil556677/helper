@@ -21,7 +21,7 @@ from pydantic import BaseModel  # 校验结构化目标必须是 Pydantic 模型
 from app.agent.contracts import EventType, make  # 重试事件
 from app.agent.llm.params import to_chat_kwargs  # 参数翻译
 from app.agent.llm.repair import REGENERATE_LIMIT, structured_repair_request  # 修复请求
-from app.agent.llm.retry import RetryInfo, RetryPolicy, classify_error, retry_async  # 重试
+from app.core.retry import RetryInfo, RetryPolicy, classify_error, retry_async  # 重试
 from app.agent.llm.schema import (  # 结构化错误
     Issue,  # 单条错误
     StructuredModel,  # 基类约束

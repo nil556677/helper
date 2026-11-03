@@ -4,7 +4,7 @@
 
 - ``types``    —— 数据契约（ModelParams / ModelResult / 结构化信封）
 - ``params``   —— 参数 → ChatOpenAI 关键字 / 缓存键（纯机制）
-- ``retry``    —— 错误分类 + 退避 + 重试事件
+- 通用重试    —— 已迁至 ``app.core.retry``（模型 / HTTP / 工具共用），经此再导出
 - ``gateway``  —— 统一入口（generate / astream / structured）
 - ``schema``   —— 结构化输出基类（字段必须有 description 与默认值）
 - ``validate`` —— 输出清洗 + 两层校验 + 判决口径
@@ -24,7 +24,7 @@ from app.agent.llm.repair import (  # 修复
     repair_request,  # 答案修复请求
     structured_repair_request,  # 结构化修复请求
 )
-from app.agent.llm.retry import (  # 重试
+from app.core.retry import (  # 重试（通用工具已迁至 core，经此再导出）
     RETRYABLE_KINDS,  # 可重试类别
     RetryInfo,  # 重试事实
     RetryPolicy,  # 策略

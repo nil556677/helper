@@ -22,14 +22,44 @@ class TurnStatus(StrEnum):  # 轮次状态
 
 
 class TurnToolCall(BaseModel):  # 一次工具调用的审计记录
-    """面向持久 / 审计，不喂模型；靠 tool_call_id 与内部消息契约关联。"""
+    """面向持久 / 审计的**唯一工具结果形状**；靠 tool_call_id 与内部消息关联。
+
+    语义以工具的 `ResultEnvelope` 为准，用 :meth:`from_env` 单向派生，避免两套"成功/失败"。
+    旧 `contracts.messages.ToolResult` 已并入本类（content 即喂模型子集、artifact 走审计）。
+    """
 
     tool_call_id: str  # 与消息域调用 id 关联（全 ID）
     name: str  # 工具名
     status: str = "ok"  # ok / error
+    content: str = ""  # 喂模型的子集（机器通道）
     artifact: Any = None  # 完整结果（审计通道）
     duration_ms: int | None = None  # 耗时
     error_code: str = ""  # 错误码
+
+    @classmethod  # 类方法
+    def from_env(  # 从 ResultEnvelope 派生
+        cls,  # 类
+        envelope: Any,  # 工具统一包络（ResultEnvelope 或含 .ok/.code/.data 的对象）
+        tool_call_id: str = "",  # 关联调用 id
+        *,
+        name: str = "",  # 工具名
+        content: str = "",  # 喂模型子集
+        duration_ms: int | None = None,  # 耗时
+    ) -> TurnToolCall:  # 审计记录
+        """把工具包络映射成审计记录；status/error_code/artifact 与包络同源。"""
+        from app.agent.contracts.tools import ResultEnvelope  # 延迟导入避免循环
+
+        ok_env = envelope.ok if isinstance(envelope, ResultEnvelope) else bool(getattr(envelope, "ok", False))  # 是否成功
+        data = getattr(envelope, "data", None)  # 完整结果（审计）
+        return cls(  # 构造
+            tool_call_id=tool_call_id,  # 关联
+            name=name,  # 工具名
+            status="ok" if ok_env else "error",  # 状态
+            content=content,  # 喂模型子集
+            artifact=data,  # 完整结果
+            duration_ms=duration_ms,  # 耗时
+            error_code="" if ok_env else str(getattr(envelope, "code", "") or ""),  # 错误码同源
+        )  # 返回
 
 
 class Turn(BaseModel):  # 一“轮”问答

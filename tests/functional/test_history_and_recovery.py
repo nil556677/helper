@@ -11,7 +11,7 @@ from app.agent.context import RunContext  # 上下文
 from app.agent.contracts import EventType, from_dict, make, to_dict, validate_sequence  # 事件契约
 from app.agent.driver import drive  # 驱动器
 from app.agent.middleware.base import ModelResponse  # 响应形状
-from app.agent.nodes.answer import node as answer_mod  # 生成节点模块
+from app.agent.nodes.agent import node as agent_mod  # 工具循环节点模块
 from app.agent.nodes.rag.node import RagResult  # 检索结果
 from app.agent.reconcile import reconcile_once  # 对账
 from app.core.db import schema_v1  # 建表
@@ -83,13 +83,13 @@ def _reject() -> RagResult:  # 不可答结果
 async def test_unanswered_turn_not_fed_to_next_turn() -> None:  # D1 回归
     """上一轮空回答不得以「悬空提问」进下一轮模型输入。"""
     chain = _RecordingChain()  # 假链
-    original = answer_mod._CHAIN  # 原链
-    answer_mod._CHAIN = chain  # 换链
+    original = agent_mod._CHAIN  # 原链
+    agent_mod._CHAIN = chain  # 换链
     try:  # 用完还原
         await _run("广元市下面有哪些县区", _reject(), "conv-x")  # 第一轮：无证据
         await _run("成都下面有哪些区县", _ok(), "conv-x")  # 第二轮：有证据
     finally:  # 还原
-        answer_mod._CHAIN = original  # 还原
+        agent_mod._CHAIN = original  # 还原
     texts = [str(item.get("content") or "") for item in chain.last_messages]  # 模型输入文本
     assert not any("广元" in text for text in texts)  # 旧问题不再出现
     assert any("成都下面有哪些区县" in text for text in texts)  # 当前问题在

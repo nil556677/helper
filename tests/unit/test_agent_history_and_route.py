@@ -98,7 +98,7 @@ def test_pass_routes_to_answer(monkeypatch) -> None:  # 正常路径
     out, ctx = _run_rag(monkeypatch, _result("pass", evidence))  # 跑
     assert out["evidence"] == evidence  # 证据保留
     assert out["route"]["next"] == DecisionTarget.ANSWER.value  # 决策对象指向生成
-    assert agent_mod.after_rag(out) == "answer"  # 路由一致
+    assert agent_mod.after_rag(out) == "agent"  # 路由一致
     event = project_event("rag", out)  # 节点完成 → 迁移事件
     ctx.transition(event)  # 驱动
     assert ctx.machine.state is RunState.GENERATING  # 进入生成

@@ -8,9 +8,6 @@ from app.agent.middleware.base import (  # 中间件契约
     ModelCall,
     ModelRequest,
     ModelResponse,
-    ToolCall,
-    ToolCallRequest,
-    ToolCallResult,
 )
 from app.agent.streaming import aclose  # 关闭上游流
 
@@ -49,15 +46,3 @@ class CancelMiddleware(Middleware):  # 取消检查
         from dataclasses import replace  # 局部导入避免污染
 
         return replace(response, stream=checked_stream())  # 替换流
-
-    async def wrap_tool_call(  # 包工具调用
-        self,  # 实例
-        ctx: RunContext,  # 上下文
-        request: ToolCallRequest,  # 请求
-        call_next: ToolCall,  # 下一层
-    ) -> ToolCallResult:  # 结果
-        """调用前后各查一次。"""
-        ctx.check_cancelled()  # 调前
-        result = await call_next(request)  # 调工具
-        ctx.check_cancelled()  # 调后
-        return result  # 返回

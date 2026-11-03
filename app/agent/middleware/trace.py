@@ -12,9 +12,6 @@ from app.agent.middleware.base import (  # 中间件契约
     ModelCall,
     ModelRequest,
     ModelResponse,
-    ToolCall,
-    ToolCallRequest,
-    ToolCallResult,
 )
 
 
@@ -40,17 +37,3 @@ class TraceMiddleware(Middleware):  # 追踪
         elapsed = int((time.perf_counter() - started) * 1000)  # 耗时
         logger.debug("model {} 耗时 {}ms", request.model, elapsed)  # 调试日志
         return response  # 返回
-
-    async def wrap_tool_call(  # 包工具调用
-        self,  # 实例
-        ctx: RunContext,  # 上下文
-        request: ToolCallRequest,  # 请求
-        call_next: ToolCall,  # 下一层
-    ) -> ToolCallResult:  # 结果
-        """计时 + 状态。"""
-        del ctx  # 当前只计时
-        started = time.perf_counter()  # 开始
-        result = await call_next(request)  # 调工具
-        elapsed = int((time.perf_counter() - started) * 1000)  # 耗时
-        logger.debug("tool {} 耗时 {}ms ok={}", request.name, elapsed, result.ok)  # 调试日志
-        return result  # 返回

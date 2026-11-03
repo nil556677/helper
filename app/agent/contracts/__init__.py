@@ -12,6 +12,7 @@ from app.agent.contracts.collab import (  # 任务委派契约
 )  # 委派导入结束
 from app.agent.contracts.events import PAYLOAD_BY_TYPE, EventEnvelope  # 事件信封与载荷映射
 from app.agent.contracts.kinds import (  # 枚举、终态与步骤分组
+    GROUP_ICONS,  # 分组图标
     GROUP_LABELS,  # 分组 → 组名
     GROUP_ORDER,  # 分组展示顺序
     RETRY_KIND_LABELS,  # 重试类别 → 人话
@@ -20,7 +21,6 @@ from app.agent.contracts.kinds import (  # 枚举、终态与步骤分组
     StageGroup,  # 步骤分组
     StageStatus,  # 步骤状态
 )  # 导入结束
-from app.agent.contracts.messages import MessageRole, ToolCall, ToolResult  # 消息契约
 from app.agent.contracts.naming import Namer  # 命名器
 
 # ---- 新契约域（六域集中定义；域与域零 import）----
@@ -50,6 +50,7 @@ from app.agent.contracts.tools import (  # 工具契约
 )
 
 __all__ = [  # 对外导出
+    "GROUP_ICONS",  # 分组图标
     "GROUP_LABELS",  # 分组组名
     "GROUP_ORDER",  # 分组顺序
     "PAYLOAD_BY_TYPE",  # 载荷映射
@@ -66,7 +67,6 @@ __all__ = [  # 对外导出
     "EventEnvelope",  # 事件信封
     "EventType",  # 事件类型
     "IdRegistry",  # id 注册表
-    "MessageRole",  # 消息角色
     "Mutation",  # 变更画像
     "Namer",  # 命名器
     "ResultEnvelope",  # 结果包络
@@ -75,9 +75,7 @@ __all__ = [  # 对外导出
     "StageStatus",  # 步骤状态
     "TaskEnvelope",  # 任务信封
     "TaskStatus",  # 任务状态
-    "ToolCall",  # 工具调用
     "ToolDescriptor",  # 工具描述符
-    "ToolResult",  # 工具结果
     "Turn",  # 轮次
     "TurnStatus",  # 轮次状态
     "TurnToolCall",  # 工具审计
