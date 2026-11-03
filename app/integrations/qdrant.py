@@ -17,8 +17,12 @@ import threading
 from typing import Any
 
 from app.core.config import store as params_store
+from app.core.retry import RetryPolicy, retry_sync  # 同步重试
 from app.integrations.embeddings import OnnxBgeM3Embeddings
 from app.integrations.sparse import JiebaBm25SparseEmbeddings
+
+#: 重试策略：只重试瞬时类（断连/限流/5xx）。
+_RETRY = RetryPolicy(max_retries=3, base_delay_s=0.5, max_delay_s=4.0, jitter_s=0.1)  # 策略
 
 COLLECTION = "kb_chunks"
 DENSE = "dense"
@@ -153,19 +157,22 @@ def close_client() -> None:
 
 
 def delete_document_points(client: Any, doc_id: int) -> None:
-    """按 metadata.doc_id 删除一份资料的全部点（所有版本）。"""
+    """按 metadata.doc_id 删除一份资料的全部点（所有版本）；幂等，安全重试。"""
     from qdrant_client import models
 
-    client.delete(
-        collection_name=COLLECTION,
-        points_selector=models.FilterSelector(
-            filter=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="metadata.doc_id",
-                        match=models.MatchValue(value=int(doc_id)),
-                    )
-                ]
-            )
-        ),
-    )
+    retry_sync(  # 幂等 delete，可重试
+        lambda: client.delete(  # 删
+            collection_name=COLLECTION,  # 集合
+            points_selector=models.FilterSelector(  # 按过滤删
+                filter=models.Filter(  # 过滤
+                    must=[  # 必须满足
+                        models.FieldCondition(  # 字段条件
+                            key="metadata.doc_id",  # 文档字段
+                            match=models.MatchValue(value=int(doc_id)),  # 文档 id
+                        )  # 条件结束
+                    ]  # 必须结束
+                )  # 过滤结束
+            ),  # 删除选择器结束
+        ),  # 删结束
+        _RETRY,  # 重试策略
+    )  # 重试结束

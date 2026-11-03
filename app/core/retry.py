@@ -8,6 +8,7 @@ from __future__ import annotations  # 延迟求值注解
 
 import asyncio  # 默认 sleep
 import random  # 抖动
+import time  # 同步等待（retry_sync 用）
 from collections.abc import Awaitable, Callable  # 函数签名
 from dataclasses import dataclass  # 策略与信息
 from typing import Any  # 任意值
@@ -110,3 +111,25 @@ async def retry_async[T](  # 通用重试
                     )  # 信息结束
                 )  # 回调结束
             await sleep(delay)  # 等一会儿
+
+
+def retry_sync[T](  # 同步通用重试
+    fn: Callable[[], T],  # 要执行的动作
+    policy: RetryPolicy = RetryPolicy(),  # 策略
+    *,
+    sleep: Callable[[float], None] = time.sleep,  # 可注入（测试不真等）
+) -> T:  # 结果
+    """同步版通用重试：逻辑与 `retry_async` 一致，用 ``time.sleep`` 退避。
+
+    给同步阻塞调用用（本地 Qdrant / ONNX 嵌入 / 精排等）；同样只重试瞬时类错误。
+    """
+    attempt = 0  # 已重试次数
+    while True:  # 循环
+        try:  # 执行
+            return fn()  # 成功即返回
+        except Exception as exc:  # 真实失败
+            kind = classify_error(exc)  # 分类
+            if kind not in RETRYABLE_KINDS or attempt >= policy.max_retries:  # 不值得/用尽
+                raise  # 原样抛
+            attempt += 1  # 计次
+            sleep(policy.delay_s(attempt))  # 指数退避

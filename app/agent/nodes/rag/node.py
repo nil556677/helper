@@ -6,6 +6,10 @@ from dataclasses import dataclass, field  # 结果容器
 from typing import Any  # 任意值
 
 from app.agent.nodes.rag.graph import RagSteps, build_rag_graph  # 子图
+from app.agent.tools.cache import TtlCache  # 共享缓存（检索幂等）
+
+#: 同 (question, top_k, rerank) 10 分钟内结果一致（避免每轮重跑 embed/召回/精排）。
+_RETRIEVAL_CACHE = TtlCache(ttl=600.0, max_entries=2048)  # 检索缓存
 
 
 @dataclass(frozen=True)
@@ -35,7 +39,11 @@ class RagRunner:  # 子图运行器
         top_k: int = 6,  # 证据数
         rerank: bool = True,  # 质量优先默认精排
     ) -> RagResult:  # 结果
-        """不挂 checkpointer；中间态不落库。"""
+        """不挂 checkpointer；中间态不落库。检索结果按问 10 分钟内幂等。"""
+        key = (question, int(top_k), bool(rerank))  # 缓存键
+        cached = _RETRIEVAL_CACHE.get(key)  # 命中检查
+        if cached is not None:  # 窗口内命中
+            return cached  # 直接返回（幂等）
         state: dict[str, Any] = {  # 初始状态
             "question": question,  # 问题
             "top_k": int(top_k),  # 证据数
@@ -43,7 +51,7 @@ class RagRunner:  # 子图运行器
         }  # 初始状态结束
         result = await self._graph.ainvoke(state)  # 跑子图
         evidence = list(result.get("evidence", []))  # 证据
-        return RagResult(  # 映射结果
+        wrapped = RagResult(  # 映射结果
             evidence=evidence,  # 证据
             hits=list(result.get("fused", [])),  # 命中
             errors=list(result.get("errors", [])),  # 错误
@@ -52,4 +60,6 @@ class RagRunner:  # 子图运行器
             fused_count=len(result.get("fused", [])),  # 融合数
             selected_count=len(evidence),  # 证据数
             gate=dict(result.get("gate") or {}),  # 门限判决
-        )  # 返回结束
+        )  # 映射结束
+        _RETRIEVAL_CACHE.set(key, wrapped)  # 只缓存成功结果
+        return wrapped  # 返回

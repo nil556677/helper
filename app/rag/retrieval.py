@@ -50,6 +50,9 @@ def _env_float(name: str, default: float) -> float:  # 读环境变量
 DENSE_WEIGHT = _env_float("HELPER_RRF_DENSE_WEIGHT", 1.0)  # 语义权重
 SPARSE_WEIGHT = _env_float("HELPER_RRF_SPARSE_WEIGHT", 1.0)  # 关键词权重
 
+#: 查询嵌入器单例（ONNX 模型在 core.embed 已是模块级缓存，这里避免对象反复构造）。
+_EMBED = OnnxBgeM3Embeddings()  # 单例
+
 
 @lru_cache(maxsize=1)
 def _stores():  # 复用 store
@@ -71,10 +74,10 @@ def _hit_to_doc(hit: dict[str, Any]) -> Document:  # 字典转文档
 
 
 def embed_query(text: str) -> list[float]:  # 查询向量
-    """bge-m3 单条嵌入。"""
+    """bge-m3 单条嵌入（复用单例嵌入器）。"""
     dense, _sparse, _sparse_emb = _stores()  # 取 store
     del dense, _sparse  # 只借嵌入器
-    return [float(value) for value in OnnxBgeM3Embeddings().embed_query(text)]  # 转 list
+    return [float(value) for value in _EMBED.embed_query(text)]  # 转 list
 
 
 def dense_search(vector: list[float], k: int = DENSE_CANDIDATES) -> list[dict[str, Any]]:  # 语义召回

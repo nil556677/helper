@@ -12,12 +12,12 @@ from __future__ import annotations  # 类型注解延迟求值
 
 import json  # 解析模型输出
 import re  # 正则
-import time  # 缓存 TTL
 from collections.abc import Callable  # 工厂签名
 from dataclasses import dataclass, field  # 结果容器
 from typing import Any  # 任意值
 
 from app.agent.contexts.prompts import REWRITE_SYSTEM_UID, get  # 统一改写提示模板
+from app.agent.tools.cache import TtlCache  # 共享 TTL 缓存（按条 ttl）
 from app.rag import hard  # 硬要素（校验"有没有改丢"）
 from app.rag.normalize import normalize  # 规则归一化
 
@@ -50,8 +50,8 @@ _ENTITY = re.compile(r"\d|「|」|“|”|\"|《|》")  # 实体线索
 
 SYSTEM_PROMPT = get(REWRITE_SYSTEM_UID).render()  # 渲染统一改写提示
 
-#: 缓存：键 -> (过期时刻, 查询列表)。
-_CACHE: dict[str, tuple[float, list[str]]] = {}  # 进程内
+#: 缓存：成功 30 天 / 失败 60 秒（按条 ttl），容量 1024 防内存无限增长。
+_CACHE = TtlCache(ttl=CACHE_TTL, max_entries=1024)  # 共享缓存原语
 
 #: 模型工厂签名：返回带 `invoke` 的对象或 None。
 ModelFactory = Callable[[], Any]  # 可注入（测试用）
@@ -92,23 +92,14 @@ def _cache_key(question: str, history: list[dict[str, Any]] | None, model: str) 
 
 
 def _read_cache(key: str) -> list[str] | None:  # 读缓存
-    """过期就丢。"""
-    item = _CACHE.get(key)  # 取
-    if item is None:  # 没有
-        return None  # 未命中
-    expires, queries = item  # 拆
-    if expires < time.time():  # 过期
-        _CACHE.pop(key, None)  # 删
-        return None  # 未命中
-    return list(queries)  # 命中
+    """过期由 TtlCache 处理；命中返回列表。"""
+    hit = _CACHE.get(key)  # 取（可能 None）
+    return list(hit) if hit is not None else None  # 命中转列表
 
 
 def _write_cache(key: str, queries: list[str], ttl: float) -> None:  # 写缓存
-    """超过 1024 条就清掉最旧的一半（够用了）。"""
-    if len(_CACHE) > 1024:  # 太大
-        for stale in list(_CACHE)[:512]:  # 清一半
-            _CACHE.pop(stale, None)  # 删除
-    _CACHE[key] = (time.time() + ttl, list(queries))  # 写入
+    """按本次 ttl 写入（成功/失败不同窗口）。"""
+    _CACHE.set(key, list(queries), ttl=float(ttl))  # 逐条 ttl 写入
 
 
 def _extract_json(raw: str) -> list[str] | None:  # 抠 JSON
