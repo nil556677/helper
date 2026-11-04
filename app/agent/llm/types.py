@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field  # 流式块与默认值
-from typing import Any, Literal  # 任意值 / 状态字面量
+from typing import Any  # 任意值
 
 from pydantic import BaseModel, ConfigDict, Field  # 校验模型
 
@@ -15,14 +15,11 @@ from app.agent.middleware.base import ModelRequest  # 请求形状复用中间�
 
 __all__ = [  # 对外导出
     "ModelChunk",  # 流式块
-    "ModelError",  # 错误载荷（后端填，模型不填）
     "ModelParams",  # 采样参数
     "ModelRequest",  # 请求形状（再导出）
     "ModelResult",  # 非流式结果
     "ModelUnavailable",  # 槽位没配全
     "ModelUsage",  # token 用量
-    "Result",  # 结构化结果信封
-    "ResultMeta",  # 信封元信息
 ]  # 导出结束
 
 
@@ -84,34 +81,3 @@ class ModelResult(BaseModel):  # 非流式结果
 
 class ModelUnavailable(RuntimeError):  # 槽位不可用
     """槽位没配全 / 密钥解不开：调用方应走兜底，**不要重试**。"""
-
-
-class ModelError(BaseModel):  # 错误载荷
-    """错误只由后端填（网络/限流/解析失败模型并不知道），模型侧 schema 里没有它。"""
-
-    code: str  # 错误码（rate_limit / server / timeout / config / schema_invalid）
-    message: str  # 人话说明
-    retryable: bool = False  # 是否值得再试
-
-
-class ResultMeta(BaseModel):  # 信封元信息
-    """后端补的元信息：尝试次数、槽位、耗时、协议版本。"""
-
-    attempt: int = 1  # 第几次尝试
-    model: str = ""  # 槽位名
-    elapsed_ms: int = 0  # 耗时
-    schema_version: int = 1  # 信封版本（只加不删）
-
-
-class Result(BaseModel):  # 结构化结果信封
-    """固定完整的信封：status / data / error / meta；模型只负责 data。"""
-
-    status: Literal["ok", "error"] = "ok"  # 成功 / 失败
-    data: Any = None  # 模型侧的 Pydantic 对象（失败时为 None）
-    error: ModelError | None = None  # 失败原因（后端填）
-    meta: ResultMeta = Field(default_factory=ResultMeta)  # 元信息
-
-    @property
-    def ok(self) -> bool:  # 是否成功
-        """方便调用方判分支。"""
-        return self.status == "ok" and self.data is not None  # 判定

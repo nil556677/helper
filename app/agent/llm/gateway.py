@@ -18,7 +18,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage  # �
 from loguru import logger  # 日志
 from pydantic import BaseModel  # 校验结构化目标必须是 Pydantic 模型
 
-from app.agent.contracts import EventType, make  # 重试事件
+from app.agent.contracts import ErrorCode, EventType, make  # 错误码单源 / 重试事件
 from app.agent.llm.params import to_chat_kwargs  # 参数翻译
 from app.agent.llm.repair import REGENERATE_LIMIT, structured_repair_request  # 修复请求
 from app.core.retry import RetryInfo, RetryPolicy, classify_error, retry_async  # 重试
@@ -31,15 +31,13 @@ from app.agent.llm.schema import (  # 结构化错误
 )
 from app.agent.llm.types import (  # 数据契约
     ModelChunk,  # 流式块
-    ModelError,  # 错误载荷
     ModelParams,  # 参数
     ModelRequest,  # 请求
     ModelResult,  # 非流式结果
     ModelUnavailable,  # 槽位不可用
     ModelUsage,  # 用量
-    Result,  # 结构化信封
-    ResultMeta,  # 信封元信息
 )
+from app.core.result import Result  # 唯一结果契约（结构化输出信封）
 from app.integrations.llm import chat_model  # 实例工厂（含密钥与缓存）
 
 #: 角色 → LangChain 消息类。
@@ -290,7 +288,7 @@ class ModelGateway:  # 模型网关
         except asyncio.CancelledError:  # 取消穿透
             raise  # 不兜底
         except Exception as exc:  # 结构化不可用（网关不支持）
-            if classify_error(exc) == "config":  # 配置错，降级也没用
+            if classify_error(exc) == str(ErrorCode.CONFIG):  # 配置错，降级也没用
                 return self._err("config", exc, 1, started, retryable=False)  # 直接失败
             logger.warning("结构化输出不可用，降级 JSON 模式：{}", exc)  # 记一笔
             try:  # 降级
@@ -311,7 +309,7 @@ class ModelGateway:  # 模型网关
             data, issues = _parse_text(schema, raw)  # 重新整份校验
 
         if issues:  # 修不好
-            return self._err_text("schema_invalid", issues_text(issues), attempt, started, retryable=True)  # 全量错误
+            return self._err_text(str(ErrorCode.SCHEMA_INVALID), issues_text(issues), attempt, started, retryable=True)  # 全量错误
         return self._ok(data, attempt, started)  # 成功
 
     async def _call_structured(  # 原生结构化通道
@@ -370,7 +368,7 @@ class ModelGateway:  # 模型网关
                 EventType.RETRY,  # 类型
                 attempt=attempt,  # 第几次
                 max_attempts=max_attempts,  # 总共
-                error_kind="schema_invalid",  # 格式/字段错
+                error_kind=str(ErrorCode.SCHEMA_INVALID),  # 格式/字段错
                 error_message=issues_text(issues)[:300],  # 全部错误摘要
                 delay_ms=0,  # 立刻重生成
                 scope="structured",  # 作用域
@@ -378,12 +376,18 @@ class ModelGateway:  # 模型网关
         )  # emit 结束
 
     def _ok(self, data: Any, attempt: int, started: float) -> Result:  # 成功信封
-        """status=ok，data 是校验过的 Pydantic 对象。"""
-        return Result(  # 信封
-            status="ok",  # 成功
-            data=data,  # 数据
-            meta=ResultMeta(attempt=attempt, model=self._slot, elapsed_ms=_elapsed_ms(started)),  # 元信息
-        )  # 信封结束
+        """成功：ok=True + 校验过的 data，域信息进 meta。"""
+        return Result(  # 统一结果
+            ok=True,  # 成功
+            code="ok",  # 成功码
+            data=data,  # 校验过的对象
+            meta={  # 元信息（统一扩展位）
+                "attempt": attempt,  # 第几次
+                "model": self._slot,  # 槽位
+                "elapsed_ms": _elapsed_ms(started),  # 耗时
+                "schema_version": 1,  # 协议版本
+            },  # 元信息结束
+        )  # 返回
 
     def _err(self, code: str, exc: BaseException, attempt: int, started: float, *, retryable: bool) -> Result:  # 失败信封
         """错误只由后端填（不交给模型）。"""
@@ -391,11 +395,18 @@ class ModelGateway:  # 模型网关
 
     def _err_text(self, code: str, message: str, attempt: int, started: float, *, retryable: bool) -> Result:  # 失败信封
         """错误文本已在手（比如全量字段错误）。"""
-        return Result(  # 信封
-            status="error",  # 失败
-            error=ModelError(code=code, message=message[:800], retryable=retryable),  # 原因
-            meta=ResultMeta(attempt=attempt, model=self._slot, elapsed_ms=_elapsed_ms(started)),  # 元信息
-        )  # 信封结束
+        return Result(  # 统一结果
+            ok=False,  # 失败
+            code=code,  # 错误码
+            message=message[:800],  # 说明（截断）
+            retryable=retryable,  # 是否可重试
+            meta={  # 元信息
+                "attempt": attempt,  # 第几次
+                "model": self._slot,  # 槽位
+                "elapsed_ms": _elapsed_ms(started),  # 耗时
+                "schema_version": 1,  # 协议版本
+            },  # 元信息结束
+        )  # 返回
 
 
 def _default_factory(slot: str, kwargs: dict[str, Any]) -> Any:  # 默认工厂

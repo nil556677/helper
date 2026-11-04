@@ -1,11 +1,12 @@
-"""契约层一致性：错误码单一来源、事件类型↔载荷一一对应、ToolResult 从 ResultEnvelope 派生。"""
+"""契约层一致性：错误码单一来源、事件类型↔载荷一一对应、TurnToolCall 从统一 Result 派生。"""
 
 from __future__ import annotations  # 延迟求值注解
 
-from app.agent.contracts import EventType, ResultEnvelope  # 契约
+from app.agent.contracts import EventType  # 契约
 from app.agent.contracts.events import PAYLOAD_BY_TYPE  # 事件载荷映射
 from app.agent.contracts.state import TurnToolCall  # 工具审计（唯一形状）
 from app.agent.contracts.tools import ErrorCode  # 唯一错误码来源
+from app.core.result import Result  # 唯一结果契约
 from app.core.retry import RETRYABLE_KINDS  # 可重试类别（成对核对）
 
 
@@ -31,8 +32,8 @@ def test_group_icons_cover_all_groups() -> None:  # 分组图标齐全
     assert all(icon for icon in GROUP_ICONS.values())  # 图标非空
 
 
-def test_turn_tool_call_from_ok_envelope() -> None:  # 成功映射
-    env = ResultEnvelope(ok=True, code="ok", data={"v": 1})  # 成功包络
+def test_turn_tool_call_from_ok_env() -> None:  # 成功映射
+    env = Result(ok=True, code="ok", data={"v": 1})  # 成功统一结果
     tr = TurnToolCall.from_env(env, tool_call_id="c1", name="demo", content="x")  # 派生
     assert tr.status == "ok"  # 状态
     assert tr.error_code == ""  # 无错误码
@@ -40,8 +41,8 @@ def test_turn_tool_call_from_ok_envelope() -> None:  # 成功映射
     assert tr.artifact == {"v": 1}  # 完整结果同源
 
 
-def test_turn_tool_call_from_error_envelope() -> None:  # 失败映射
-    env = ResultEnvelope(ok=False, code="execution.failed", message="boom")  # 失败包络
+def test_turn_tool_call_from_error_env() -> None:  # 失败映射
+    env = Result(ok=False, code="execution.failed", message="boom")  # 失败统一结果
     tr = TurnToolCall.from_env(env, tool_call_id="c1", name="demo")  # 派生
     assert tr.status == "error"  # 状态
     assert tr.error_code == "execution.failed"  # 错误码同源

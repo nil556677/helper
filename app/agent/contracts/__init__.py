@@ -45,7 +45,6 @@ from app.agent.contracts.state import (  # 共享状态契约
 from app.agent.contracts.tools import (  # 工具契约
     ErrorCode,
     Mutation,
-    ResultEnvelope,
     ToolDescriptor,
 )
 
@@ -69,7 +68,6 @@ __all__ = [  # 对外导出
     "IdRegistry",  # id 注册表
     "Mutation",  # 变更画像
     "Namer",  # 命名器
-    "ResultEnvelope",  # 结果包络
     "RouteDecision",  # 决策对象
     "StageGroup",  # 步骤分组
     "StageStatus",  # 步骤状态

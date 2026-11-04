@@ -41,14 +41,11 @@ from app.agent.llm.schema import (  # 结构化输出
 )
 from app.agent.llm.types import (  # 数据契约
     ModelChunk,  # 流式块
-    ModelError,  # 错误载荷
     ModelParams,  # 参数
     ModelRequest,  # 请求
     ModelResult,  # 结果
     ModelUnavailable,  # 不可用
     ModelUsage,  # 用量
-    Result,  # 结构化信封
-    ResultMeta,  # 信封元信息
 )
 from app.agent.llm.validate import (  # 校验
     DEFAULT_MIN_COVERAGE,  # 默认阈值
@@ -65,15 +62,12 @@ __all__ = [  # 对外导出
     "RETRYABLE_KINDS",  # 可重试类别
     "Issue",  # 单条字段错误
     "ModelChunk",  # 流式块
-    "ModelError",  # 错误载荷
     "ModelGateway",  # 网关
     "ModelParams",  # 参数
     "ModelRequest",  # 请求
     "ModelResult",  # 结果
     "ModelUnavailable",  # 不可用
     "ModelUsage",  # 用量
-    "Result",  # 结构化信封
-    "ResultMeta",  # 信封元信息
     "RetryInfo",  # 重试事实
     "RetryPolicy",  # 重试策略
     "StructuredModel",  # 结构化输出基类

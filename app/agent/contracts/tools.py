@@ -31,25 +31,13 @@ class ToolDescriptor(BaseModel):  # 工具对外契约（描述符）
     permissions: tuple[str, ...] = Field(default_factory=tuple)  # 权限标签
 
 
-class ResultEnvelope(BaseModel):  # 工具 / 任务统一返回包络
-    """带内错误（不抛业务异常），让模型能据返回推理下一步。"""
-
-    ok: bool  # 是否成功
-    code: str  # 错误码（protocol.* / execution.*）
-    message: str = ""  # 人话信息
-    retryable: bool = False  # 是否可重试
-    retry_after_s: float | None = None  # 建议等待秒数
-    data: Any = None  # 结果数据
-    meta: dict[str, Any] = Field(default_factory=dict)  # 元数据
-
-
 class ErrorCode:  # 错误码常量（唯一分类来源）
     """输出层、事件层、retry 分类都引用这些 code 字符串（跨域只走 ID，不 import）。
 
     三个层级共处一处，避免"工具一套、retry 一套、run 一套"漂移：
-    - ``protocol.*`` / ``execution.*`` / ``internal.*``：工具/业务错（ResultEnvelope 用）；
+    - ``protocol.*`` / ``execution.*`` / ``internal.*``：工具/业务错；
     - ``rate_limit / server / timeout / connection / config / unknown``：上游/瞬时分类，
-      与 ``core.retry.classify_error`` 的输出对齐（retry 事件、ModelError 用它）。
+      与 ``core.retry.classify_error`` 的输出对齐（retry 事件、结构化信封共用）。
     """
 
     # 协议层：工具不可用 / 参数错 / 无权限（不重试）
@@ -61,9 +49,11 @@ class ErrorCode:  # 错误码常量（唯一分类来源）
     EXECUTION_FAILED = "execution.failed"  # 执行失败
     EXECUTION_RATE_LIMIT = "execution.rate_limit"  # 被限流（可等后重试）
     EXECUTION_TIMEOUT = "execution.timeout"  # 超时
+    # 结构化：模型输出校验不过（重生成可救，同参重试无益）
+    SCHEMA_INVALID = "schema_invalid"  # 结构化输出校验失败
     # 内部层：工具实现 BUG / 未知异常（重试无用，标记不可重试，便于暴露问题）
     INTERNAL_ERROR = "internal.error"  # 内部错误（疑似代码 Bug）
-    # 上游/瞬时分类：与 core.retry.classify_error 的输出一一对应（retry 事件、ModelError 共用）
+    # 上游/瞬时分类：与 core.retry.classify_error 的输出一一对应（retry 事件、结构化信封共用）
     RATE_LIMIT = "rate_limit"  # 限流 429
     SERVER = "server"  # 服务端 5xx
     TIMEOUT = "timeout"  # 请求超时

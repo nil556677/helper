@@ -1,8 +1,7 @@
 """工具接线层：langchain 工具接到 agent 的唯一收口（校验 / 元数据 / bind / ToolNode 执行）。
 
 原则：只复用框架原生机制（`@tool` 派生 `BaseTool` / ``bind_tools`` / ``langgraph`` 的 ``ToolNode``），
-不另造并行执行模型；工具的「结果包络」统一用契约层 `ResultEnvelope`（带内错误，不抛异常。
-接入真实工具时在这里「收集 → 校验唯一 → 描述 → 绑定 → 建执行节点」，随后挂进 LangGraph 图。
+不另造并行执行模型；工具的「结果」统一用 `core.Result`（带内错误，不抛异常）。
 """
 
 from __future__ import annotations  # 类型注解延迟求值
@@ -17,9 +16,11 @@ from langgraph.prebuilt import ToolNode  # 框架原生工具执行节点
 from app.agent.contracts import (  # 契约
     IdRegistry,  # id 注册表（构图层强制唯一）
     Mutation,  # 变更画像
-    ResultEnvelope,  # 结果包络
     ToolDescriptor,  # 工具描述符
 )  # 契约导入结束
+from app.core.error import err as make_err  # 失败 Result（核心统一）
+from app.core.error import ok as make_ok  # 成功 Result（核心统一）
+from app.core.result import Result  # 唯一结果契约
 
 #: 工具名合法形状：小写蛇形、无点号、≤30；与 langchain 对工具名的约束一致。
 _NAME_RE = re.compile(r"^[a-z0-9_]{1,30}$")  # 名字正则
@@ -103,7 +104,7 @@ def make_tool_node(  # 建框架原生工具执行节点
     *,
     handle_tool_errors: bool = False,  # 工具异常是否上抛
 ) -> ToolNode:  # LangGraph 工具节点
-    """先过唯一性闸，再建 `langgraph.prebuilt.ToolNode`；默认不吞错，让带内 ResultEnvelope 流动。"""
+    """先过唯一性闸，再建 `langgraph.prebuilt.ToolNode`；默认不吞错，让带内 Result 流动。"""
     tools = validate_unique(tools)  # 分派靠 name，重名必炸，构图期拦下
     return ToolNode(  # 框架节点
         tools,  # 已校验工具
@@ -111,36 +112,30 @@ def make_tool_node(  # 建框架原生工具执行节点
     )  # 节点结束
 
 
-def ok(data: Any = None, **meta: Any) -> ResultEnvelope:  # 成功包络
-    """工具成功返回的统一入口；code="ok"。"""
-    return ResultEnvelope(ok=True, code="ok", data=data, meta=dict(meta))  # 包络
+def ok(data: Any = None, **meta: Any) -> Result:  # 成功 Result
+    """工具成功返回的统一入口（委托 core.error.ok）；code="ok"。"""
+    return make_ok(data, **meta)  # 核心统一
 
 
-def err(  # 失败包络
-    code: str,  # 错误码（用契约层 ErrorCode 常量）
-    message: str = "",  # 人话说明（给模型/调用方）
+def err(  # 失败 Result
+    code: str,  # 错误码（用 ErrorCode 常量）
+    message: str = "",  # 人话说明
     *,
     retryable: bool = True,  # 是否可重试
     retry_after_s: float | None = None,  # 建议等待秒数
-) -> ResultEnvelope:  # 包络
+) -> Result:  # 包络
     """带内错误：不抛异常，让调用方（含模型）据返回推理下一步。"""
-    return ResultEnvelope(  # 包络
-        ok=False,  # 失败
-        code=code,  # 错误码
-        message=message,  # 说明
-        retryable=retryable,  # 可重试标记
-        retry_after_s=retry_after_s,  # 建议等待
-    )  # 包络结束
+    return make_err(code, message, retryable=retryable, retry_after_s=retry_after_s)  # 核心统一
 
 
 def to_content_and_artifact(  # 拆分模型视角与审计视角
-    envelope: ResultEnvelope,  # 结果包络
+    env: Result,  # 统一结果
     model_view: Any,  # 喂给模型的子集
 ) -> tuple[Any, str]:  # (content, artifact)
     """对应 langchain ``content_and_artifact`` 语义：content 给模型，artifact 走审计。"""
-    return model_view, envelope.model_dump_json()  # 模型只看收敛文本，审计保留全文
+    return model_view, env.model_dump_json()  # 模型只看收敛文本，审计保留全文
 
 
-def render(envelope: ResultEnvelope) -> str:  # 把统包络转成给模型的 JSON 文本
+def render(env: Result) -> str:  # 把统一 Result 转成给模型的 JSON 文本
     """统一返回形：喂给模型的 ToolMessage 内容就是这段 JSON（错误时 message 模型可见）。"""
     return envelope.model_dump_json()  # JSON 文本

@@ -46,10 +46,10 @@ class TurnToolCall(BaseModel):  # 一次工具调用的审计记录
         content: str = "",  # 喂模型子集
         duration_ms: int | None = None,  # 耗时
     ) -> TurnToolCall:  # 审计记录
-        """把工具包络映射成审计记录；status/error_code/artifact 与包络同源。"""
-        from app.agent.contracts.tools import ResultEnvelope  # 延迟导入避免循环
+        """把统一 Result 映射成审计记录；status/error_code/artifact 与 Result 同源。"""
+        from app.core.result import Result  # 延迟导入避免循环
 
-        ok_env = envelope.ok if isinstance(envelope, ResultEnvelope) else bool(getattr(envelope, "ok", False))  # 是否成功
+        ok_env = envelope.ok if isinstance(envelope, Result) else bool(getattr(envelope, "ok", False))  # 是否成功
         data = getattr(envelope, "data", None)  # 完整结果（审计）
         return cls(  # 构造
             tool_call_id=tool_call_id,  # 关联

@@ -25,38 +25,15 @@ from inspect import isawaitable  # 判断可等待
 from typing import Any, Callable  # 类型
 
 from langchain_core.tools import StructuredTool  # 框架工具（返回包络）
-from loguru import logger  # 内部 Bug 记日志
 from pydantic import BaseModel  # 参数契约基类
 
-from app.agent.contracts import ErrorCode, Mutation  # 错误码 / 变更画像
-from app.core.retry import RETRYABLE_KINDS, classify_error  # 上游错误分类
+from app.agent.contracts import Mutation  # 变更画像
+from app.core.error import ResolveError, ok, resolve  # 统一错误基类/成功/分类
 from app.agent.tools.cache import TtlCache  # TTL 缓存（窗口内幂等）
-from app.agent.tools.wiring import err, ok  # 统一包络
 
 
-class ToolError(Exception):  # 业务错
-    """携带错误码与是否可重试；由 `tool_spec` 转成 err 包络。
-
-    工具作者用它表达「可预期的失败」（城市没查到、格式不对等）；其余异常走内部/执行层分流。
-    """
-
-    def __init__(  # 构造
-        self,  # 异常
-        code: str,  # 错误码（用 ErrorCode 常量）
-        message: str = "",  # 人话说明（给模型/调用方）
-        *,
-        retryable: bool = False,  # 是否可重试
-        retry_after_s: float | None = None,  # 建议等待秒数
-    ) -> None:  # 无返回
-        self.code = code or str(ErrorCode.EXECUTION_FAILED)  # 错误码（防空）
-        self.retryable = retryable  # 可重试标记
-        self.retry_after_s = retry_after_s  # 建议等待
-        super().__init__(message)  # 交给 Exception
-
-    @property  # 只读属性
-    def message(self) -> str:  # 取说明
-        """把 Exception 的 args[0] 当 message 用。"""
-        return str(self.args[0])  # 返回
+class ToolError(ResolveError):  # 工具业务错
+    """工具作者用它表达可预期失败；继承 `core.error.ResolveError`，分类/求解由 `resolve` 统一。"""
 
 
 def _args_key(kwargs: dict[str, Any], schema: type[BaseModel] | None = None) -> str:  # 参数 -> 缓存键
@@ -77,24 +54,9 @@ async def _maybe_await(value: Any) -> Any:  # 需要时 await
     return value  # 原样
 
 
-def _error_envelope(exc: BaseException, *, where: str = "") -> Any:  # 异常 -> 包络（优化点 1）
-    """错误统一映射（唯一一处）：
-    - `ToolError` -> 业务 err；
-    - 上游瞬时错（分类命中）-> execution.failed 可重试；
-    - 其余（疑似 BUG/config）-> 记日志 + internal.error 不可重试。
-    """
-    if isinstance(exc, ToolError):  # 业务错
-        return err(  # 带内
-            str(exc.code),  # 错误码
-            exc.message,  # 说明
-            retryable=exc.retryable,  # 可重试
-            retry_after_s=exc.retry_after_s,  # 建议等待
-        )  # 包络结束
-    kind = classify_error(exc)  # 分类（复用 llm.retry）
-    if kind in RETRYABLE_KINDS:  # 上游瞬时类
-        return err(str(ErrorCode.EXECUTION_FAILED), str(exc)[:300], retryable=True)  # 可重试
-    logger.opt(exception=exc).error("工具内部错误（{}）{}", where or "tool", str(exc)[:200])  # 记真 Bug
-    return err(str(ErrorCode.INTERNAL_ERROR), str(exc)[:300], retryable=False)  # 不可重试，暴露问题
+def _error_envelope(exc: BaseException, *, where: str = "") -> Any:  # 异常 → 统一 Result
+    """委托 `core.error.resolve`（唯一分类出处）：ToolError 业务错、上游瞬时可重试、Bug 不可重试。"""
+    return resolve(exc, where=where or "tool")  # 核心统一分类
 
 
 async def _compute_async(fn: Callable[..., Any], cache: TtlCache | None, key: str, kwargs: dict[str, Any]) -> Any:  # 异步计算
@@ -192,7 +154,7 @@ def tool_spec(  # 工具范式装饰器
     version: int = 1,  # 契约版本（破坏性变更 +1）
     permissions: tuple[str, ...] = (),  # 权限标签
 ) -> Callable[[Callable[..., Any]], StructuredTool]:  # 返回装饰器
-    """包成返回 `ResultEnvelope` 的 langchain 工具；错误/缓存/并发/元数据在此统一。"""
+    """包成返回 `core.Result` 的 langchain 工具；错误/缓存/并发/元数据在此统一。"""
     def deco(fn: Callable[..., Any]) -> StructuredTool:  # 装饰器本体
         cache = TtlCache(ttl=float(ttl)) if ttl is not None else None  # 可选缓存
 
