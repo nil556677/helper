@@ -56,6 +56,7 @@ class RunContext:  # 一轮运行的运行时上下文
     trace: Any = None  # 追踪 sink（core/trace 适配器）
     db: Any = None  # 本 run 的异步连接（AsyncDB；None=用同步回退，见 load_context）
     tool_counts: dict[str, int] = field(default_factory=dict)  # 工具计数
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)  # 本次运行工具调用汇总（trace 用）
     redactions: list[dict[str, Any]] = field(default_factory=list)  # 脱敏统计
     started_at: float = field(default_factory=time.perf_counter)  # 开始时间
     first_token_at: float | None = None  # 首 token 时间

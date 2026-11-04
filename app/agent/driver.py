@@ -79,6 +79,17 @@ async def _persist(ctx: RunContext, question: str, answer: str) -> None:  # 落�
         )  # 结束
 
 
+def _tools_summary(ctx: RunContext) -> dict[str, Any]:  # 工具调用汇总
+    """一次运行的工具调用聚合：次数 / 总耗时 / 缓存命中 / 出错次数。"""
+    calls = list(getattr(ctx, "tool_calls", None) or [])  # 逐条调用
+    return {  # 汇总
+        "count": len(calls),  # 次数
+        "total_ms": sum(int(item.get("ms") or 0) for item in calls),  # 总耗时
+        "hits_cached": sum(1 for item in calls if item.get("cached")),  # 缓存命中
+        "errors": sum(1 for item in calls if not item.get("ok")),  # 出错次数
+    }  # 返回
+
+
 def _update_trace(ctx: RunContext, state: dict[str, Any]) -> None:  # 补 trace 摘要
     """补 run 级汇总：route/answer/model/TTFT + 元数据；优先读最终 state（E3）。"""
     with contextlib.suppress(Exception):  # trace 失败不影响
@@ -93,6 +104,7 @@ def _update_trace(ctx: RunContext, state: dict[str, Any]) -> None:  # 补 trace 
             "usage": usage,  # 用量
             "gate": gate,  # 门限判决
             "basis": basis,  # 检索依据
+            "tools": _tools_summary(ctx),  # 工具调用汇总（可观测）
         }  # 元数据结束
         trace_store.update_run(  # 写
             ctx.run_id,  # run

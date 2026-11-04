@@ -7,12 +7,15 @@
 
 from __future__ import annotations  # 延迟求值注解
 
+import json  # 入参体积计数
+import time  # 工具耗时
 from typing import Any  # 任意值
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage  # 消息类型
 from langchain_core.runnables import RunnableConfig  # 图配置
 
 from app.agent.context import RunCancelled, current_run, ctx_from_config  # 上下文
+from app.core.trace.recorder import trace_tool  # 工具 trace 打点
 from app.agent.contexts import AgentContextSpec  # 上下文声明
 from app.agent.contexts import build as assemble_context  # 上下文装配器
 from app.agent.contexts.history import messages_from  # 轮次 -> 消息
@@ -161,15 +164,18 @@ def _make_fallback_call(evidence: list[dict[str, Any]]) -> Any:  # 无模型的�
 
 
 async def _exec_tool(name: str, args: dict[str, Any], evidence: list[dict[str, Any]]) -> str:  # 执行单个工具
-    """按名分派；统一把 ResultEnvelope 渲染成 JSON 喂模型；检索工具把证据累进 evidence。
+    """按名分派；统一把 core.Result 渲染成 JSON 喂模型；检索工具把证据累进 evidence。
 
-    每个工具执行包一个“查询中”步骤（running → done/failed），让前端看到过程进度。
+    每个工具执行包一个“查询中”步骤（running → done/failed）让前端看到进度；
+    结束后对此次调用做可观测记录：trace 打点 + run 级汇总（耗时/成败/缓存命中/错误码）。
     """
+    started = time.perf_counter()  # 记录开始（耗时）
     label = _TOOL_LABELS.get(name) or f"调用 {name}"  # 步骤标题（含“查询中”语义）
+    envelope: Any = None  # 统一结果（各分支都给）
     with stage(label, group=StageGroup.TOOL, name=str(name), detail=f"{label}…") as info:  # 查询中
         if name == "search_knowledge_base":  # 知识库检索
             try:  # 工具自身失败转带内
-                envelope = await search_knowledge_base.ainvoke(args)  # 统一包络
+                envelope = await search_knowledge_base.ainvoke(args)  # 统一结果
             except Exception as exc:  # 抛了
                 envelope = err(str(ErrorCode.EXECUTION_FAILED), f"检索执行失败：{exc}", retryable=True)  # 带内错误
             items = (getattr(envelope, "data", None) or {}).get("evidence") or []  # 本次证据
@@ -178,17 +184,47 @@ async def _exec_tool(name: str, args: dict[str, Any], evidence: list[dict[str, A
                 row["index"] = len(evidence) + 1  # 重新编号（引用校验按 1 起）
                 evidence.append(row)  # 累加
             info.detail = f"检索到 {len(items)} 段"  # 明细
-            return render(envelope)  # 包络 JSON 给模型
-        tool = {t.name: t for t in _TOOLS}.get(name)  # 其他工具
-        if tool is None:  # 不认识（防御）
-            info.detail = "工具不存在"  # 明细
-            return render(err(str(ErrorCode.PROTOCOL_TOOL_NOT_FOUND), f"工具 {name} 不存在"))  # 带内错误
-        try:  # 工具自身失败转带内
-            envelope = await tool.ainvoke(args)  # 统一包络
-        except Exception as exc:  # 抛了
-            envelope = err(str(ErrorCode.EXECUTION_FAILED), f"{name} 执行失败：{exc}", retryable=True)  # 带内错误
-        info.detail = "完成"  # 明细
-        return render(envelope)  # 包络 JSON 给模型
+            info.detail = f"{info.detail}（命中缓存）" if bool((envelope.meta or {}).get("cached")) else info.detail  # 命中提示
+        else:  # 其他工具
+            tool = {t.name: t for t in _TOOLS}.get(name)  # 按名取
+            if tool is None:  # 不认识（防御）
+                envelope = err(str(ErrorCode.PROTOCOL_TOOL_NOT_FOUND), f"工具 {name} 不存在")  # 带内错误
+                info.detail = "工具不存在"  # 明细
+            else:  # 正常工具
+                try:  # 工具自身失败转带内
+                    envelope = await tool.ainvoke(args)  # 统一结果
+                except Exception as exc:  # 抛了
+                    envelope = err(str(ErrorCode.EXECUTION_FAILED), f"{name} 执行失败：{exc}", retryable=True)  # 带内错误
+                info.detail = "完成"  # 明细
+                if bool((envelope.meta or {}).get("cached")):  # 命中缓存
+                    info.detail = "完成（命中缓存）"  # 提示秒回
+    # ---- 可观测：trace 打点 + run 级汇总 ----
+    ms = int((time.perf_counter() - started) * 1000)  # 本次耗时
+    cached = bool((envelope.meta or {}).get("cached"))  # 缓存命中
+    args_chars = len(json.dumps(args, ensure_ascii=False))  # 入参体积
+    output_chars = len(render(envelope))  # 喂模型的输出体积
+    trace_tool(  # 写进 trace（span kind=tool）
+        name,  # 工具名
+        ok=bool(envelope.ok),  # 成败
+        code=str(envelope.code or ""),  # 错误码
+        retryable=bool(envelope.retryable),  # 可重试
+        cached=cached,  # 缓存命中
+        args_chars=args_chars,  # 入参体积
+        output_chars=output_chars,  # 输出体积
+        error_message="" if envelope.ok else str(envelope.message or "")[:300],  # 错误摘要
+    )  # 结束
+    ctx = current_run()  # run 上下文（汇总用）
+    if ctx is not None:  # 有 run
+        ctx.tool_calls.append(  # 记录到 run 级
+            {  # 一条
+                "name": name,  # 工具名
+                "ok": bool(envelope.ok),  # 成败
+                "cached": cached,  # 缓存命中
+                "ms": ms,  # 耗时
+                "code": str(envelope.code or ""),  # 错误码
+            }  # 一条结束
+        )  # 追加结束
+    return render(envelope)  # 统一 Result 的 JSON 喂模型
 
 
 async def tool_agent_node(state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:  # 工具循环节点
