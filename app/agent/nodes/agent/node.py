@@ -145,6 +145,7 @@ async def tool_agent_node(state: dict[str, Any], config: RunnableConfig) -> dict
     citations: list[dict[str, Any]] = []  # 引用（只进 state）
     settings: dict[str, Any] = {}  # 本轮设置
     usage_total: dict[str, int] = {}  # 累计用量
+    streamed: list[str] = []  # 已流式发送的文本
     msgs = [dict(m) for m in messages]  # 可变的 dict 消息（历史 + 问题）
 
     if model is None:  # 无模型 → 原文兜底
@@ -153,24 +154,33 @@ async def tool_agent_node(state: dict[str, Any], config: RunnableConfig) -> dict
         note_kind = "error"  # 错误样式
     else:  # 官方 create_agent：模型/工具/取消/PII/限额由框架与中间件承担
         agent = build_react_agent(model, list(_TOOLS), system, run_limit=MAX_TOOL_ROUNDS)  # 构造
+        out_messages: list[Any] = []  # 输出消息
         with stage("工具决策", group=StageGroup.TOOL) as info:  # 过程步骤
-            try:  # 跑 agent
-                result = await agent.ainvoke(  # 官方 agent 执行
-                    {"messages": _lc_messages(msgs)},  # 历史 + 问题（system 走 system_prompt）
+            try:  # 流式跑 agent
+                async for mode, payload in agent.astream(  # 双模式：token + 状态快照
+                    {"messages": _lc_messages(msgs)},  # 输入（system 走 system_prompt）
                     config={"callbacks": [TraceCallbacks()]},  # 本地追踪单挂（唯一）
-                )  # 结束
+                    stream_mode=["messages", "values"],  # 模型 token + 完整状态
+                ):  # 迭代
+                    if mode == "messages":  # token 块
+                        chunk = payload[0] if isinstance(payload, tuple) else payload  # 消息块
+                        if getattr(chunk, "type", "") == "AIMessageChunk":  # 只看模型输出
+                            text = _text_of(getattr(chunk, "content", ""))  # 文本
+                            if text:  # 有内容
+                                ctx.mark_first_token()  # 首 token 计时
+                                streamed.append(text)  # 累积
+                                ctx.emit(delta_event(text))  # 实时发
+                    elif mode == "values":  # 完整状态
+                        out_messages = list((payload or {}).get("messages") or [])  # 记录
             except RunCancelled:  # 取消穿透
                 raise  # 交给上层
             except Exception:  # 模型/工具失败 → 原文兜底
                 answer_text = extractive(evidence)  # 回退原文
                 note = "模型调用失败，以下为资料原文。"  # 说明
                 note_kind = "error"  # 错误样式
-                result = None  # 标记
-            if result is not None:  # 成功
-                out_messages = list(result.get("messages") or [])  # 输出消息
-                if out_messages:  # 非空
-                    answer_text = _text_of(getattr(out_messages[-1], "content", ""))  # 最终回答
-                    usage_total = _usage_of(out_messages[-1])  # 用量
+            if out_messages:  # 成功
+                answer_text = _text_of(getattr(out_messages[-1], "content", ""))  # 最终回答
+                usage_total = _usage_of(out_messages[-1])  # 用量
                 evidence = _evidence_from_messages(out_messages, evidence)  # 从工具结果补证据
                 info.detail = f"已执行 {len(evidence)} 条引用"  # 明细
 
@@ -227,8 +237,8 @@ async def tool_agent_node(state: dict[str, Any], config: RunnableConfig) -> dict
             extra={k: v for k, v in usage.items() if k in {"cache_read_tokens", "cache_creation_tokens", "reasoning_tokens"}},  # 明细
         )  # 构造结束
     )  # 发射结束
-    if cleaned:  # 有正文
-        ctx.emit(delta_event(cleaned))  # 一次性发全文（非流式）
+    if cleaned and not streamed:  # 有正文且尚未流式发送（非流式/兜底）
+        ctx.emit(delta_event(cleaned))  # 一次性发全文
     return {  # 写回
         "answer": cleaned,  # 答案
         "fragments": citations,  # 引用

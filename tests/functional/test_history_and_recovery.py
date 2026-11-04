@@ -60,12 +60,12 @@ class _RecordingAgent:  # 记录模型输入的假 agent
         self.last_messages: list[Any] = []  # 最近输入
         self.last_config: Any = None  # 最近 config
 
-    async def ainvoke(self, payload: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 执行
+    async def astream(self, payload: dict[str, Any], config: Any = None, stream_mode: Any = None) -> Any:  # 流式
         self.last_messages = list((payload or {}).get("messages") or [])  # 记录输入
         self.last_config = config  # 记录 config
         from langchain_core.messages import AIMessage  # 局部导入
 
-        return {"messages": [AIMessage(content="模型答案")]}  # 固定响应
+        yield "values", {"messages": [AIMessage(content="模型答案")]}  # 只给最终状态
 
 
 async def _run(question: str, result: RagResult, conversation_id: str) -> None:  # 跑一轮
