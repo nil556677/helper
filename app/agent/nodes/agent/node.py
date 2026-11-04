@@ -251,6 +251,7 @@ async def tool_agent_node(state: dict[str, Any], config: RunnableConfig) -> dict
     bound = _bound_model()  # 带工具的模型（不可用为 None）
     evidence: list[dict[str, Any]] = list(state.get("evidence") or [])  # 播种证据（rag 已取）+ 工具新取
     answer_text = ""  # 最终回答
+    note_kind = "plain"  # 说明样式（失败类置 error）
     usage_total: dict[str, int] = {}  # 累计用量
     msgs = [dict(m) for m in messages]  # 可变的 dict 消息（历史 + 问题）
 
@@ -258,6 +259,7 @@ async def tool_agent_node(state: dict[str, Any], config: RunnableConfig) -> dict
     call = _make_call(bound) if bound is not None else _make_fallback_call(evidence)  # 最内层
     if bound is None:  # 无模型
         ctx.note = "模型未配置，以下为资料原文。"  # 说明
+        note_kind = "error"  # 错误样式
     with stage("工具决策", group=StageGroup.TOOL) as info:  # 步骤
         for _round in range(MAX_TOOL_ROUNDS):  # 每轮决策
             ctx.check_cancelled()  # 可取消
@@ -269,6 +271,7 @@ async def tool_agent_node(state: dict[str, Any], config: RunnableConfig) -> dict
             except Exception:  # 其他失败
                 answer_text = extractive(evidence)  # 回退原文
                 ctx.note = "模型调用失败，以下为资料原文。"  # 说明
+                note_kind = "error"  # 错误样式
                 break  # 退出循环
             call_items = getattr(response, "tool_calls", None) or []  # 工具调用
             if not call_items:  # 不再要工具
@@ -286,6 +289,7 @@ async def tool_agent_node(state: dict[str, Any], config: RunnableConfig) -> dict
             if not answer_text:  # 避免覆盖已回退内容
                 answer_text = "多次尝试后仍未完成回答，请补充信息或稍后再试。"  # 兜底
                 ctx.note = "工具循环达到上限。"  # 说明
+                note_kind = "error"  # 错误样式
 
     # ---- 与现有 answer 相同的收尾：校验 / 回退 / 引用 / 事件 ----
     model_name = "未配置模型"  # 默认
@@ -299,7 +303,8 @@ async def tool_agent_node(state: dict[str, Any], config: RunnableConfig) -> dict
 
     if not answer_text and not evidence and not any(_readable_text(item).strip() for item in attachments):  # 空答
         ctx.note = "没有在本地资料里找到相关内容，换个说法试试。"  # 说明
-        return {"note": ctx.note}  # 说明
+        note_kind = "error"  # 错误样式
+        return {"note": ctx.note, "note_kind": note_kind}  # 说明
 
     if not evidence:  # 无证据但有附件/原文
         answer_text = answer_text or extractive([])  # 兜底
@@ -345,8 +350,12 @@ async def tool_agent_node(state: dict[str, Any], config: RunnableConfig) -> dict
         "answer": cleaned,  # 答案
         "fragments": ctx.citations,  # 引用
         "note": ctx.note,  # 说明
+        "note_kind": note_kind,  # 说明样式
         "evidence": evidence,  # 证据
         "usage": ctx.usage,  # 用量
+        "settings": ctx.settings,  # 本轮设置
+        "reasoning": ctx.reasoning,  # 思考流
+        "conflict": ctx.conflict,  # 冲突提示
     }  # 返回结束
 
 

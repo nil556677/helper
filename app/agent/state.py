@@ -1,57 +1,36 @@
-"""LangGraph 的状态（只放可序列化值）。"""
+"""LangGraph 的状态（只放可序列化业务值）。
 
-from __future__ import annotations  # 类型注解延迟求值
+边界铁律：**业务数据只进 ChatState；进程内副作用（emit/取消/状态机/计时/步骤累积）只进
+RunContext**。本文件不定义 reducer（steps 过程累积在 RunContext，不用图 channel）。
+"""
 
-from typing import Annotated, Any, TypedDict  # 状态类型工具
+from __future__ import annotations  # 延迟求值注解
 
-
-def merge_steps(current: list[dict[str, Any]], update: list[dict[str, Any]]) -> list[dict[str, Any]]:  # 步骤合并
-    """按 ``id`` 合并步骤：同 id 覆盖、否则追加。
-
-    为什么不用 ``operator.add``：恢复/重放时同一步骤会被加两次 → 重复。按 ``id`` 覆盖让
-    重放幂等（同一个调用点派的 stage_id 只留一份）。
-    """
-    out = list(current or [])  # 现有
-    index: dict[str, int] = {}  # id → 索引
-    for i, item in enumerate(out):  # 建索引
-        if item.get("id") is not None:  # 有 id
-            index[str(item["id"])] = i  # 记录
-    for item in update or []:  # 逐条更新
-        ident = item.get("id")  # 取 id
-        if ident is not None and str(ident) in index:  # 已存在
-            out[index[str(ident)]] = item  # 覆盖（保持顺序）
-        else:  # 新增
-            if ident is not None:  # 有 id
-                index[str(ident)] = len(out)  # 记录索引
-            out.append(item)  # 追加
-    return out  # 返回
+from typing import Any, TypedDict  # 状态类型工具
 
 
 class ChatState(TypedDict, total=False):  # 图状态（字段都可缺省）
     # 输入
     question: str  # 用户问题
-    attachments: list[dict[str, Any]]  # 本轮附件（含可读文本）
+    attachments: list[dict[str, Any]]  # 本轮附件（元数据，正文不入 state）
     conversation_id: str  # 会话 id
+    summary: str  # 滚动摘要（load_context 写、装配读）
 
     # 多轮
     turns: list[dict[str, Any]]  # 对话历史（Turn 的 JSON 形态；成对、只喂 done）
 
-    # 路由
-    route: dict[str, Any]  # 路由决策
-    pending: dict[str, Any]  # 待补参数
-    clarify_prompt: str  # 补参提示语
+    # 路由（唯一决策对象）
+    route: dict[str, Any]  # RouteDecision 的 JSON 形态；迁移与边路由都读它
 
     # 检索
     hits: list[dict[str, Any]]  # 召回命中
     evidence: list[dict[str, Any]]  # 证据片段
-    route: dict[str, Any]  # 唯一决策对象（RouteDecision 的 JSON 形态；迁移与边路由都读它）
 
     # 答复
     answer: str  # 回答正文
     note: str  # 一句说明
-    note_kind: str  # 说明样式
+    note_kind: str  # 说明样式（plain 普通 / error 错误）
     fragments: list[dict[str, Any]]  # 引用片段
-    turn: dict[str, Any]  # 一大轮的完整形状
     usage: dict[str, Any]  # token 用量（可序列化）
 
     # 元数据（对账 / checkpoint 定位）
@@ -65,8 +44,3 @@ class ChatState(TypedDict, total=False):  # 图状态（字段都可缺省）
     gate: dict[str, Any]  # 证据门限判决（pass/weak/reject）
     reasoning: str  # 模型思考流
     conflict: str  # 资料与通用知识的冲突提示
-
-    # 可观测
-    steps: Annotated[list[dict[str, Any]], merge_steps]  # 过程步骤（按 id 合并，重放不重复）
-    started_at: float  # 开始时间
-    error: str  # 错误信息

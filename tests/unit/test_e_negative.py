@@ -14,7 +14,6 @@ from app.agent import (
     reconcile,  # 对账
 )
 from app.agent.run import RunSession  # 运行会话
-from app.agent.state import merge_steps  # reducer
 from app.core.db import schema_v1  # 建表
 from app.core.db.connection import connect, get_connection  # 连接
 from app.services import attachments  # 附件
@@ -45,13 +44,6 @@ def test_load_text_missing_path_returns_empty() -> None:  # 反：无 path
 
 def test_load_text_missing_file_returns_empty() -> None:  # 反：文件不存在
     assert attachments.load_text({"path": str(Path(".tmp") / "no-such.txt")}) == ""  # 空
-
-
-# ---------- merge_steps reducer 正反 ----------
-
-def test_merge_steps_empty_inputs() -> None:  # 反/边界：空输入
-    assert merge_steps([], []) == []  # 空
-    assert merge_steps(None, None) == []  # None 防御
 
 
 # ---------- 统一结果契约（core.Result）字段完整性 ----------

@@ -130,6 +130,8 @@ def make_rag_node(runner: RagRunner):  # 工厂
             "evidence": result.evidence if answerable else [],  # 不可答时清空（只留决策）
             "hits": result.hits,  # 命中
             "note": ctx.note if ctx is not None else "",  # 说明
+            "basis": basis if ctx is not None else {},  # 检索依据（只进 state）
+            "gate": gate,  # 门限判决（只进 state）
             "route": route.model_dump(mode="json"),  # 唯一决策对象（JSON 形态，可直接进 checkpoint）
         }  # 返回结束
 
