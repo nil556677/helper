@@ -10,6 +10,7 @@ from app.agent.context import ctx_from_config  # 上下文
 from app.agent.events import note as note_event  # 说明事件
 from app.agent.persist import persist_turn, persist_turn_async  # 统一落库
 from app.agent.stages import stage  # 步骤事件
+from app.services import attachments as attachment_service  # 附件公开字段
 
 
 async def _persist(state: dict[str, Any], ctx: Any) -> None:  # 落库（异步优先）
@@ -20,10 +21,10 @@ async def _persist(state: dict[str, Any], ctx: Any) -> None:  # 落库（异步�
     fragments = list(state.get("fragments") or [])  # 引用
     # checkpoint 会按会话保留上一轮的 answer/fragments；本轮若没真正生成（拒绝/仅说明），
     # ctx.partial_answer 为空，必须落空答案并清引用，避免把上一轮旧答案写进新消息。
-    if ctx is not None and not ctx.partial_answer and not ctx.citations:  # 本轮未生成
+    if ctx is not None and not ctx.partial_answer and not fragments:  # 本轮未生成
         answer = ""  # 清掉旧答案
         fragments = []  # 清掉旧引用
-    note = str(state.get("note") or (ctx.note if ctx is not None else ""))  # 说明
+    note = str(state.get("note") or "")  # 说明
     kwargs = {  # 共用参数
         "conversation_id": conversation_id,  # 会话
         "question": question,  # 问题
@@ -31,6 +32,12 @@ async def _persist(state: dict[str, Any], ctx: Any) -> None:  # 落库（异步�
         "note": note,  # 说明
         "note_kind": str(state.get("note_kind") or "plain"),  # 样式
         "fragments": fragments,  # 引用（本轮未生成时已清空）
+        "basis": dict(state.get("basis") or {}),  # 检索依据
+        "settings": dict(state.get("settings") or {}),  # 设置
+        "usage": dict(state.get("usage") or {}),  # 用量
+        "reasoning": str(state.get("reasoning") or ""),  # 思考
+        "conflict": str(state.get("conflict") or ""),  # 冲突提示
+        "attachments": [attachment_service.public(item) for item in (state.get("attachments") or [])],  # 附件公开
     }  # 参数结束
     if ctx is not None and getattr(ctx, "db", None) is not None:  # 有异步连接
         await persist_turn_async(ctx, **kwargs)  # 异步
@@ -43,6 +50,7 @@ async def finalize_node(state: dict[str, Any], config: RunnableConfig) -> dict[s
     ctx = ctx_from_config(config)  # 上下文
     with stage("收尾"):  # 步骤（不给 group：只埋 trace，收尾不属于用户步骤）
         await _persist(state, ctx)  # 落库（异步优先）
-        if ctx is not None and ctx.note:  # 新链路且有说明
-            ctx.emit(note_event(ctx.note))  # 发说明
+        note = str(state.get("note") or "")  # 说明（只进 state）
+        if note:  # 有说明
+            ctx.emit(note_event(note))  # 发说明
     return {}  # 不改状态

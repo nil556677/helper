@@ -251,14 +251,18 @@ async def tool_agent_node(state: dict[str, Any], config: RunnableConfig) -> dict
     bound = _bound_model()  # 带工具的模型（不可用为 None）
     evidence: list[dict[str, Any]] = list(state.get("evidence") or [])  # 播种证据（rag 已取）+ 工具新取
     answer_text = ""  # 最终回答
+    note = ""  # 说明（只进 state）
     note_kind = "plain"  # 说明样式（失败类置 error）
+    usage: dict[str, Any] = {}  # 用量（只进 state）
+    citations: list[dict[str, Any]] = []  # 引用（只进 state）
+    settings: dict[str, Any] = {}  # 本轮设置
     usage_total: dict[str, int] = {}  # 累计用量
     msgs = [dict(m) for m in messages]  # 可变的 dict 消息（历史 + 问题）
 
     # 最内层调用：模型可用则带工具，不可用则回退原文（仍走中间件链，与 answer 一致）
     call = _make_call(bound) if bound is not None else _make_fallback_call(evidence)  # 最内层
     if bound is None:  # 无模型
-        ctx.note = "模型未配置，以下为资料原文。"  # 说明
+        note = "模型未配置，以下为资料原文。"  # 说明
         note_kind = "error"  # 错误样式
     with stage("工具决策", group=StageGroup.TOOL) as info:  # 步骤
         for _round in range(MAX_TOOL_ROUNDS):  # 每轮决策
@@ -270,7 +274,7 @@ async def tool_agent_node(state: dict[str, Any], config: RunnableConfig) -> dict
                 raise  # 交给上层
             except Exception:  # 其他失败
                 answer_text = extractive(evidence)  # 回退原文
-                ctx.note = "模型调用失败，以下为资料原文。"  # 说明
+                note = "模型调用失败，以下为资料原文。"  # 说明
                 note_kind = "error"  # 错误样式
                 break  # 退出循环
             call_items = getattr(response, "tool_calls", None) or []  # 工具调用
@@ -288,7 +292,7 @@ async def tool_agent_node(state: dict[str, Any], config: RunnableConfig) -> dict
         else:  # 轮次用尽没说话
             if not answer_text:  # 避免覆盖已回退内容
                 answer_text = "多次尝试后仍未完成回答，请补充信息或稍后再试。"  # 兜底
-                ctx.note = "工具循环达到上限。"  # 说明
+                note = "工具循环达到上限。"  # 说明
                 note_kind = "error"  # 错误样式
 
     # ---- 与现有 answer 相同的收尾：校验 / 回退 / 引用 / 事件 ----
@@ -298,13 +302,13 @@ async def tool_agent_node(state: dict[str, Any], config: RunnableConfig) -> dict
         model_name = str(row["model"]) if row is not None and row["model"] else model_name  # 模型
     except Exception:  # 读不到不阻断
         pass  # 默认
-    ctx.settings = {"model": model_name, "temperature": 0.2, "system_prompt": system}  # 设置
+    settings = {"model": model_name, "temperature": 0.2, "system_prompt": system}  # 本轮设置（只进 state）
     ctx.emit(settings_event(model_name, 0.2, system, {"evidence": len(evidence)}))  # 设置事件
 
     if not answer_text and not evidence and not any(_readable_text(item).strip() for item in attachments):  # 空答
-        ctx.note = "没有在本地资料里找到相关内容，换个说法试试。"  # 说明
+        note = "没有在本地资料里找到相关内容，换个说法试试。"  # 说明
         note_kind = "error"  # 错误样式
-        return {"note": ctx.note, "note_kind": note_kind}  # 说明
+        return {"note": note, "note_kind": note_kind}  # 说明
 
     if not evidence:  # 无证据但有附件/原文
         answer_text = answer_text or extractive([])  # 兜底
@@ -312,20 +316,20 @@ async def tool_agent_node(state: dict[str, Any], config: RunnableConfig) -> dict
     cleaned, used = result.text, result.valid  # 清理后正文与有效编号
     fallback = extractive(evidence)  # 原文
     if evidence and answer_text.strip() and not used and answer_text.strip() != fallback.strip():  # 有证据却没引
-        ctx.note = "模型没给出能溯源的引用，已改为资料原文。"  # 说明
+        note = "模型没给出能溯源的引用，已改为资料原文。"  # 说明
         cleaned = fallback  # 换原文
     elif result.missing:  # 有引用但资料失效
-        ctx.note = "部分引用的资料已不可用，相关角标已移除。"  # 说明
-    if result.unsupported and not ctx.note:  # 有句没被支撑
-        ctx.note = "部分内容未能在资料中找到出处，请对照引用原文核对。"  # 只提示不删
-    ctx.citations = _fragments(used, evidence)  # 记录引用
+        note = "部分引用的资料已不可用，相关角标已移除。"  # 说明
+    if result.unsupported and not note:  # 有句没被支撑
+        note = "部分内容未能在资料中找到出处，请对照引用原文核对。"  # 只提示不删
+    citations = _fragments(used, evidence)  # 记录引用
     if result.missing:  # 失效的也列出
-        ctx.citations += _fragments(result.missing, evidence, verified=False)  # 追加
-    ctx.partial_answer = cleaned  # 记录
-    ctx.usage.update(usage_total)  # 用量
-    ctx.usage["completion_chars"] = len(cleaned)  # 简单用量
+        citations += _fragments(result.missing, evidence, verified=False)  # 追加
+    ctx.partial_answer = cleaned  # 记录（流式中间态；取消落库用）
+    usage = dict(usage_total)  # 用量
+    usage["completion_chars"] = len(cleaned)  # 简单用量
     ctx.emit(  # 引用事件
-        citation_event(ctx.citations),  # 引用
+        citation_event(citations),  # 引用
     )  # 发射结束
     ctx.emit(  # 校验结论
         verify_event(  # 构造
@@ -339,23 +343,23 @@ async def tool_agent_node(state: dict[str, Any], config: RunnableConfig) -> dict
     )  # 发射结束
     ctx.emit(  # 用量事件
         usage_event(  # 构造
-            int(ctx.usage.get("prompt_tokens") or 0),  # 输入
-            int(ctx.usage.get("completion_tokens") or len(cleaned)),  # 输出
-            extra={k: v for k, v in ctx.usage.items() if k in {"cache_read_tokens", "cache_creation_tokens", "reasoning_tokens"}},  # 明细
+            int(usage.get("prompt_tokens") or 0),  # 输入
+            int(usage.get("completion_tokens") or len(cleaned)),  # 输出
+            extra={k: v for k, v in usage.items() if k in {"cache_read_tokens", "cache_creation_tokens", "reasoning_tokens"}},  # 明细
         )  # 构造结束
     )  # 发射结束
     if cleaned:  # 有正文
         ctx.emit(delta_event(cleaned))  # 一次性发全文（非流式）
     return {  # 写回
         "answer": cleaned,  # 答案
-        "fragments": ctx.citations,  # 引用
-        "note": ctx.note,  # 说明
+        "fragments": citations,  # 引用
+        "note": note,  # 说明
         "note_kind": note_kind,  # 说明样式
         "evidence": evidence,  # 证据
-        "usage": ctx.usage,  # 用量
-        "settings": ctx.settings,  # 本轮设置
-        "reasoning": ctx.reasoning,  # 思考流
-        "conflict": ctx.conflict,  # 冲突提示
+        "usage": usage,  # 用量
+        "settings": settings,  # 本轮设置
+        "reasoning": "",  # 思考流（非流式无）
+        "conflict": "",  # 冲突提示（非流式无）
     }  # 返回结束
 
 

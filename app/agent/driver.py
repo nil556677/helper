@@ -65,8 +65,8 @@ async def _persist(ctx: RunContext, question: str, answer: str) -> None:  # 落�
             conversation_id=ctx.conversation_id,
             question=question,
             answer=answer,
-            note=ctx.note,
-            fragments=ctx.citations,
+            note="",
+            fragments=[],
         )  # 结束
     else:  # 同步回退
         persist_turn(
@@ -74,8 +74,8 @@ async def _persist(ctx: RunContext, question: str, answer: str) -> None:  # 落�
             conversation_id=ctx.conversation_id,
             question=question,
             answer=answer,
-            note=ctx.note,
-            fragments=ctx.citations,
+            note="",
+            fragments=[],
         )  # 结束
 
 
@@ -93,14 +93,14 @@ def _tools_summary(ctx: RunContext) -> dict[str, Any]:  # 工具调用汇总
 def _update_trace(ctx: RunContext, state: dict[str, Any]) -> None:  # 补 trace 摘要
     """补 run 级汇总：route/answer/model/TTFT + 元数据；优先读最终 state（E3）。"""
     with contextlib.suppress(Exception):  # trace 失败不影响
-        usage = dict(state.get("usage") or ctx.usage)  # 用量（state 优先）
-        gate = dict(state.get("gate") or ctx.gate)  # 门限
-        basis = dict(state.get("basis") or ctx.basis)  # 依据
+        usage = dict(state.get("usage") or {})  # 用量（只读 state）
+        gate = dict(state.get("gate") or {})  # 门限（只读 state）
+        basis = dict(state.get("basis") or {})  # 依据（只读 state）
         status = str(state.get("status") or ctx.machine.state.value)  # 终态
         metadata = {  # 元数据（E 的对账会用）
             "turn_id": str(state.get("turn_id") or ctx.turn_id),  # 轮次 id
             "status": status,  # 运行状态
-            "attempt": int(state.get("attempt") or ctx.attempt),  # 尝试次数
+            "attempt": int(state.get("attempt") or 1),  # 尝试次数
             "usage": usage,  # 用量
             "gate": gate,  # 门限判决
             "basis": basis,  # 检索依据
@@ -119,14 +119,14 @@ def _update_trace(ctx: RunContext, state: dict[str, Any]) -> None:  # 补 trace 
 async def _update_trace_async(ctx: RunContext, state: dict[str, Any]) -> None:  # 补 trace（异步）
     """与 ``_update_trace`` 同内容，经 ``ctx.db`` 异步写（单一异步写者）。"""
     with contextlib.suppress(Exception):  # trace 失败不影响
-        usage = dict(state.get("usage") or ctx.usage)  # 用量
-        gate = dict(state.get("gate") or ctx.gate)  # 门限
-        basis = dict(state.get("basis") or ctx.basis)  # 依据
+        usage = dict(state.get("usage") or {})  # 用量（只读 state）
+        gate = dict(state.get("gate") or {})  # 门限（只读 state）
+        basis = dict(state.get("basis") or {})  # 依据（只读 state）
         status = str(state.get("status") or ctx.machine.state.value)  # 终态
         metadata = {  # 元数据
             "turn_id": str(state.get("turn_id") or ctx.turn_id),  # 轮次 id
             "status": status,  # 状态
-            "attempt": int(state.get("attempt") or ctx.attempt),  # 尝试
+            "attempt": int(state.get("attempt") or 1),  # 尝试
             "usage": usage,  # 用量
             "gate": gate,  # 门限
             "basis": basis,  # 依据
@@ -144,27 +144,14 @@ async def _update_trace_async(ctx: RunContext, state: dict[str, Any]) -> None:  
         )  # 写结束
 
 
-def _seal_state(ctx: RunContext, state: dict[str, Any], status: str) -> None:  # 封业务字段进 state
-    """把 ctx 里还没进 state 的业务字段补进最终 state（E3：state 为最终快照）。
-
-    单一出口——图结束后在这里对齐一次，避免各节点残留的双真相漏到 checkpoint/对账。
-    """
-    fields = {  # 从 ctx 取 → state 的映射
-        "usage": dict(ctx.usage),  # 用量
-        "settings": dict(ctx.settings),  # 设置
-        "basis": dict(ctx.basis),  # 依据
-        "gate": dict(ctx.gate),  # 门限
-        "reasoning": ctx.reasoning,  # 思考
-        "conflict": ctx.conflict,  # 冲突
-        "turn_id": ctx.turn_id,  # 轮次 id
-        "status": status,  # driver 终态（done/cancelled/failed）
-        "attempt": int(ctx.attempt),  # 尝试次数
-        "steps": list(ctx.steps),  # 过程步骤
-    }  # 映射结束
-    for key, value in fields.items():  # 逐字段
+def _seal_state(ctx: RunContext, state: dict[str, Any], status: str) -> None:  # 封终态进 state
+    """只补 driver 才知道的终态与轮次身份；业务字段由节点返回进 state（单一来源）。"""
+    for key, value in {  # 仅三项
+        "turn_id": ctx.turn_id,  # 轮次 id（落库后回填）
+        "status": status,  # 终态（done/cancelled/failed）
+        "attempt": int(state.get("attempt") or 1),  # 尝试次数（缺省 1）
+    }.items():  # 逐项
         state.setdefault(key, value)  # 只补缺的
-    state.setdefault("answer", ctx.partial_answer)  # 兜底答案
-    state.setdefault("note", ctx.note)  # 兜底说明
 
 
 def _sink_run_id(emit: Any, run_id: str) -> None:  # 回填 run id
@@ -192,7 +179,7 @@ async def _run_graph(  # 跑父图并驱动状态机
         },  # configurable 结束
         "metadata": {  # checkpoint 元数据（对账定位）
             "turn_id": ctx.turn_id,  # 轮次
-            "attempt": int(ctx.attempt),  # 尝试次数
+            "attempt": int(initial_state.get("attempt") or 1),  # 尝试次数
         },  # 元数据结束
         "recursion_limit": RECURSION_LIMIT,  # 图步上限
     }  # config 结束
@@ -214,7 +201,7 @@ async def _run_graph(  # 跑父图并驱动状态机
             events.done(  # 完成事件
                 ctx.first_token_ms or 0,  # 首 token
                 ctx.elapsed_ms,  # 总耗时
-                ctx.usage,  # 用量
+                dict(final_state.get("usage") or {}),  # 用量（读 state）
             )  # 事件结束
         )  # emit 结束
     return final_state  # 返回权威最终状态

@@ -17,7 +17,6 @@ from app.agent.context import RunContext  # 上下文
 from app.agent.driver import drive  # 驱动器
 from app.agent.events import EventType  # 事件类型
 from app.agent.middleware.base import ModelResponse  # 响应形状
-from app.agent.nodes.answer import node as answer_mod  # 生成节点（换假链）
 from app.agent.nodes.rag.node import RagResult  # 检索结果
 from app.core.db import schema_v1  # 建表
 from app.core.db.connection import close_thread_connection, connect  # 连接
@@ -82,19 +81,14 @@ def _state_path(events: list[Any]) -> list[str]:  # 提取 state 事件 after �
 
 
 async def _run(result: RagResult) -> _Sink:  # 跑一轮
-    """真实父图 + 假检索 + 假模型，收集事件。"""
-    orig = answer_mod._CHAIN  # 存原链
-    answer_mod._CHAIN = _Chain()  # 换假链
-    try:  # 用完还原
-        graph = build_agent_graph(_Runner(result))  # 父图
-        sink = _Sink()  # 事件出口
-        ctx = RunContext(run_id="r", question="问题", conversation_id="c1", emit=sink)  # 上下文
-        initial = {"question": "问题", "conversation_id": "c1", "turns": [], "attachments": []}  # 初始
-        result_drive = await drive(graph, ctx, initial_state=initial)  # 驱动
-        assert result_drive.status == "done"  # 终态正常
-        return sink  # 事件
-    finally:  # 还原
-        answer_mod._CHAIN = orig  # 还原
+    """真实父图 + 假检索；模型未配置时走原文回退，事件完整。"""
+    graph = build_agent_graph(_Runner(result))  # 父图
+    sink = _Sink()  # 事件出口
+    ctx = RunContext(run_id="r", question="问题", conversation_id="c1", emit=sink)  # 上下文
+    initial = {"question": "问题", "conversation_id": "c1", "turns": [], "attachments": []}  # 初始
+    result_drive = await drive(graph, ctx, initial_state=initial)  # 驱动
+    assert result_drive.status == "done"  # 终态正常
+    return sink  # 事件
 
 
 async def test_driver_drives_state_machine_on_answer_path() -> None:  # 有证据链路

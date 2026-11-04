@@ -104,6 +104,8 @@ def make_rag_node(runner: RagRunner):  # 工厂
             reason=decision or "no_evidence",  # 人话原因（进 trace）
             version=1,  # 输出契约版本
         )  # 决策结束
+        note = ""  # 说明（只进 state）
+        basis: dict[str, Any] = {}  # 检索依据（只进 state）
         if ctx is not None:  # 新链路
             basis = {  # 检索依据
                 "keywords": _keywords(question),  # 关键词
@@ -118,19 +120,17 @@ def make_rag_node(runner: RagRunner):  # 工厂
                 "rewrite": planned.reason,  # 改写结论（used/skipped/unconfigured/…）
                 "queries": list(planned.queries),  # 实际查过的查询
             }  # 依据结束
-            ctx.basis = basis  # 记录
-            ctx.gate = gate  # 记录（落库/轨迹用）
             ctx.emit(basis_event(basis["keywords"], basis["hit_counts"], basis["sources"]))  # 事件
             if answerable:  # 有可用证据或可读附件
                 if decision == "weak" and not has_files:  # 证据偏弱/偏少
-                    ctx.note = "证据较弱：以下回答请对照引用原文核对。"  # 提示
+                    note = "证据较弱：以下回答请对照引用原文核对。"  # 提示
             else:  # 不可答
-                ctx.note = _reject_note(gate) if decision == "reject" else "没有在本地资料里找到相关内容，换个说法试试。"  # 说明
+                note = _reject_note(gate) if decision == "reject" else "没有在本地资料里找到相关内容，换个说法试试。"  # 说明
         return {  # 写回
             "evidence": result.evidence if answerable else [],  # 不可答时清空（只留决策）
             "hits": result.hits,  # 命中
-            "note": ctx.note if ctx is not None else "",  # 说明
-            "basis": basis if ctx is not None else {},  # 检索依据（只进 state）
+            "note": note,  # 说明（只进 state）
+            "basis": basis,  # 检索依据（只进 state）
             "gate": gate,  # 门限判决（只进 state）
             "route": route.model_dump(mode="json"),  # 唯一决策对象（JSON 形态，可直接进 checkpoint）
         }  # 返回结束

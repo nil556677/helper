@@ -53,29 +53,17 @@ class RunContext:  # 一轮运行的运行时上下文
     emit: Callable[[events.EventEnvelope], None] = _drop  # 事件出口
     machine: RunMachine = field(default_factory=RunMachine)  # 状态机
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)  # 取消信号
-    trace: Any = None  # 追踪 sink（core/trace 适配器）
     db: Any = None  # 本 run 的异步连接（AsyncDB；None=用同步回退，见 load_context）
-    tool_counts: dict[str, int] = field(default_factory=dict)  # 工具计数
     tool_calls: list[dict[str, Any]] = field(default_factory=list)  # 本次运行工具调用汇总（trace 用）
     redactions: list[dict[str, Any]] = field(default_factory=list)  # 脱敏统计
     started_at: float = field(default_factory=time.perf_counter)  # 开始时间
     first_token_at: float | None = None  # 首 token 时间
-    partial_answer: str = ""  # 已生成的部分答案（取消时保留）
-    citations: list[dict[str, Any]] = field(default_factory=list)  # 合法引用
-    usage: dict[str, Any] = field(default_factory=dict)  # token 用量
-    note: str = ""  # 无证据/失败说明
+    partial_answer: str = ""  # 已生成的部分答案（流式中间态；最终进 state.answer）
     persisted: bool = False  # 是否已落库
-    steps: list[dict[str, Any]] = field(default_factory=list)  # 过程步骤（落库用）
-    basis: dict[str, Any] = field(default_factory=dict)  # 检索依据
-    gate: dict[str, Any] = field(default_factory=dict)  # 证据门限判决（pass/weak/reject）
-    settings: dict[str, Any] = field(default_factory=dict)  # 本轮设置
-    reasoning: str = ""  # 模型思考流
-    conflict: str = ""  # 资料与通用知识的冲突提示
-    attachments: list[dict[str, Any]] = field(default_factory=list)  # 本轮附件
-    context_usage: Any = None  # 本轮上下文占用（contexts.ContextUsage）
+    steps: list[dict[str, Any]] = field(default_factory=list)  # 过程步骤（stage 累积，落库用）
+    context_usage: Any = None  # 本轮上下文占用（contexts.ContextUsage，可观测）
+    attachments: list[dict[str, Any]] = field(default_factory=list)  # 本轮附件（输入透传）
     turn_id: str = ""  # 逻辑轮次 id（落库后 = user 消息 id；供 trace/对账关联）
-    attempt: int = 1  # 第几次尝试（跨轮重试由上层递增）
-    status: str = "running"  # 运行状态（running/done/cancelled/failed）
 
     def __post_init__(self) -> None:  # 初始化后挂监听
         """状态迁移自动转成 state 事件。"""

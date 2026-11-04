@@ -83,14 +83,14 @@ def test_drive_normal_returns_state() -> None:  # 正常
     assert any(e.type is EventType.ACK for e in sink.events)  # 发过 ack
 
 
-def test_drive_seals_business_fields_into_state() -> None:  # 状态单一源
+def test_drive_seals_identity_into_state() -> None:  # 状态单一源：driver 只补身份/终态
     result, _sink, _ctx, _g = _drive(state={"answer": "答"})  # 跑
-    assert result.state["answer"] == "答"  # 答案
-    assert result.state["status"] == "done"  # 终态封进 state
+    assert result.state["answer"] == "答"  # 答案由节点提供
+    assert result.state["status"] == "done"  # 终态由 driver 封
     assert result.state["turn_id"] == ""  # 轮次 id 兜底
     assert result.state["attempt"] == 1  # 尝试次数
-    assert result.state["usage"] == {}  # 用量兜底
-    assert result.state["basis"] == {}  # 依据兜底
+    assert "usage" not in result.state  # 业务字段不再由 driver 兜底
+    assert "basis" not in result.state  # 同上（节点返回才进 state）
 
 
 def test_drive_passes_recursion_limit() -> None:  # recursion_limit 接线
