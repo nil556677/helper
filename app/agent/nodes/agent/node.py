@@ -14,6 +14,8 @@ from typing import Any  # 任意值
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage  # 消息类型
 from langchain_core.runnables import RunnableConfig  # 图配置
 
+from app.agent.agent_builder import build_react_agent  # 官方 agent 构造
+from app.agent.callbacks import TraceCallbacks  # 本地追踪回调（单挂）
 from app.agent.context import RunCancelled, current_run, ctx_from_config  # 上下文
 from app.core.trace.recorder import trace_tool  # 工具 trace 打点
 from app.agent.contexts import AgentContextSpec  # 上下文声明
@@ -72,6 +74,40 @@ def _text_of(content: Any) -> str:  # 取消息正文
                 parts.append(str(item["text"]))  # 收
         return "".join(parts)  # 拼
     return ""  # 认不出
+
+
+def _model() -> Any:  # 取模型实例
+    """llm 槽位模型（未配置返回 None，调用方走原文兜底）。"""
+    return chat_model(slot="llm", streaming=False)  # 实例
+
+
+def _lc_messages(msgs: list[dict[str, Any]]) -> list[Any]:  # dict → LangChain 消息
+    """转 LC 消息；system 由 create_agent 的 system_prompt 承担，这里去掉首条系统消息。"""
+    return _to_lc(msgs, "")[1:]  # 去掉空系统消息
+
+
+def _evidence_from_messages(messages: list[Any], seed: list[dict[str, Any]]) -> list[dict[str, Any]]:  # 从工具结果补证据
+    """遍历输出消息，把检索工具 Result 里的 evidence 累加（重新编号）。"""
+    import json  # 局部导入解析包络
+
+    evidence = list(seed)  # 复制种子
+    for message in messages:  # 逐条
+        if not isinstance(message, ToolMessage):  # 只看工具结果
+            continue  # 跳过
+        data: Any = message.content  # 正文
+        if isinstance(data, str):  # JSON 文本
+            try:  # 解析
+                data = json.loads(data)  # 字典
+            except Exception:  # 非 JSON
+                continue  # 跳过
+        if not isinstance(data, dict):  # 非包络
+            continue  # 跳过
+        items = (data.get("data") or {}).get("evidence") or []  # 证据
+        for item in items:  # 逐条
+            row = dict(item)  # 复制
+            row["index"] = len(evidence) + 1  # 重新编号
+            evidence.append(row)  # 累加
+    return evidence  # 返回
 
 
 def _bound_model() -> Any:  # 绑定工具的模型
@@ -248,7 +284,7 @@ async def tool_agent_node(state: dict[str, Any], config: RunnableConfig) -> dict
     )  # 装配结束
     ctx.context_usage = built.usage  # 记录占用
     system, messages = built.system, list(built.messages)  # 系统 + 消息
-    bound = _bound_model()  # 带工具的模型（不可用为 None）
+    model = _model()  # 模型实例（未配置为 None）
     evidence: list[dict[str, Any]] = list(state.get("evidence") or [])  # 播种证据（rag 已取）+ 工具新取
     answer_text = ""  # 最终回答
     note = ""  # 说明（只进 state）
@@ -259,41 +295,32 @@ async def tool_agent_node(state: dict[str, Any], config: RunnableConfig) -> dict
     usage_total: dict[str, int] = {}  # 累计用量
     msgs = [dict(m) for m in messages]  # 可变的 dict 消息（历史 + 问题）
 
-    # 最内层调用：模型可用则带工具，不可用则回退原文（仍走中间件链，与 answer 一致）
-    call = _make_call(bound) if bound is not None else _make_fallback_call(evidence)  # 最内层
-    if bound is None:  # 无模型
+    if model is None:  # 无模型 → 原文兜底
+        answer_text = extractive(evidence)  # 回退原文
         note = "模型未配置，以下为资料原文。"  # 说明
         note_kind = "error"  # 错误样式
-    with stage("工具决策", group=StageGroup.TOOL) as info:  # 步骤
-        for _round in range(MAX_TOOL_ROUNDS):  # 每轮决策
-            ctx.check_cancelled()  # 可取消
-            request = ModelRequest(model="llm", messages=list(msgs), system=system)  # 请求
-            try:  # 中间件/模型失败回退
-                response = await _CHAIN.model_call(ctx, request, call)  # 走中间件链
+    else:  # 官方 create_agent：模型/工具/取消/PII/限额由框架与中间件承担
+        agent = build_react_agent(model, list(_TOOLS), system, run_limit=MAX_TOOL_ROUNDS)  # 构造
+        with stage("工具决策", group=StageGroup.TOOL) as info:  # 过程步骤
+            try:  # 跑 agent
+                result = await agent.ainvoke(  # 官方 agent 执行
+                    {"messages": _lc_messages(msgs)},  # 历史 + 问题（system 走 system_prompt）
+                    config={"callbacks": [TraceCallbacks()]},  # 本地追踪单挂（唯一）
+                )  # 结束
             except RunCancelled:  # 取消穿透
                 raise  # 交给上层
-            except Exception:  # 其他失败
+            except Exception:  # 模型/工具失败 → 原文兜底
                 answer_text = extractive(evidence)  # 回退原文
                 note = "模型调用失败，以下为资料原文。"  # 说明
                 note_kind = "error"  # 错误样式
-                break  # 退出循环
-            call_items = getattr(response, "tool_calls", None) or []  # 工具调用
-            if not call_items:  # 不再要工具
-                answer_text = response.text  # 这就是最终回答
-                usage_total = dict(getattr(response, "usage", None) or {})  # 用量
-                break  # 收尾
-            for call_item in call_items:  # 逐个工具
-                content = await _exec_tool(call_item["name"], call_item["args"], evidence)  # 执行
-                msgs.append({"role": "assistant", "content": "", "tool_calls": [call_item]})  # 助手调用
-                msgs.append(  # 工具结果
-                    {"role": "tool", "content": content, "tool_call_id": call_item["id"], "name": call_item["name"]},  # 结果
-                )  # 追加结束
-            info.detail = f"已执行 {len(evidence)} 条引用"  # 明细
-        else:  # 轮次用尽没说话
-            if not answer_text:  # 避免覆盖已回退内容
-                answer_text = "多次尝试后仍未完成回答，请补充信息或稍后再试。"  # 兜底
-                note = "工具循环达到上限。"  # 说明
-                note_kind = "error"  # 错误样式
+                result = None  # 标记
+            if result is not None:  # 成功
+                out_messages = list(result.get("messages") or [])  # 输出消息
+                if out_messages:  # 非空
+                    answer_text = _text_of(getattr(out_messages[-1], "content", ""))  # 最终回答
+                    usage_total = _usage_of(out_messages[-1])  # 用量
+                evidence = _evidence_from_messages(out_messages, evidence)  # 从工具结果补证据
+                info.detail = f"已执行 {len(evidence)} 条引用"  # 明细
 
     # ---- 与现有 answer 相同的收尾：校验 / 回退 / 引用 / 事件 ----
     model_name = "未配置模型"  # 默认

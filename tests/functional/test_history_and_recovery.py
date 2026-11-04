@@ -53,16 +53,19 @@ class _Runner:  # 假检索器
         return self._result  # 固定
 
 
-class _RecordingChain:  # 记录模型输入的假链
-    """返回固定答案，同时留下最后一次 request。"""
+class _RecordingAgent:  # 记录模型输入的假 agent
+    """返回固定答案，同时留下最后一次传给 agent 的消息。"""
 
     def __init__(self) -> None:  # 构造
-        self.last_messages: list[dict[str, Any]] = []  # 最近输入
+        self.last_messages: list[Any] = []  # 最近输入
+        self.last_config: Any = None  # 最近 config
 
-    async def model_call(self, ctx: Any, request: Any, call: Any) -> ModelResponse:  # 调模型
-        del ctx, call  # 不用
-        self.last_messages = list(request.messages)  # 记录输入
-        return ModelResponse(text="模型答案")  # 固定响应
+    async def ainvoke(self, payload: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 执行
+        self.last_messages = list((payload or {}).get("messages") or [])  # 记录输入
+        self.last_config = config  # 记录 config
+        from langchain_core.messages import AIMessage  # 局部导入
+
+        return {"messages": [AIMessage(content="模型答案")]}  # 固定响应
 
 
 async def _run(question: str, result: RagResult, conversation_id: str) -> None:  # 跑一轮
@@ -82,16 +85,20 @@ def _reject() -> RagResult:  # 不可答结果
 
 async def test_unanswered_turn_not_fed_to_next_turn() -> None:  # D1 回归
     """上一轮空回答不得以「悬空提问」进下一轮模型输入。"""
-    chain = _RecordingChain()  # 假链
-    original = agent_mod._CHAIN  # 原链
-    agent_mod._CHAIN = chain  # 换链
+    agent = _RecordingAgent()  # 假 agent
+    original_model = agent_mod._model  # 原模型取法
+    original_build = agent_mod.build_react_agent  # 原构造
+    agent_mod._model = lambda: object()  # 假装模型可用（跳过兜底）
+    agent_mod.build_react_agent = lambda *args, **kwargs: agent  # 换假 agent
     try:  # 用完还原
         await _run("广元市下面有哪些县区", _reject(), "conv-x")  # 第一轮：无证据
         await _run("成都下面有哪些区县", _ok(), "conv-x")  # 第二轮：有证据
     finally:  # 还原
-        agent_mod._CHAIN = original  # 还原
-    texts = [str(item.get("content") or "") for item in chain.last_messages]  # 模型输入文本
+        agent_mod._model = original_model  # 还原
+        agent_mod.build_react_agent = original_build  # 还原
+    texts = [str(getattr(item, "content", item)) for item in agent.last_messages]  # 模型输入文本
     assert not any("广元" in text for text in texts)  # 旧问题不再出现
+    assert any("成都下面有哪些区县" in text for text in texts)  # 当前问题仍送
     assert any("成都下面有哪些区县" in text for text in texts)  # 当前问题在
 
 
