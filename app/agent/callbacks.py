@@ -9,12 +9,15 @@
 
 from __future__ import annotations  # 类型注解延迟求值
 
+import json  # 解析工具结果包络
 import time  # 时间戳
 from typing import Any  # 任意值
 
 from langchain_core.callbacks import BaseCallbackHandler  # 框架回调基类
 from loguru import logger  # 日志
 
+from app.agent.context import current_run  # 当前 run（指标累加）
+from app.agent.metrics import bump, bump_nested  # 指标
 from app.core import trace as trace_store  # 落库
 from app.core.trace import writer as trace_writer  # 异步写
 from app.core.trace.recorder import current_trace  # 当前 trace 会话
@@ -31,6 +34,23 @@ def _name_of(serialized: Any, fallback: str) -> str:  # 取名字
     return fallback  # 回退
 
 
+def _result_flags(output: Any) -> tuple[bool | None, bool]:  # 工具结果 → (ok, cached)
+    """从统一 Result（对象/JSON 字符串/ToolMessage）读成功与缓存命中。"""
+    data: Any = output  # 待解析
+    if isinstance(data, str):  # JSON 文本
+        try:  # 解析
+            data = json.loads(data)  # 字典
+        except Exception:  # 非 JSON
+            return None, False  # 未知
+    if isinstance(data, dict):  # 包络字典
+        ok = data.get("ok")  # 成功
+        cached = bool((data.get("meta") or {}).get("cached"))  # 缓存
+        return (bool(ok) if ok is not None else None), cached  # 返回
+    ok = getattr(output, "ok", None)  # 对象
+    meta = getattr(output, "meta", None) or {}  # 元信息
+    return (bool(ok) if ok is not None else None), bool(meta.get("cached"))  # 返回
+
+
 class TraceCallbacks(BaseCallbackHandler):  # 追踪回调
     """把 chain / llm / tool / retriever 的起止写成 span。"""
 
@@ -41,6 +61,9 @@ class TraceCallbacks(BaseCallbackHandler):  # 追踪回调
         self._session = current_trace()  # 当前 trace 会话
         self._spans: dict[str, int] = {}  # langchain run_id → span_id
         self._tokens: dict[str, int] = {}  # 首个 token 时间（算 TTFT）
+        ctx = current_run()  # 当前 run（有则累加指标）
+        self._metrics = ctx.metrics if ctx is not None else None  # 指标包（单一来源）
+        self._tool_names: dict[str, str] = {}  # langchain run_id → 工具名
 
     # ---- 内部 ----------------------------------------------------------
     def _parent(self, parent_run_id: Any) -> int | None:  # 找父 span
@@ -88,9 +111,13 @@ class TraceCallbacks(BaseCallbackHandler):  # 追踪回调
     # ---- LLM -----------------------------------------------------------
     def on_llm_start(self, serialized: Any, prompts: Any, **kwargs: Any) -> None:  # 文本模型开始
         self._start(kwargs.get("run_id"), kwargs.get("parent_run_id"), _name_of(serialized, "llm"), "llm", {"prompts": len(prompts or [])})  # 开
+        if self._metrics is not None:  # 有指标包
+            bump(self._metrics, "llm_calls")  # 调用数
 
     def on_chat_model_start(self, serialized: Any, messages: Any, **kwargs: Any) -> None:  # 对话模型开始
         self._start(kwargs.get("run_id"), kwargs.get("parent_run_id"), _name_of(serialized, "chat_model"), "llm", {"messages": len(messages or [])})  # 开
+        if self._metrics is not None:  # 有指标包
+            bump(self._metrics, "llm_calls")  # 调用数
 
     def on_llm_new_token(self, token: str, **kwargs: Any) -> None:  # noqa: ARG002 - 新 token 只看 run_id
         try:  # fail-open
@@ -102,6 +129,7 @@ class TraceCallbacks(BaseCallbackHandler):  # 追踪回调
 
     def on_llm_end(self, response: Any, **kwargs: Any) -> None:  # 结束
         output: dict[str, Any] = {}  # 输出摘要
+        usage: dict[str, Any] = {}  # 用量（脱出 try 供指标用）
         try:  # 取用量
             llm_output = getattr(response, "llm_output", None) or {}  # 元信息
             usage = llm_output.get("token_usage") or llm_output.get("usage") or {}  # 用量
@@ -110,9 +138,25 @@ class TraceCallbacks(BaseCallbackHandler):  # 追踪回调
                     output[key] = usage[key]  # 记
         except Exception:  # 忽略
             pass  # 不阻断
+        if self._metrics is not None:  # 有指标包
+            bump(self._metrics, "llm_success")  # 成功数
+            mapping = {  # 用量键 → 指标键
+                "prompt_tokens": "tokens_prompt",  # 输入
+                "completion_tokens": "tokens_completion",  # 输出
+                "total_tokens": "tokens_total",  # 总
+                "cache_read_tokens": "tokens_cache_read",  # 缓存读
+                "cache_creation_tokens": "tokens_cache_creation",  # 缓存写
+                "reasoning_tokens": "tokens_reasoning",  # 推理
+            }  # 映射结束
+            for src, dst in mapping.items():  # 逐项
+                value = usage.get(src) if isinstance(usage, dict) else None  # 取
+                if value:  # 有
+                    bump(self._metrics, dst, int(value))  # 累加
         self._finish(kwargs.get("run_id"), output=output)  # 关
 
     def on_llm_error(self, error: BaseException, **kwargs: Any) -> None:  # 失败
+        if self._metrics is not None:  # 有指标包
+            bump(self._metrics, "llm_error")  # 失败数
         self._finish(kwargs.get("run_id"), status="error", error=error)  # 关
 
     # ---- Chain ---------------------------------------------------------
@@ -127,12 +171,37 @@ class TraceCallbacks(BaseCallbackHandler):  # 追踪回调
 
     # ---- Tool ----------------------------------------------------------
     def on_tool_start(self, serialized: Any, input_str: str, **kwargs: Any) -> None:  # 工具开始
-        self._start(kwargs.get("run_id"), kwargs.get("parent_run_id"), _name_of(serialized, "tool"), "tool", {"args_chars": len(str(input_str or ""))})  # 开
+        name = _name_of(serialized, "tool")  # 工具名
+        key = str(kwargs.get("run_id") or "")  # 回调 run_id
+        if key:  # 记录名字（结束时要归到 by_tool）
+            self._tool_names[key] = name  # 保存
+        self._start(kwargs.get("run_id"), kwargs.get("parent_run_id"), name, "tool", {"args_chars": len(str(input_str or ""))})  # 开
+        if self._metrics is not None:  # 有指标包
+            bump(self._metrics, "tool_calls")  # 工具调用数
+            bump_nested(self._metrics, "by_tool", name, "calls")  # 分工具
 
     def on_tool_end(self, output: Any, **kwargs: Any) -> None:  # 工具结束
-        self._finish(kwargs.get("run_id"), output={"output_chars": len(str(output or ""))})  # 关
+        key = str(kwargs.get("run_id") or "")  # 回调 run_id
+        name = self._tool_names.pop(key, "tool")  # 工具名
+        ok, cached = _result_flags(output)  # 成败 / 缓存
+        if self._metrics is not None:  # 有指标包
+            if ok is False:  # 失败
+                bump(self._metrics, "tool_error")  # 失败数
+                bump_nested(self._metrics, "by_tool", name, "errors")  # 分工具
+            else:  # 成功（或未知按成功计）
+                bump(self._metrics, "tool_success")  # 成功数
+                bump_nested(self._metrics, "by_tool", name, "ok")  # 分工具
+            if cached:  # 命中缓存
+                bump(self._metrics, "tool_cached")  # 缓存命中
+                bump_nested(self._metrics, "by_tool", name, "cached")  # 分工具
+        self._finish(kwargs.get("run_id"), output={"output_chars": len(str(output or "")), "ok": ok, "cached": cached})  # 关
 
     def on_tool_error(self, error: BaseException, **kwargs: Any) -> None:  # 工具失败
+        key = str(kwargs.get("run_id") or "")  # 回调 run_id
+        name = self._tool_names.pop(key, "tool")  # 工具名
+        if self._metrics is not None:  # 有指标包
+            bump(self._metrics, "tool_error")  # 失败数
+            bump_nested(self._metrics, "by_tool", name, "errors")  # 分工具
         self._finish(kwargs.get("run_id"), status="error", error=error)  # 关
 
     # ---- Retriever -----------------------------------------------------

@@ -13,6 +13,7 @@ from typing import Any  # 任意值
 from app.agent import events  # 事件门面（统一走契约层）
 from app.agent.fsm.machine import RunMachine, Transition  # 状态机
 from app.agent.fsm.states import RunEvent, RunState  # 状态/事件
+from app.agent.metrics import new_metrics  # 指标包
 
 
 class RunCancelled(RuntimeError):  # 取消异常
@@ -64,6 +65,7 @@ class RunContext:  # 一轮运行的运行时上下文
     context_usage: Any = None  # 本轮上下文占用（contexts.ContextUsage，可观测）
     attachments: list[dict[str, Any]] = field(default_factory=list)  # 本轮附件（输入透传）
     turn_id: str = ""  # 逻辑轮次 id（落库后 = user 消息 id；供 trace/对账关联）
+    metrics: dict[str, Any] = field(default_factory=new_metrics)  # 本次 run 指标（可观测，收尾汇总）
 
     def __post_init__(self) -> None:  # 初始化后挂监听
         """状态迁移自动转成 state 事件。"""

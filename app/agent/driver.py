@@ -25,8 +25,7 @@ from app.agent import events  # 事件
 from app.agent.context import RunCancelled, RunContext, run_context  # 上下文
 from app.agent.fsm.projection import project_event  # 节点完成 → 迁移事件
 from app.agent.fsm.states import RunEvent, RunState  # 状态
-from app.agent.middleware import default_chain  # 中间件
-from app.core.trace import store as trace_store  # trace 写库
+from app.agent.middleware import default_chain  # 中间件from app.core.trace import store as trace_store  # trace 写库
 from app.core.trace import writer as trace_writer  # trace 异步写
 from app.core.trace.recorder import trace_run  # trace 会话
 
@@ -79,6 +78,17 @@ async def _persist(ctx: RunContext, question: str, answer: str) -> None:  # 落�
         )  # 结束
 
 
+def _metrics_of(ctx: RunContext, state: dict[str, Any]) -> dict[str, Any]:  # 指标汇总
+    """收尾把本 run 指标补齐派生值并落 metadata（单一来源）。"""
+    from app.agent.metrics import finalize  # 局部导入避免循环
+
+    metrics = finalize(ctx.metrics)  # 计数器 + 派生
+    metrics["question_chars"] = len(str(ctx.question or ""))  # 问题体积
+    metrics["answer_chars"] = len(str(state.get("answer") or ""))  # 回答体积
+    metrics["ttft_ms"] = int(ctx.first_token_ms or 0)  # 首 token
+    return metrics  # 返回
+
+
 def _tools_summary(ctx: RunContext) -> dict[str, Any]:  # 工具调用汇总
     """一次运行的工具调用聚合：次数 / 总耗时 / 缓存命中 / 出错次数。"""
     calls = list(getattr(ctx, "tool_calls", None) or [])  # 逐条调用
@@ -105,6 +115,7 @@ def _update_trace(ctx: RunContext, state: dict[str, Any]) -> None:  # 补 trace 
             "gate": gate,  # 门限判决
             "basis": basis,  # 检索依据
             "tools": _tools_summary(ctx),  # 工具调用汇总（可观测）
+            "metrics": _metrics_of(ctx, state),  # 指标汇总（可观测）
         }  # 元数据结束
         trace_store.update_run(  # 写
             ctx.run_id,  # run
