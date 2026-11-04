@@ -12,12 +12,16 @@ from __future__ import annotations  # 类型注解延迟求值
 
 import json  # 解析模型输出
 import re  # 正则
-from collections.abc import Callable  # 工厂签名
 from dataclasses import dataclass, field  # 结果容器
 from typing import Any  # 任意值
 
+from app.agent.llm import DEFAULT_PARAMS  # 共用默认参数
+from app.agent.llm.gateway import ModelGateway  # 统一模型网关
+from app.agent.llm.types import ModelRequest, ModelUnavailable  # 请求 / 槽位不可用
 from app.agent.contexts.prompts import REWRITE_SYSTEM_UID, get  # 统一改写提示模板
+from app.agent.contracts import ErrorCode  # 错误码单源
 from app.agent.tools.cache import TtlCache  # 共享 TTL 缓存（按条 ttl）
+from app.core.retry import RetryPolicy, classify_error  # 重试策略 / 错误分类
 from app.rag import hard  # 硬要素（校验"有没有改丢"）
 from app.rag.normalize import normalize  # 规则归一化
 
@@ -53,8 +57,16 @@ SYSTEM_PROMPT = get(REWRITE_SYSTEM_UID).render()  # 渲染统一改写提示
 #: 缓存：成功 30 天 / 失败 60 秒（按条 ttl），容量 1024 防内存无限增长。
 _CACHE = TtlCache(ttl=CACHE_TTL, max_entries=1024)  # 共享缓存原语
 
-#: 模型工厂签名：返回带 `invoke` 的对象或 None。
-ModelFactory = Callable[[], Any]  # 可注入（测试用）
+#: 改写统一走模型网关；**不重试**（改写是可选增强，任何失败都回退原句）。
+_GATEWAY = ModelGateway(slot="llm", policy=RetryPolicy(max_retries=0))  # 网关（无重试）
+
+#: 改写专用参数：温度 0、小输出、800ms 超时。
+_REWRITE_PARAMS = DEFAULT_PARAMS.with_overrides(  # 派生
+    temperature=0.0,  # 稳
+    max_tokens=128,  # 小
+    timeout_s=TIMEOUT_S,  # 800ms
+    max_retries=0,  # 无重试
+)  # 参数结束
 
 
 @dataclass(frozen=True)
@@ -151,41 +163,37 @@ def _new_numbers(candidate: str, question: str) -> list[str]:  # 新增数字
     return [value for value in re.findall(r"\d+(?:\.\d+)?", candidate) if value not in old]  # 新的
 
 
-def rewrite(  # 主入口
+async def rewrite(  # 主入口（异步，走统一网关）
     question: str,
     *,
     history: list[dict[str, Any]] | None = None,
-    model_factory: ModelFactory | None = None,
 ) -> RewriteResult:
-    """归一化 → 触发判断 → 模型 → 校验 → 缓存；任何失败都回退原句。"""
+    """归一化 → 触发判断 → 网关(model) → 校验 → 缓存；任何失败都回退原句。"""
     original = normalize(question)  # 规则归一化（不花模型）
     reason = trigger(original, history)  # 要不要改
     if not reason:  # 不需要
         return RewriteResult([original], "skipped")  # 原句
-    factory = model_factory or _default_factory  # 用注入或默认
-    model = None  # 模型
-    try:  # 建模型
-        model = factory()  # 可能返回 None
-    except Exception:  # 配置坏了
-        model = None  # 当没配
-    if model is None:  # 没配
-        return RewriteResult([original], "unconfigured")  # 原句
-    name = str(getattr(model, "model_name", "") or "")  # 模型名
+    name = "llm"  # 槽位名（网关走 llm 槽）
     key = _cache_key(original, history, name)  # 缓存键
     cached = _read_cache(key)  # 读缓存
     if cached:  # 命中
         return RewriteResult(cached, "used", name)  # 直接用
     previous = str((history or [{}])[-1].get("content") or "") if history else ""  # 上一轮问题
     payload = json.dumps({"prev_question": previous, "query": original}, ensure_ascii=False)  # 输入当数据
-    try:  # 调模型
-        reply = model.invoke([("system", SYSTEM_PROMPT), ("human", payload)])  # 一次调用
-        raw = str(getattr(reply, "content", "") or "")  # 文本
-    except TimeoutError:  # 超时
+    try:  # 调统一网关（异步、无重试）
+        result = await _GATEWAY.generate(  # 一次生成
+            ModelRequest(  # 请求
+                model="llm",  # 槽位
+                messages=[{"role": "user", "content": payload}],  # 数据输入
+                system=SYSTEM_PROMPT,  # 系统提示
+            ),  # 请求结束
+            _REWRITE_PARAMS,  # 改写参数
+        )  # 生成结束
+        raw = result.text  # 文本
+    except Exception as exc:  # 网关/模型不可用/超时/网络
         _write_cache(key, [original], FAIL_TTL)  # 失败短缓存
-        return RewriteResult([original], "timeout", name)  # 回退
-    except Exception:  # 429/5xx/网络
-        _write_cache(key, [original], FAIL_TTL)  # 失败短缓存
-        return RewriteResult([original], "failed", name)  # 回退
+        reason_out = _classify_reason(exc)  # 统一判 reason
+        return RewriteResult([original], reason_out, name)  # 回退原句
     queries = validate(raw, original)  # 校验
     if queries is None:  # 不合格
         _write_cache(key, [original], FAIL_TTL)  # 短缓存
@@ -194,11 +202,13 @@ def rewrite(  # 主入口
     return RewriteResult(queries, "used", name)  # 返回
 
 
-def _default_factory() -> Any:  # 默认工厂
-    """复用现有 `llm` 槽位：温度 0、小 max_tokens、800ms 超时。"""
-    from app.integrations.llm import chat_model  # 延迟导入
-
-    return chat_model(temperature=0.0, max_tokens=128, timeout_s=TIMEOUT_S)  # 建模型
+def _classify_reason(exc: BaseException) -> str:  # 失败原因分类
+    """网关异常 → RewriteResult.reason：unconfigured/timeout/failed。"""
+    if isinstance(exc, ModelUnavailable):  # 槽位没配
+        return "unconfigured"  # 没配
+    if classify_error(exc) == str(ErrorCode.TIMEOUT):  # 超时
+        return "timeout"  # 超时
+    return "failed"  # 其他
 
 
 def better_rank(decision: str) -> int:  # 判决排序

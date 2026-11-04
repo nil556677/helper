@@ -60,7 +60,11 @@ def _ctx_retrieving() -> RunContext:  # 造 RETRIEVING 上下文
 
 
 def _run_rag(monkeypatch, result: RagResult) -> tuple[dict[str, Any], RunContext]:  # 跑检索节点
-    monkeypatch.setattr(entry_mod.rewrite_mod, "rewrite", lambda question, history=None: _Planned())  # 固定改写
+    async def _fake_rewrite(question, history=None):  # 假异步改写
+        del question, history  # 忽略入参
+        return _Planned()  # 固定跳过
+
+    monkeypatch.setattr(entry_mod.rewrite_mod, "rewrite", _fake_rewrite)  # 固定改写
     ctx = _ctx_retrieving()  # 上下文
     node = make_rag_node(_Runner(result))  # 节点
 

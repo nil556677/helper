@@ -2,7 +2,6 @@
 
 from __future__ import annotations  # 类型注解延迟求值
 
-import asyncio  # 把同步调用（含 HTTP）丢线程，别卡住界面事件循环
 from typing import Any  # 任意值
 
 from langchain_core.runnables import RunnableConfig  # 图配置
@@ -84,9 +83,7 @@ def make_rag_node(runner: RagRunner):  # 工厂
         history = messages_from([Turn.model_validate(item) for item in (state.get("turns") or [])])  # 历史（只喂 done）
         with stage("查找资料", group=StageGroup.SEARCH):  # 父图步骤
             with stage("改写问题", group=StageGroup.PREPARE, name="rewrite"):  # 改写单独一段（慢的话能一眼看出来）
-                planned = await asyncio.to_thread(  # 丢线程：里面可能有同步 HTTP 调用
-                    rewrite_mod.rewrite, question, history=history  # 规则归一 + 可选改写
-                )  # 改写结束
+                planned = await rewrite_mod.rewrite(question, history=history)  # 异步走统一网关
             result = await runner.run(question, top_k=6, rerank=True)  # 首轮检索
             for extra in planned.queries[1:]:  # 懒改写：只有首轮证据不足才补查
                 if rewrite_mod.better_rank(str((result.gate or {}).get("decision") or "")) >= 2:  # 已经 PASS
