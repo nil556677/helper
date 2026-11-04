@@ -332,36 +332,3 @@ def trace_event(*, level: str = "info", code: str = "", message: str, detail: di
     session = _CURRENT.get()
     if session is not None:
         session.event(level=level, code=code, message=message, detail=detail)
-
-
-def trace_tool(  # 记录一次工具调用的 span
-    name: str,  # 工具名
-    *,
-    ok: bool,  # 是否成功
-    code: str,  # 错误码（成功为 "ok"）
-    retryable: bool,  # 是否可重试
-    cached: bool,  # 是否命中 TTL 缓存（幂等命中）
-    args_chars: int,  # 入参体积（字符数）
-    output_chars: int,  # 喂给模型的输出体积（字符数）
-    error_message: str = "",  # 失败说明（不落原文，仅摘要）
-) -> None:
-    """记录一次工具调用到 trace（kind=tool），带可记录的全部字段。
-
-    `ms`（耗时）由 span 自身的 started_at→finish 计算（duration 列，不重复传）；
-    不落 PII/完整入参/正文，只记体积计数与错误摘要；没有活跃会话则空操作（fail-open）。
-    """
-    session = _CURRENT.get()  # 当前 trace 会话（无则空操作）
-    if session is None:  # 不在 trace 里
-        return  # 空操作
-    with session.span(name, kind="tool") as span:  # 开工具 span（自动算耗时）
-        span.set_output(  # 记录全部可记录字段
-            {  # 输出载荷
-                "ok": ok,  # 是否成功
-                "code": code,  # 错误码
-                "retryable": retryable,  # 可重试
-                "cached": cached,  # 缓存命中
-                "args_chars": args_chars,  # 入参体积
-                "output_chars": output_chars,  # 输出体积
-                "error_message": (error_message or "")[:300],  # 错误摘要（截断）
-            }  # 载荷结束
-        )  # 设输出结束
