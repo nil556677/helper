@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_core.runnables import RunnableConfig  # 图配置
 
 from app.agent.agent_builder import build_react_agent  # 官方 agent 构造
-from app.agent.callbacks import TraceCallbacks  # 本地追踪回调（单挂）
+from app.agent.callbacks import trace_callbacks  # 共享追踪回调（单实例）
 from app.agent.context import RunCancelled, current_run, ctx_from_config  # 上下文
 from app.agent.contexts import AgentContextSpec  # 上下文声明
 from app.agent.contexts import build as assemble_context  # 上下文装配器
@@ -159,7 +159,7 @@ async def tool_agent_node(state: dict[str, Any], config: RunnableConfig) -> dict
             try:  # 流式跑 agent
                 async for mode, payload in agent.astream(  # 双模式：token + 状态快照
                     {"messages": _lc_messages(msgs)},  # 输入（system 走 system_prompt）
-                    config={"callbacks": [TraceCallbacks()]},  # 本地追踪单挂（唯一）
+                    config={"callbacks": [trace_callbacks()]},  # 共享追踪单例（唯一）
                     stream_mode=["messages", "values"],  # 模型 token + 完整状态
                 ):  # 迭代
                     if mode == "messages":  # token 块

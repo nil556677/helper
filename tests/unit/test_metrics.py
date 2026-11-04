@@ -44,6 +44,12 @@ def test_callback_accumulates_llm_metrics() -> None:  # 模型指标
     assert ctx.metrics["tokens_cache_read"] == 4  # 缓存读
 
 
+def test_trace_callbacks_singleton() -> None:  # 共享单例
+    from app.agent.callbacks import trace_callbacks  # 取点
+
+    assert trace_callbacks() is trace_callbacks()  # 始终同一实例
+
+
 def test_callback_accumulates_tool_metrics() -> None:  # 工具指标
     ctx = RunContext(run_id="r", question="q")  # 上下文
     with run_context(ctx):  # 绑定当前 run

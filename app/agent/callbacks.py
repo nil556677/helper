@@ -22,7 +22,7 @@ from app.core import trace as trace_store  # 落库
 from app.core.trace import writer as trace_writer  # 异步写
 from app.core.trace.recorder import current_trace  # 当前 trace 会话
 
-__all__ = ["TraceCallbacks"]  # 对外导出
+__all__ = ["TraceCallbacks", "trace_callbacks"]  # 对外导出
 
 
 def _name_of(serialized: Any, fallback: str) -> str:  # 取名字
@@ -58,12 +58,18 @@ class TraceCallbacks(BaseCallbackHandler):  # 追踪回调
 
     def __init__(self) -> None:  # 构造
         super().__init__()  # 框架基类初始化
-        self._session = current_trace()  # 当前 trace 会话
         self._spans: dict[str, int] = {}  # langchain run_id → span_id
         self._tokens: dict[str, int] = {}  # 首个 token 时间（算 TTFT）
-        ctx = current_run()  # 当前 run（有则累加指标）
-        self._metrics = ctx.metrics if ctx is not None else None  # 指标包（单一来源）
         self._tool_names: dict[str, str] = {}  # langchain run_id → 工具名
+
+    @property  # 只读：回调时动态取，单实例可跨 run/路径复用
+    def _session(self) -> Any:  # 当前 trace 会话
+        return current_trace()  # 动态
+
+    @property  # 只读
+    def _metrics(self) -> Any:  # 当前 run 指标包
+        ctx = current_run()  # 动态
+        return ctx.metrics if ctx is not None else None  # 无 run 则空
 
     # ---- 内部 ----------------------------------------------------------
     def _parent(self, parent_run_id: Any) -> int | None:  # 找父 span
@@ -212,4 +218,15 @@ class TraceCallbacks(BaseCallbackHandler):  # 追踪回调
         count = len(documents or [])  # 命中数
         self._finish(kwargs.get("run_id"), output={"docs": count})  # 关
     def on_retriever_error(self, error: BaseException, **kwargs: Any) -> None:  # 检索失败
-        self._finish(kwargs.get("run_id"), status="error", error=error)  # 关
+        self._finish(kwargs.get("run_id"), status="error", error=error)
+
+
+_SHARED: TraceCallbacks | None = None  # 共享单例
+
+
+def trace_callbacks() -> TraceCallbacks:  # 取共享 handler
+    """全项目唯一的追踪回调实例：agent / gateway(rewrite、structured) 共用，避免重复构造。"""
+    global _SHARED  # 改模块级
+    if _SHARED is None:  # 首次
+        _SHARED = TraceCallbacks()  # 建
+    return _SHARED  # 复用  # 关

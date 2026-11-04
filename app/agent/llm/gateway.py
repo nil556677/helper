@@ -194,11 +194,11 @@ class ModelGateway:  # 模型网关
         )  # emit 结束
 
     def _config(self) -> dict[str, Any] | None:  # 调用配置
-        """有活跃 trace 时挂追踪回调；没有就返回 None（不影响调用）。"""
-        from app.agent.callbacks import TraceCallbacks  # 延迟导入避免循环
+        """有活跃 trace 时挂共享追踪回调；没有就返回 None（不影响调用）。"""
+        from app.agent.callbacks import trace_callbacks  # 共享 handler
         from app.core.trace.recorder import current_trace  # 当前 trace
 
-        return {"callbacks": [TraceCallbacks()]} if current_trace() is not None else None  # 配置
+        return {"callbacks": [trace_callbacks()]} if current_trace() is not None else None  # 配置（单例）
 
     def _invoke_kwargs(self) -> dict[str, Any]:  # 传参
         """只有真有回调时才带 ``config``，避免给不支持配置的模型塞 None。"""
