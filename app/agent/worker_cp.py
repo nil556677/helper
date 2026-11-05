@@ -40,7 +40,7 @@ async def setup_loop(  # 在服务 loop 里一次性初始化
     # 注意：agent 路径的 AsyncDB（stream.ASYNC_DB_ENABLED）暂不启用——真实 worker 下
     # ack 之后图会挂住（待专项排查），先保持同步路径以保证聊天可用。
     saver = await checkpoint.build_async_saver(path=checkpoint_path)  # 建异步 saver
-    graph = assembly.build_agent_graph(assembly.get_runner(), checkpointer=saver)  # 编译父图（挂 saver）
+    graph = assembly.build(checkpointer=saver)  # 编译路由父图（挂 saver）
     assembly.set_graph(graph)  # 注入为 worker 对话图
     loop = asyncio.get_running_loop()  # 当前 loop
     task = loop.create_task(_maintenance(checkpoint_path, keep, prune_interval_s))  # 起维护任务

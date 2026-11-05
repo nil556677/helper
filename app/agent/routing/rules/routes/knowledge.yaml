@@ -1,0 +1,8 @@
+id: knowledge
+description: "在本地知识库/资料中检索并回答相关问题"
+examples:
+  - "合同违约金怎么算"
+  - "内部制度是怎么规定的"
+  - "文档第几条说了这个"
+tools: [search_knowledge_base]
+node: dispatch_fixed

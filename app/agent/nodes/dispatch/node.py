@@ -4,7 +4,8 @@ from __future__ import annotations  # 延迟求值注解
 
 from typing import Any, Callable  # 类型
 
-from app.agent.tools.library import current_time, query_weather  # 内置工具
+from app.agent.tools.library import current_time, query_weather, search_knowledge_base  # 内置工具
+from app.rag.answer import extractive  # 原文回退（无模型时也能给证据原文）
 
 ArgsBuilder = Callable[[str], dict[str, Any]]  # question → 工具参数
 
@@ -21,6 +22,7 @@ def _weather_args(question: str) -> dict[str, Any]:  # 从问题里抠城市
 _ROUTE_TOOLS: dict[str, tuple[Any, ArgsBuilder]] = {  # 路由表
     "time": (current_time, lambda _q: {}),  # 时间（走默认格式）
     "weather": (query_weather, _weather_args),  # 天气（抠城市）
+    "knowledge": (search_knowledge_base, lambda q: {"query": q}),  # 知识库（检索→原文）
 }
 
 
@@ -34,6 +36,9 @@ def _format(name: str, data: dict[str, Any]) -> str:  # 模板化回复
         temp = data.get("temperature_c")  # 温度
         temp_part = f"，{temp}℃" if temp is not None else ""  # 温度片段
         return f"{city}的天气：{weather}{temp_part}。"  # 模板
+    if name == "knowledge":  # 知识库
+        model_view = str(data.get("model_view") or "")  # 编号文本
+        return model_view or extractive(data.get("evidence") or [])  # 编号文本或原文回退
     return str(data.get("text") or "")  # 兜底
 
 
@@ -54,4 +59,5 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
         return {"answer": note, "note": note, "fragments": []}  # 带内
     data = getattr(envelope, "data", None) or {}  # 结果数据
     text = _format(name, data)  # 模板化
-    return {"answer": text, "route": route, "fragments": []}  # 返回
+    fragments = list(data.get("evidence") or []) if name == "knowledge" else []  # 知识库带引用
+    return {"answer": text, "route": route, "fragments": fragments}  # 返回
