@@ -12,6 +12,8 @@ from typing import Any  # 任意值
 
 from app.agent.contracts.output import Candidate, candidate_id  # 复用澄清候选契约
 from app.agent.contracts.routing import ClarifyOptions  # 澄清契约
+from app.agent.context import current_run  # 当前 run（指标）
+from app.agent.metrics import bump  # 指标累加
 
 __all__ = ["MAX_CLARIFY_ROUNDS", "DISPLAY_MIN", "build_options", "clarify_node", "clarify_text", "resolve_choice"]  # 导出
 
@@ -66,6 +68,9 @@ def clarify_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  
     recall = state.get("semantic_recall") or {}  # 语义召回
     options = build_options(recall if isinstance(recall, dict) else {}, attempt)  # 分档
     text = clarify_text(options)  # 话术
+    run = current_run()  # 指标
+    if run is not None:  # 有 run
+        bump(run.metrics, "clarify_count")  # 澄清次数
     return {  # 写回
         "clarify_options": options.model_dump(mode="json"),  # 选项
         "clarify_attempted": True,  # 已澄清

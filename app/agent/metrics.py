@@ -31,6 +31,9 @@ _COUNTER_KEYS: tuple[str, ...] = (  # 计数器键表
     "dense_hits", "sparse_hits", "fused_hits", "selected_hits",
     # 工具
     "tool_calls", "tool_success", "tool_error", "tool_cached",
+    # 意图路由（规则/语义来源与三态）
+    "route_decided_rule", "route_decided_embedding", "route_direct", "route_ambiguous", "route_miss",
+    "tools_exposed", "clarify_count",
     # 错误 / 稳定性
     "failover_count", "fallback_used", "retry_wasted_ms",
 )

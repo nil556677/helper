@@ -5,6 +5,8 @@ from __future__ import annotations  # 延迟求值注解
 from typing import Any  # 任意值
 
 from app.agent.contracts.output import DecisionTarget, RouteDecision  # 复用单一决策契约
+from app.agent.context import current_run  # 当前 run（指标）
+from app.agent.metrics import bump  # 指标累加
 from app.agent.routing.rules.loader import match  # 匹配
 
 _rules: Any = None  # 进程级懒加载规则
@@ -24,6 +26,10 @@ def rule_route_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]
     del config  # 不用图配置
     question = str(state.get("question") or "")  # 问题
     hit = match(question, _default_rules())  # 匹配（宁漏勿错）
+    run = current_run()  # 当前 run（指标打点）
+    if run is not None and hit is not None:  # 规则命中才记
+        bump(run.metrics, "route_decided_rule")  # 规则来源
+        bump(run.metrics, "tools_exposed", len(hit.tools))  # 工具暴露
     if hit is None:  # 未定
         return {"route": None, "rule_hits": []}  # 交语义层
     decision = RouteDecision(  # 唯一决策

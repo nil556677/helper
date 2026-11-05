@@ -60,3 +60,16 @@ def test_callback_accumulates_tool_metrics() -> None:  # 工具指标
     assert ctx.metrics["tool_success"] == 1  # 成功数
     assert ctx.metrics["tool_cached"] == 1  # 缓存命中
     assert ctx.metrics["by_tool"]["query_weather"]["calls"] == 1  # 分工具计数
+
+
+def test_metrics_routing_keys_present() -> None:  # 路由指标键
+    ctx = RunContext(run_id="r", question="q")  # 上下文
+    with run_context(ctx):  # 绑定当前 run
+        from app.agent.nodes.route.node import rule_route_node  # 规则节点
+
+        rule_route_node({"question": "现在几点"})  # 命中 → 打点
+    assert ctx.metrics["route_decided_rule"] == 1  # 规则来源
+    out = finalize(ctx.metrics)  # 汇总
+    assert "route_direct" in out and "route_ambiguous" in out and "route_miss" in out  # 三态键齐
+    assert out["tools_exposed"] >= 0  # 工具暴露键在
+    assert "fallback_used" in out and "clarify_count" in out  # 兜底/澄清键在

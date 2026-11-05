@@ -9,6 +9,8 @@ from typing import Any, Sequence  # 类型
 
 from app.agent.contracts.output import DecisionTarget, RouteDecision  # 复用单一决策契约
 from app.agent.contracts.routing import RouteCandidate, RouteSpec, SemanticRecall  # 契约
+from app.agent.context import current_run  # 当前 run（指标）
+from app.agent.metrics import bump  # 指标累加
 from app.agent.routing.embeddings import RouteIndex, default_embed, default_route_index  # 索引
 from app.agent.routing.rules.loader import load_routes  # 路径定义
 
@@ -67,8 +69,14 @@ def semantic_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]: 
     except Exception:  # 模型缺失/异常 → 保守 miss
         recall = SemanticRecall(decision="miss")  # 未命中
     payload: dict[str, Any] = {"semantic_recall": recall.model_dump(mode="json")}  # 写召回
+    run = current_run()  # 当前 run（指标打点）
+    if run is not None:  # 有 run 才记
+        bump(run.metrics, f"route_{recall.decision}")  # 三态分布
     if recall.decision == "direct":  # 直接路由
         spec = route_specs().get(recall.candidates[0].route)  # 取路径定义
+        if run is not None:  # 指标
+            bump(run.metrics, "route_decided_embedding")  # 来源
+            bump(run.metrics, "tools_exposed", len(spec.tools) if spec is not None else 0)  # 工具暴露
         payload["route"] = RouteDecision(  # 写统一决策
             next=DecisionTarget.ANSWER,  # 兼容字段
             intent="direct",  # 直接固定路径
