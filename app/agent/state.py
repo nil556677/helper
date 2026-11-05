@@ -27,6 +27,7 @@ class ChatState(TypedDict, total=False):  # 图状态（字段都可缺省）
     # 澄清（semantic_miss 出口，收敛闭环）
     clarify_options: dict[str, Any]  # ClarifyOptions 的 JSON 形态
     clarify_attempted: bool  # 是否尝试过澄清（限轮次用）
+    clarify_attempt: int  # 本会话第几次澄清
 
     # 兜底子图结果（父图黑盒返回）
     fallback_used: bool  # 本次请求最多进兜底子图一次
