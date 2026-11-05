@@ -6,7 +6,7 @@ import time  # 默认时间戳
 from enum import StrEnum  # 字符串枚举
 from typing import Any  # 任意值
 
-from pydantic import BaseModel, Field  # 校验模型
+from pydantic import BaseModel, Field, model_validator  # 校验模型
 
 
 class TaskStatus(StrEnum):  # 任务状态
@@ -20,12 +20,12 @@ class TaskStatus(StrEnum):  # 任务状态
     REJECTED = "rejected"  # 拒绝
 
 
-TERMINAL_TASK_STATUSES: frozenset = frozenset(  # 终态（吸收态）
+TERMINAL_TASK_STATUSES: frozenset[TaskStatus] = frozenset(  # 终态（吸收态）
     {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELED, TaskStatus.REJECTED}  # 四个终态
 )  # frozenset 结束
 
 #: 允许的迁移（单向；终态为吸收态，不再接受消息）。
-TASK_TRANSITIONS: frozenset = frozenset({  # 迁移集合
+TASK_TRANSITIONS: frozenset[tuple[TaskStatus, TaskStatus]] = frozenset({  # 迁移集合
     (TaskStatus.SUBMITTED, TaskStatus.WORKING),  # 开始执行
     (TaskStatus.SUBMITTED, TaskStatus.REJECTED),  # 被拒
     (TaskStatus.SUBMITTED, TaskStatus.CANCELED),  # 提交后取消
