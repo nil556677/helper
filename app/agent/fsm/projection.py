@@ -21,6 +21,10 @@ SIMPLE_NODE_EVENT: dict[str, RunEvent] = {  # 固定映射
     "load_context": RunEvent.CONTEXT_LOADED,  # 上下文就绪（loading → retrieving）
     "answer": RunEvent.GENERATION_DONE,  # 生成完成（generating → finalizing）
     "agent": RunEvent.GENERATION_DONE,  # 工具循环完成（generating → finalizing）
+    # —— 意图路由父图（build_route_graph）——
+    "dispatch_fixed": RunEvent.GENERATION_DONE,  # 固定路径回答完成
+    "llm_fallback": RunEvent.GENERATION_DONE,  # 兜底子图回答完成
+    "clarify_or_end": RunEvent.GENERATION_DONE,  # 澄清/拒绝（即最终回应）
     "finalize": RunEvent.FINALIZED,  # 收尾完成（finalizing → done）
 }  # 固定映射结束
 
