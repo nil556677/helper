@@ -25,7 +25,8 @@ from app.agent import events  # 事件
 from app.agent.context import RunCancelled, RunContext, run_context  # 上下文
 from app.agent.fsm.projection import project_event  # 节点完成 → 迁移事件
 from app.agent.fsm.states import RunEvent, RunState  # 状态
-from app.agent.middleware import default_chain  # 中间件from app.core.trace import store as trace_store  # trace 写库
+from app.agent.middleware import default_chain  # 中间件
+from app.core.trace import store as trace_store  # trace 写库
 from app.core.trace import writer as trace_writer  # trace 异步写
 from app.core.trace.recorder import trace_run  # trace 会话
 

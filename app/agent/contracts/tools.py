@@ -25,8 +25,8 @@ class ToolDescriptor(BaseModel):  # 工具对外契约（描述符）
     name: str  # 工具名 = id（[a-z0-9_]，无点号）
     version: int = 1  # 递增；破坏性变更 +1
     description: str = ""  # 能力 / 场景 / 边界（四要素）
-    args_schema: Any = None  # 参数 Pydantic schema
-    result_schema: Any = None  # 结果 schema
+    args_schema: type[BaseModel] | dict[str, Any] | None = None  # 参数 Pydantic 模型或 JSON Schema
+    result_schema: type[BaseModel] | dict[str, Any] | None = None  # 结果模型或 JSON Schema
     mutation: Mutation = Mutation.READ_ONLY  # 变更画像
     permissions: tuple[str, ...] = Field(default_factory=tuple)  # 权限标签
 
@@ -34,10 +34,14 @@ class ToolDescriptor(BaseModel):  # 工具对外契约（描述符）
 class ErrorCode:  # 错误码常量（唯一分类来源）
     """输出层、事件层、retry 分类都引用这些 code 字符串（跨域只走 ID，不 import）。
 
-    三个层级共处一处，避免"工具一套、retry 一套、run 一套"漂移：
-    - ``protocol.*`` / ``execution.*`` / ``internal.*``：工具/业务错；
-    - ``rate_limit / server / timeout / connection / config / unknown``：上游/瞬时分类，
-      与 ``core.retry.classify_error`` 的输出对齐（retry 事件、结构化信封共用）。
+    命名规则只有两条，新增错误码必须落在其中一条：
+    - **带域前缀**：``protocol.*`` / ``execution.*`` / ``internal.*``（工具/业务错）；
+    - **扁平码**：``schema_invalid`` 与上游/瞬时分类 ``rate_limit / server / timeout /
+      connection / config / unknown``（与 ``core.retry.classify_error`` 输出对齐，
+      retry 事件、结构化信封共用）。
+
+    :meth:`is_protocol` 只判断 ``protocol.*``；判断 execution/internal 域请直接
+    ``code.startswith("execution.")`` / ``startswith("internal.")``。
     """
 
     # 协议层：工具不可用 / 参数错 / 无权限（不重试）

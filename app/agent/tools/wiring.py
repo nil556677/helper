@@ -26,15 +26,15 @@ from app.core.result import Result  # 唯一结果契约
 _NAME_RE = re.compile(r"^[a-z0-9_]{1,30}$")  # 名字正则
 
 __all__ = [  # 对外导出
-    "collect",  # 模块收集
-    "validate_unique",  # 名称合规 + 全局唯一
-    "describe",  # 元数据描述符
     "bind",  # 绑定到模型
+    "collect",  # 模块收集
+    "describe",  # 元数据描述符
+    "err",  # 失败包络
     "make_tool_node",  # 建执行节点
     "ok",  # 成功包络
-    "err",  # 失败包络
-    "to_content_and_artifact",  # 拆分模型视角与审计视角
     "render",  # 包络 -> 模型 JSON
+    "to_content_and_artifact",  # 拆分模型视角与审计视角
+    "validate_unique",  # 名称合规 + 全局唯一
 ]  # 导出结束
 
 
@@ -138,4 +138,4 @@ def to_content_and_artifact(  # 拆分模型视角与审计视角
 
 def render(env: Result) -> str:  # 把统一 Result 转成给模型的 JSON 文本
     """统一返回形：喂给模型的 ToolMessage 内容就是这段 JSON（错误时 message 模型可见）。"""
-    return envelope.model_dump_json()  # JSON 文本
+    return env.model_dump_json()  # JSON 文本

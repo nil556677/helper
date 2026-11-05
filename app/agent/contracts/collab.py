@@ -68,12 +68,21 @@ class TaskEnvelope(BaseModel):  # 一次外包任务
     """task_id 由目标 Agent 服务端生成；状态由服务端记录。"""
 
     task_id: str  # 服务端生成，客户端不自造
+    idempotency_key: str  # 幂等键（发起方生成；必填，下游据此去重）
     initiator: str = ""  # 发起方 agent id
     target: str = ""  # 目标 agent id
     input: Any = None  # 输入数据
-    idempotency_key: str = ""  # 幂等键（发起方生成）
+    output: Any = None  # 目标 Agent 完成后的结果
+    error: str = ""  # FAILED 时的人话原因
     deadline: float | None = None  # 截止时间
     status: TaskStatus = TaskStatus.SUBMITTED  # 服务端记录
     trace_id: str = ""  # 关联追踪
     created_at: float = Field(default_factory=time.time)  # 创建时间
     updated_at: float = Field(default_factory=time.time)  # 更新时间
+
+    @model_validator(mode="after")  # 跨字段校验
+    def _check_deadline(self) -> TaskEnvelope:  # 截止时间校验
+        """deadline 非空时必须严格晚于 created_at，避免构造出已过期的任务。"""
+        if self.deadline is not None and self.deadline <= self.created_at:  # 截止不晚于创建
+            raise ValueError("deadline 必须大于 created_at")  # 拒绝
+        return self  # 通过

@@ -57,10 +57,12 @@ class RouteDecision(BaseModel):  # 一次“下一步怎么走”的决策
 
     @model_validator(mode="after")  # 跨字段校验
     def _check(self) -> RouteDecision:  # 校验器
-        """confidence 越界、候选 id 重复都视为构造错误。"""
+        """confidence 越界、候选 id 重复、CLARIFY 无候选都视为构造错误。"""
         if self.confidence is not None and not (0.0 <= self.confidence <= 1.0):  # 越界
             raise ValueError("confidence 必须在 0–1 之间")  # 拒绝
         ids = [c.id for c in self.candidates]  # 候选 id 列表
         if len(ids) != len(set(ids)):  # 有重复
             raise ValueError("candidates 的 id 必须唯一")  # 拒绝
+        if self.next is DecisionTarget.CLARIFY and not self.candidates:  # 要追问却没候选
+            raise ValueError("next=CLARIFY 时 candidates 不能为空")  # 拒绝
         return self  # 通过

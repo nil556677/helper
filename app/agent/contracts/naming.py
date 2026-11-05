@@ -27,9 +27,11 @@ class Namer:  # 命名器
 
     @classmethod  # 类方法
     def from_callable(cls, func: Callable[..., object]) -> str:  # 从函数派生
-        """读 __module__ / __name__。"""
+        """读 __module__ / __name__；两者缺一（C 扩展、partial 等）直接报错。"""
         module = getattr(func, "__module__", "") or ""  # 模块名
         name = getattr(func, "__name__", "") or ""  # 函数名
+        if not module or not name:  # 派生不出稳定 id
+            raise ValueError(f"无法从可调用对象派生 id：{func!r}")  # 拒绝空 id
         return cls.node_id(module, name)  # 派生
 
     @classmethod  # 类方法

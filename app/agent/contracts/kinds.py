@@ -31,7 +31,7 @@ class EventType(StrEnum):  # 事件类型
     RETRY = "retry"  # 外部请求重试（第几次 / 什么错误 / 等多久）
 
 
-TERMINAL_TYPES = frozenset(  # 终态集合
+TERMINAL_TYPES: frozenset[EventType] = frozenset(  # 终态集合
     {EventType.DONE, EventType.CANCELLED, EventType.ERROR}  # 三选一
 )  # frozenset 结束
 

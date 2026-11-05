@@ -7,7 +7,7 @@ from __future__ import annotations  # 类型注解延迟求值
 
 import time  # 默认时间戳
 from enum import StrEnum  # 字符串枚举
-from typing import Any  # 任意值
+from typing import Any, Protocol  # 任意值 / 结构化协议
 
 from pydantic import BaseModel, Field, model_validator  # 校验模型
 
@@ -19,6 +19,14 @@ class TurnStatus(StrEnum):  # 轮次状态
     FAILED = "failed"  # 运行失败
     CANCELLED = "cancelled"  # 用户停止
     UNANSWERED = "unanswered"  # 没证据 / 门限拒答
+
+
+class ResultLike(Protocol):  # 结果形状协议
+    """契约层只认形状、不认实现；``app.core.result.Result`` 天然满足。"""
+
+    ok: bool  # 是否成功
+    code: str  # 错误码（成功为 "ok"）
+    data: Any  # 完整结果（审计通道）
 
 
 class TurnToolCall(BaseModel):  # 一次工具调用的审计记录
@@ -39,7 +47,7 @@ class TurnToolCall(BaseModel):  # 一次工具调用的审计记录
     @classmethod  # 类方法
     def from_env(  # 从 ResultEnvelope 派生
         cls,  # 类
-        envelope: Any,  # 工具统一包络（ResultEnvelope 或含 .ok/.code/.data 的对象）
+        envelope: ResultLike,  # 工具统一包络（任何含 .ok/.code/.data 的对象）
         tool_call_id: str = "",  # 关联调用 id
         *,
         name: str = "",  # 工具名
@@ -47,9 +55,7 @@ class TurnToolCall(BaseModel):  # 一次工具调用的审计记录
         duration_ms: int | None = None,  # 耗时
     ) -> TurnToolCall:  # 审计记录
         """把统一 Result 映射成审计记录；status/error_code/artifact 与 Result 同源。"""
-        from app.core.result import Result  # 延迟导入避免循环
-
-        ok_env = envelope.ok if isinstance(envelope, Result) else bool(getattr(envelope, "ok", False))  # 是否成功
+        ok_env = bool(getattr(envelope, "ok", False))  # 是否成功（按形状读取）
         data = getattr(envelope, "data", None)  # 完整结果（审计）
         return cls(  # 构造
             tool_call_id=tool_call_id,  # 关联
@@ -84,10 +90,23 @@ class Turn(BaseModel):  # 一“轮”问答
 
 
 def merge_turns(current: list[Turn] | None, update: list[Turn] | None) -> list[Turn]:  # 按轮次合并
-    """reducer：同 turn_id 覆盖、否则追加，保持顺序（重放幂等）。"""
-    out: list[Turn] = list(current or [])  # 现有
+    """reducer：同 turn_id 覆盖、否则追加，保持顺序（重放幂等）。
+
+    纯追加（最常见：末尾新增一轮）走整段 extend，避免逐条维护索引；
+    list channel 的 O(n) 拷贝是形状决定的，真要 O(1) 覆盖需把 channel 改成 dict。
+    """
+    if not update:  # 没有新轮次
+        return list(current or [])  # 原样拷贝
+    if not current:  # 首次写入
+        return list(update)  # 直接采用新值
+    out: list[Turn] = list(current)  # 现有
+    update_ids = [item.turn_id for item in update]  # 新轮次 id
+    existing = {item.turn_id for item in out}  # 已有 id
+    if len(update_ids) == len(set(update_ids)) and existing.isdisjoint(update_ids):  # 纯追加且无内部重复
+        out.extend(update)  # 整段追加
+        return out  # 返回
     index: dict[str, int] = {t.turn_id: i for i, t in enumerate(out)}  # id → 索引
-    for item in update or []:  # 逐条更新
+    for item in update:  # 逐条更新
         if item.turn_id in index:  # 已存在
             out[index[item.turn_id]] = item  # 覆盖
         else:  # 新增
