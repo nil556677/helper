@@ -1,0 +1,9 @@
+# 时间类固定路径规则（exact 且唯一无歧义才允许 rule_hit）
+- id: direct.time
+  priority: 100
+  exact: true
+  match:
+    any: ["现在几点", "当前时间", "北京时间", "今天几号", "今天日期"]
+    regex: ["^(现在|当前)?\\s*(几|什么)(点|号)"]
+  action: {intent: direct, route: time, tools: [current_time]}
+  ambiguous_examples: ["几点开始", "几点了还没到", "那时候几点"]

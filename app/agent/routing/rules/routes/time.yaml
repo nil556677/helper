@@ -1,0 +1,8 @@
+id: time
+description: "查询当前时间、日期、时区"
+examples:
+  - "现在几点"
+  - "今天几号"
+  - "北京时间"
+tools: [current_time]
+node: dispatch_fixed

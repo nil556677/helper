@@ -1,0 +1,8 @@
+id: weather
+description: "查询城市当前或未来天气、气温"
+examples:
+  - "北京天气怎么样"
+  - "明天气温多少"
+  - "会下雨吗"
+tools: [query_weather]
+node: dispatch_fixed

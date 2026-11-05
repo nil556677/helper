@@ -1,0 +1,9 @@
+# 天气类固定路径规则
+- id: direct.weather
+  priority: 100
+  exact: true
+  match:
+    any: ["天气怎么样", "今天天气", "明天天气", "气温多少", "会下雨吗"]
+    regex: ["^(今天|明天|后天)?\\s*(的)?\\s*(天气|气温|温度)"]
+  action: {intent: direct, route: weather, tools: [query_weather]}
+  ambiguous_examples: ["天气之子", "天气真好", "这天气适合"]

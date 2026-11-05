@@ -47,8 +47,30 @@ from app.agent.contracts.tools import (  # 工具契约
     Mutation,
     ToolDescriptor,
 )
+from app.agent.contracts.routing import (  # 意图路由契约
+    AGENT_KINDS,  # 专家种类（唯一枚举源）
+    SIDE_EFFECTS,  # 副作用等级
+    AgentDescriptor,  # 专家描述符
+    ClarifyOptions,  # 澄清选项
+    InterruptPayload,  # HITL 负载
+    ResumeCommand,  # HITL 恢复
+    RouteCandidate,  # 语义候选
+    RouteSpec,  # 固定路径
+    RuleHit,  # 规则命中
+    SemanticRecall,  # 语义召回
+)
 
 __all__ = [  # 对外导出
+    "AGENT_KINDS",  # 专家种类
+    "SIDE_EFFECTS",  # 副作用等级
+    "AgentDescriptor",  # 专家描述符
+    "ClarifyOptions",  # 澄清选项
+    "InterruptPayload",  # HITL 负载
+    "ResumeCommand",  # HITL 恢复
+    "RouteCandidate",  # 语义候选
+    "RouteSpec",  # 固定路径
+    "RuleHit",  # 规则命中
+    "SemanticRecall",  # 语义召回
     "GROUP_ICONS",  # 分组图标
     "GROUP_LABELS",  # 分组组名
     "GROUP_ORDER",  # 分组顺序

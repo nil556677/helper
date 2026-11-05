@@ -45,6 +45,7 @@ class ErrorCode:  # 错误码常量（唯一分类来源）
     PROTOCOL_ARG_INVALID = "protocol.arg_invalid"  # 参数非法
     PROTOCOL_DISABLED = "protocol.disabled"  # 已被禁用
     PROTOCOL_PERMISSION = "protocol.permission"  # 无权限
+    PROTOCOL_CAPABILITY_UNSUPPORTED = "protocol.capability_unsupported"  # 无对应专家/能力，显式不兜底
     # 执行层：运行失败 / 限流 / 超时（限流超时可重试）
     EXECUTION_FAILED = "execution.failed"  # 执行失败
     EXECUTION_RATE_LIMIT = "execution.rate_limit"  # 被限流（可等后重试）

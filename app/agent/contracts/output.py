@@ -8,7 +8,7 @@ from __future__ import annotations  # 类型注解延迟求值
 import hashlib  # 稳定哈希兜底
 import re  # 规范化文本
 from enum import StrEnum  # 字符串枚举
-from typing import Any  # 任意值
+from typing import Any, Literal  # 任意值 / 字面量
 
 from pydantic import BaseModel, Field, model_validator  # 校验模型
 
@@ -48,6 +48,12 @@ class RouteDecision(BaseModel):  # 一次“下一步怎么走”的决策
     candidates: list[Candidate] = Field(default_factory=list)  # 澄清候选项（clarify 时非空）
     reason: str = ""  # 人话原因（进 trace / UI）
     version: int = 1  # 输出契约版本号
+    # —— 意图路由扩展（只加不删，默认值保持向后兼容）——
+    intent: Literal["direct", "fallback"] = "fallback"  # 两条执行形态：直接固定路径 / LLM 兜底
+    route: str | None = None  # direct 时的固定路径名
+    tools: tuple[str, ...] = ()  # 本步允许的工具（最小暴露）
+    policy_version: str = ""  # 路由策略版本（可复现）
+    decided_by: Literal["rule", "embedding", "config", "fallback"] = "fallback"  # 谁定的
 
     @model_validator(mode="after")  # 跨字段校验
     def _check(self) -> RouteDecision:  # 校验器
