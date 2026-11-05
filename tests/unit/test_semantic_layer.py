@@ -75,6 +75,18 @@ def test_semantic_node_writes_state(tmp_path: Path, monkeypatch) -> None:  # 节
     assert out["route"]["route"] == "time"  # 路径
 
 
+def test_decide_with_policy_relaxes_thresholds(tmp_path: Path) -> None:  # 灰度策略放宽阈值
+    from app.agent.routing.policy import CANDIDATE_POLICY, DEFAULT_POLICY  # 策略
+
+    routes = _ROUTES + (RouteSpec(route_id="time_copy", description="查询当前时间"),)  # 同向量制造分差 0
+    index = _build(tmp_path, routes)  # 索引
+    # 默认策略：top1=1.0 但 margin=0 → ambiguous
+    assert semantic_mod.decide(index, [1.0, 0.0]).decision == "ambiguous"  # 默认收窄
+    # 候选策略：direct_top=0.90,margin=0.08 ← 仍被 margin=0 卡住 → ambiguous（防误判）
+    assert semantic_mod.decide(index, [1.0, 0.0], policy=CANDIDATE_POLICY).decision == "ambiguous"  # 差距保护在
+    assert DEFAULT_POLICY.direct_top > CANDIDATE_POLICY.direct_top  # 版本阈值不同
+
+
 def test_edges() -> None:  # 边函数
     assert after_rule({"route": {"intent": "direct"}}) == "dispatch_fixed"  # 命中
     assert after_rule({}) == "semantic_router"  # 未定

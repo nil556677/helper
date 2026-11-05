@@ -12,6 +12,7 @@ from app.agent.contracts.routing import RouteCandidate, RouteSpec, SemanticRecal
 from app.agent.context import current_run  # 当前 run（指标）
 from app.agent.metrics import bump  # 指标累加
 from app.agent.routing.embeddings import RouteIndex, default_embed, default_route_index  # 索引
+from app.agent.routing.policy import resolve_policy  # 灰度分桶
 from app.agent.routing.rules.loader import load_routes  # 路径定义
 
 #: 直接路由阈值（绝对分 + 与第二名的差距）。
@@ -38,12 +39,17 @@ def decide(  # 纯函数：向量 → 三态
     index: RouteIndex,  # 预计算矩阵
     query_vector: Sequence[float],  # query 向量
     *,
+    policy: Any = None,  # 策略（提供阈值；缺省用模块常量）
     direct_top: float = DIRECT_TOP_THRESHOLD,  # 门槛
     direct_margin: float = DIRECT_MARGIN_THRESHOLD,  # 分差
     miss_top: float = MISS_TOP_THRESHOLD,  # miss 门槛
     top_k: int = TOP_K,  # 候选数
 ) -> SemanticRecall:  # 三态结果
     """两条件缺一不可：绝对分高 + 与第二名差距大，才允许直接路由。"""
+    if policy is not None:  # 灰度策略覆盖默认阈值
+        direct_top = float(policy.direct_top)  # 门槛
+        direct_margin = float(policy.direct_margin)  # 分差
+        miss_top = float(policy.miss_top)  # miss 门槛
     ranked = index.scores(query_vector)  # 排序
     if not ranked:  # 无路由
         return SemanticRecall(decision="miss")  # 未命中
@@ -63,9 +69,11 @@ def semantic_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]: 
     """写 `semantic_recall`；若判定 direct，同时写 `route` 供 dispatch_fixed 使用。"""
     del config  # 不用图配置
     question = str(state.get("question") or "")  # 问题
+    key = str(state.get("conversation_id") or state.get("turn_id") or "default")  # 灰度键
+    policy = resolve_policy(key)  # 按会话稳定分桶（可复现）
     try:  # 本地 embedding 可能不可用
         query_vector = default_embed()(question)  # 唯一一次 embed
-        recall = decide(default_route_index(), query_vector)  # 三态
+        recall = decide(default_route_index(), query_vector, policy=policy)  # 三态（用策略阈值）
     except Exception:  # 模型缺失/异常 → 保守 miss
         recall = SemanticRecall(decision="miss")  # 未命中
     payload: dict[str, Any] = {"semantic_recall": recall.model_dump(mode="json")}  # 写召回
@@ -84,6 +92,7 @@ def semantic_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]: 
             tools=tuple(spec.tools) if spec is not None else (),  # 工具
             confidence=recall.top1,  # 置信
             reason=f"semantic:top={recall.top1:.3f},margin={recall.margin:.3f}",  # 依据
+            policy_version=policy.version,  # 灰度版本（可复现/审计）
             decided_by="embedding",  # 来源
         ).model_dump(mode="json")  # 序列化
     return payload  # 返回
