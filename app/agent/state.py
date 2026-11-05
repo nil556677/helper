@@ -21,6 +21,16 @@ class ChatState(TypedDict, total=False):  # 图状态（字段都可缺省）
 
     # 路由（唯一决策对象）
     route: dict[str, Any]  # RouteDecision 的 JSON 形态；迁移与边路由都读它
+    rule_hits: list[dict[str, Any]]  # 规则层命中明细（可观测）
+    semantic_recall: dict[str, Any]  # SemanticRecall 的 JSON 形态（语义层只写）
+
+    # 澄清（semantic_miss 出口，收敛闭环）
+    clarify_options: dict[str, Any]  # ClarifyOptions 的 JSON 形态
+    clarify_attempted: bool  # 是否尝试过澄清（限轮次用）
+
+    # 兜底子图结果（父图黑盒返回）
+    fallback_used: bool  # 本次请求最多进兜底子图一次
+    final_response: str  # 兜底子图返回的最终回答（并入 answer 用）
 
     # 检索
     hits: list[dict[str, Any]]  # 召回命中
