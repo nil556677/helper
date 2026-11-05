@@ -18,6 +18,7 @@ EXPERT_KINDS: frozenset[str] = frozenset({"query_agent", "action_agent", "sensit
 Planner = Callable[[str, list[dict[str, Any]]], Plan]  # query+candidates → Plan
 Replanner = Callable[[FallbackState], ReplanDecision]  # state → ReplanDecision
 ExpertRunner = Callable[[str, dict[str, Any], FallbackState], Awaitable[dict[str, Any]]]  # agent+step+state → 结果
+Approver = Callable[[str, dict[str, Any]], Awaitable[bool]]  # (agent, step) → 是否批准执行（HITL）
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,8 @@ def _best(state: FallbackState) -> str:  # 基于已有证据拼最佳回复
 async def execute_once(  # Execute 一步（含升级旁路与 unsupported）
     state: FallbackState,  # 状态
     run_expert: ExpertRunner,  # 专家执行
+    *,
+    approve: Approver | None = None,  # HITL 审批门（对不可逆步）
 ) -> tuple[FallbackState, dict[str, Any]]:  # (新状态, 该步结论)
     out = dict(state)  # 拷贝
     plan = list(out.get("plan") or [])  # 计划
@@ -79,6 +82,9 @@ async def execute_once(  # Execute 一步（含升级旁路与 unsupported）
     if agent not in EXPERT_KINDS:  # 非法 agent（防御）
         out["unsupported_steps"] = list(out.get("unsupported_steps") or []) + [step]  # 显式
         return _no_step(out), {"kind": "unsupported"}  # 不静默
+    if approve is not None and not await approve(agent, step):  # HITL：未批准
+        out["unsupported_steps"] = list(out.get("unsupported_steps") or []) + [step]  # 显式：标记被拒
+        return _no_step(out), {"kind": "denied"}  # 不执行
     outcome = ExpertOutcome(**await run_expert(agent, step, state))  # 执行
     if outcome.escalate:  # 领域外 → 切换备选专家重跑（确定性，不触发 Replan）
         target = outcome.escalate  # 目标专家
@@ -110,10 +116,11 @@ async def run_fallback(  # 子图主循环
     replanner: Replanner,  # 重规划器
     run_expert: ExpertRunner,  # 专家执行
     max_replans: int = 2,  # 止损
+    approve: Approver | None = None,  # HITL 审批门
 ) -> FallbackState:  # 最终状态
     out = plan_state(state, planner)  # Plan
     while not out.get("is_done"):  # 终止前
-        out, _ = await execute_once(out, run_expert)  # Execute 一步（含升级/unsupported）
+        out, _ = await execute_once(out, run_expert, approve=approve)  # Execute 一步（含审批/升级/unsupported）
         if out.get("is_done"):  # 已收敛
             break
         decision = replanner(out)  # Replan 判断（即使 plan 空也要它给结论）

@@ -92,3 +92,43 @@ async def test_failed_expert_becomes_unsupported() -> None:  # 失败 → unsupp
     )
     assert result["is_done"] is True  # 收敛
     assert result["unsupported_steps"]  # 显式失败记录
+
+
+async def test_denied_step_never_executes() -> None:  # HITL 审批门：拒绝则不执行
+    executed: list[str] = []  # 实际执行记录
+
+    async def runner(agent, step, state):  # 记录执行
+        del state  # 不用
+        executed.append(str(step.get("step")))  # 记录
+        return {"ok": True, "result": "x"}  # 成功
+
+    async def deny(agent, step):  # 一律拒绝
+        del agent, step  # 不用
+        return False  # 拒绝
+
+    result = await run_fallback(
+        _state(), planner=_planner("query_agent"),
+        replanner=_replanner(1), run_expert=runner, approve=deny,
+    )
+    assert executed == []  # 一步都没执行
+    assert result["unsupported_steps"]  # 被拒步显式标记
+
+
+async def test_approved_step_executes() -> None:  # HITL 审批门：批准则执行
+    executed: list[str] = []  # 记录
+
+    async def runner(agent, step, state):  # 记录
+        del state  # 不用
+        executed.append(str(step.get("step")))  # 记录
+        return {"ok": True, "result": "x"}  # 成功
+
+    async def allow(agent, step):  # 放行
+        del agent, step  # 不用
+        return True  # 批准
+
+    result = await run_fallback(
+        _state(), planner=_planner("query_agent"),
+        replanner=_replanner(1), run_expert=runner, approve=allow,
+    )
+    assert executed == ["step0"]  # 执行了
+    assert result["is_done"] is True  # 收敛
