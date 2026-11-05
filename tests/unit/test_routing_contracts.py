@@ -47,11 +47,8 @@ def test_hitl_contracts() -> None:  # HITL 负载/恢复
 def test_agent_descriptor_and_completeness() -> None:  # 描述符与完整性校验
     descriptor = AgentDescriptor(name="query_agent", tools=("search_kb",))  # 合法描述符
     assert descriptor.side_effect == "none"  # 默认无副作用
-    discovered = discover_experts()  # 当前扫描结果
-    assert isinstance(discovered, dict)  # 是注册表
-    try:  # 当前实现不全，严格校验应报错
-        assert_experts_complete(discovered, strict=True)  # 期望抛
-    except ValueError:  # 报错正确
-        pass  # 通过
-    else:  # 没报错
-        raise AssertionError("专家不完整时应报错")  # 失败
+    discovered = discover_experts()  # 扫描结果（三个真实专家）
+    assert set(discovered) == set(EXPERT_KINDS)  # 与单源枚举一致
+    assert_experts_complete(discovered, strict=True)  # 完整（不抛）
+    assert discovered["query_agent"][0].tools  # 只读专家挂了工具
+    assert discovered["sensitive_agent"][0].side_effect == "irreversible"  # 不可逆标记

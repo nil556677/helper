@@ -58,24 +58,25 @@ def make_replanner(model: Any | None) -> Replanner:  # 造重规划器
 
 
 async def make_run_expert(model: Any | None, experts: dict[str, Any] | None = None) -> ExpertRunner:  # 造专家执行器
-    """用 `agents.experts` 已发现专家构建 runner；没模型时专家不可用。"""
-    from app.agent.agents.base import build_expert_agent  # 构建
+    """用 `agents.experts` 已发现专家构建 runner；工具按名从工具目录解析。"""
+    from app.agent.agents.base import build_expert_agent  # 构建（保留引用）
+    from app.agent.tools.catalog import tool_catalog  # 工具目录
 
-    available: dict[str, Any] = {}  # 可用专家（agent 名 → 编译图）
-    if model is not None and experts:  # 有模型可构成真实专家
-        for name, (descriptor, _build) in experts.items():  # 逐专家
-            # 工具已按描述符在 agents.experts 里组装；这里供真实场景扩展
-            available[name] = descriptor  # 记录可用
-        # 真实专家图由调用方注入 `tools_by_agent` 后构建；当前先用描述符占位
+    available: dict[str, Any] = {}  # 可用专家（agent 名 → (描述符, build, 工具对象)）
+    if model is not None and experts:  # 有模型才构建真实专家
+        catalog = tool_catalog()  # 名 → 工具
+        for name, (descriptor, build) in experts.items():  # 逐专家
+            resolved = [catalog[item] for item in descriptor.tools if item in catalog]  # 解析工具
+            available[name] = (descriptor, build, resolved)  # 记录
 
     async def run_expert(agent, step, state):  # 执行器
         del state  # 不用
         if model is None or agent not in available:  # 模型缺失/专家不存在
             return {"ok": False, "escalate": None, "error": f"expert {agent} unavailable"}  # 不可用
-        descriptor = available[agent]  # 描述符
-        tools = descriptor.tools  # 已声明工具（真实图由调用方 build）
-        graph = build_expert_agent(model, descriptor, list(tools))  # 构建
-        try:  # 无外部副作用可直跑
+        descriptor, build, tools = available[agent]  # 拆包
+        del descriptor  # 未直接用
+        graph = build(model, tools)  # 构建专家图
+        try:  # 执行该步
             out = await graph.ainvoke({"messages": [("human", str(step.get("step") or ""))]})  # 执行
             msgs = out.get("messages") or []  # 消息
             text = str(getattr(msgs[-1], "content", "")) if msgs else ""  # 回答
