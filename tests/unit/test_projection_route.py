@@ -8,7 +8,7 @@ from app.agent.fsm.states import RunEvent  # 事件
 
 def test_route_graph_projection() -> None:  # 路由图节点投影
     assert project_event("load_context", {}) is RunEvent.CONTEXT_LOADED  # 上下文
-    assert project_event("rule_route", {}) is None  # 规则层不迁移
+    assert project_event("rule_route", {}) is RunEvent.RETRIEVAL_DONE  # 路由阶段完成
     assert project_event("semantic_router", {}) is None  # 语义层不迁移
     assert project_event("dispatch_fixed", {}) is RunEvent.GENERATION_DONE  # 固定路径
     assert project_event("llm_fallback", {}) is RunEvent.GENERATION_DONE  # 兜底
