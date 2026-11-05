@@ -9,8 +9,8 @@ from __future__ import annotations  # 类型注解延迟求值
 
 from typing import Any  # 任意值
 
-from app.agent.agent import build_agent_graph  # 父图构造
-from app.agent.nodes.rag import RagRunner, real_steps  # RAG 子图
+from app.agent.agent import build_route_graph  # 新路由父图（生产）
+from app.agent.nodes.rag import RagRunner, real_steps  # RAG 子图（旧链路仍保留）
 
 _RUNNER: RagRunner | None = None  # 进程级子图运行器
 _GRAPH: Any = None  # 进程级编译父图
@@ -37,7 +37,7 @@ def build(*, checkpointer: Any = None) -> Any:  # 取（必要时建）编译父
     if _GRAPH_OVERRIDE is not None:  # worker 已注入
         return _GRAPH_OVERRIDE  # 用它
     if _GRAPH is None:  # 还没建
-        _GRAPH = build_agent_graph(get_runner(), checkpointer=checkpointer)  # 编译父图
+        _GRAPH = build_route_graph(checkpointer=checkpointer)  # 生产用新路由图
     return _GRAPH  # 返回
 
 
