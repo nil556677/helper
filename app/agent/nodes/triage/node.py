@@ -61,7 +61,24 @@ def triage_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  #
         time_range=pre.get("time_range") if isinstance(pre, dict) else None,  # 时间范围
         last_failed=str(state.get("last_turn_status") or "") == "failed",  # 上轮失败
     )  # 结束
-    return {"triage": decision.model_dump(mode="json")}  # 写回
+    return {"triage": _with_approval(decision)}  # 写回（补审批标记）
+
+
+def _with_approval(decision: TriageDecision) -> dict[str, Any]:  # 补 approval_required
+    """按目标专家的工具 mutation 判定是否需要审核（无专家则 False）。"""
+    payload = decision.model_dump(mode="json")  # 序列化
+    if not decision.agent:  # 无目标专家
+        return payload  # 原样
+    try:  # 取专家工具
+        from app.agent.agents.experts import EXPERTS  # 注册表
+        from app.agent.routing.approval import requires_approval  # 判定
+
+        entry = EXPERTS.get(decision.agent)  # 专家
+        tools = entry[0].tools if entry is not None else ()  # 工具名
+        payload["approval_required"] = requires_approval(tools)  # 判定
+    except Exception:  # 判定失败不阻断
+        payload["approval_required"] = False  # 保守
+    return payload  # 返回
 
 
 def _entities_of(pre: Any) -> dict[str, Any]:  # 合并显式/继承实体
