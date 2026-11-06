@@ -179,10 +179,10 @@ def _detail(run_id: str) -> None:  # 详情弹窗
                             value = decisions.get(key)  # 该阶段决策
                             if not value:  # 没有
                                 continue  # 跳过
-                            with ui.expansion(f"{label}", classes="w-full hp-step"):  # 折叠
+                            with ui.expansion(f"{label}").classes("w-full hp-step"):  # 折叠
                                 ui.code(json.dumps(value, ensure_ascii=False, indent=2)).classes("w-full")  # 原始 JSON
                         if steps:  # 逐步
-                            with ui.expansion(f"逐步（节点做了什么，{len(steps)}）", classes="w-full hp-step"):
+                            with ui.expansion(f"逐步（节点做了什么，{len(steps)}）").classes("w-full hp-step"):
                                 for s in steps:  # 逐条
                                     with ui.row().classes("w-full items-start gap-2 no-wrap"):  # 一行
                                         ui.label(str(s.get("node") or "")).classes("hp-field-name").style("width: 210px;")  # 节点
