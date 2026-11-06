@@ -246,6 +246,7 @@ async def _run_graph(  # 跑父图并驱动状态机
                         str(payload.get("description") or ""),  # 说明
                         list(payload.get("options") or []),  # 选项
                         str(payload.get("risk") or "low"),  # 风险
+                        str(payload.get("kind") or "choose"),  # 选路由/补参数
                     )  # 事件结束
                 )  # emit 结束
                 break  # 停止消费（图已暂停）

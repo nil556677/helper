@@ -39,6 +39,24 @@ def triage_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  #
     # 短路①：上一轮 pending_clarify 且用户输入匹配选项 → 直接回到该固定路径
     pending = state.get("pending_clarify")  # 待澄清
     if isinstance(pending, dict) and isinstance(pre, dict) and pre.get("phase") == "followup":  # 跟进轮
+        expect = str(pending.get("expect") or "")  # 期望类型（param=补参数）
+        pending_route = str(pending.get("route") or "")  # 待执行的固定路径
+        if expect == "param" and pending_route:  # 补参数模式：任意输入都当作参数值
+            from app.core.retrieval.tokenize import cut  # 清洗输入
+
+            filler = {"查", "帮我", "请问", "一下", "天气", "气温", "看看", "的", "了", "吗", "呢", "？", "?"}  # 噪声
+            tokens = [str(t) for t in cut(query) if str(t) not in filler and len(str(t)) >= 2]  # 去噪声词
+            param_value = (tokens[-1] if tokens else query).strip()  # 取最后有效词（多为城市）
+            decision = TriageDecision(intent="query", path_type="fast_single", escalate_reason="param_filled")  # 直接
+            resolved = RouteDecision(  # 直接路由
+                next=DecisionTarget.ANSWER,  # 兼容字段
+                intent="direct",  # 直接
+                route=pending_route,  # 待执行路径
+                confidence=1.0,  # 用户已答
+                reason="param_filled",  # 依据
+                decided_by="config",  # 用户输入
+            )  # 结束
+            return {"triage": decision.model_dump(mode="json"), "route": resolved.model_dump(mode="json"), "pending_param": param_value}  # 短路
         choices = pending.get("choices") if isinstance(pending.get("choices"), dict) else {}  # 选项映射
         for label, route_name in choices.items():  # 逐项
             if label and label in query:  # 命中

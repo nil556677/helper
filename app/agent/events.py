@@ -144,11 +144,13 @@ def clarify(  # 澄清待办
     description: str = "",  # 说明
     options: list[dict] | None = None,  # 选项
     risk: str = "low",  # 风险
+    kind: str = "choose",  # choose=选路由 / input=补参数
 ) -> EventEnvelope:  # 事件
     """HITL 暂停：前端渲染选项并回传选择。"""
     return make(  # 事件
         EventType.CLARIFY,  # 类型
         thread_id=thread_id,  # 线程
+        kind=kind,  # 类型
         title=title,  # 标题
         description=description,  # 说明
         options=list(options or []),  # 选项

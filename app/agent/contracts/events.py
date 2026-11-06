@@ -103,6 +103,7 @@ class ClarifyPayload(_Payload):  # 澄清待办
 
     type: Literal[EventType.CLARIFY] = EventType.CLARIFY  # 判别字段
     thread_id: str  # 恢复用线程 id
+    kind: str = "choose"  # choose=选路由 / input=补参数
     title: str = "需要确认"  # 标题
     description: str = ""  # 说明
     options: list[dict] = []  # [{value,label}]

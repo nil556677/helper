@@ -258,27 +258,39 @@ def _render_approval(view: dict[str, Any], data: dict[str, Any]) -> None:  # 审
 
 
 def _render_clarify(view: dict[str, Any], data: dict[str, Any]) -> None:  # 澄清卡
-    """HITL 暂停：展示候选项，用户点选后恢复运行。"""
+    """HITL 暂停：借鉴成熟聊天 UX（ChatGPT suggestion chips / CopilotKit interrupt）——
+    紧凑卡片 + 横向快捷 chips，点选即发；自由输入走输入框。"""
     box = view.get("approval_box")  # 容器
     if box is None or not _alive(view):  # 没 UI
         return  # 跳过
     options = [item for item in (data.get("options") or []) if isinstance(item, dict)]  # 选项
+    kind = str(data.get("kind") or "choose")  # choose=选路由 / input=补参数
     box.clear()  # 清旧
-    with box, ui.card().classes("w-full hp-card gap-2"):  # 画
+    with box, ui.card().classes("w-full hp-card gap-2 py-3").style(  # 紧凑卡 + 左侧强调条
+        "border-left: 3px solid var(--hp-accent);"
+    ):  # 画
         with ui.row().classes("w-full items-center gap-2"):  # 标题行
-            ui.icon("help_outline").classes("text-lg")  # 图标
+            ui.icon("contact_support" if kind == "input" else "quiz").classes("text-amber-500")  # 图标按类型
             ui.label(str(data.get("title") or "需要确认")).classes("hp-card-title")  # 标题
-        if data.get("description"):  # 说明
-            ui.label(str(data["description"])).classes("hp-field-help")  # 说明
-        if options:  # 有候选：整行按钮，点选即继续
-            with ui.column().classes("w-full gap-2"):  # 竖排
+        if data.get("description"):  # 追问/说明（补参数时这就是问题本身）
+            ui.label(str(data["description"])).classes("text-sm opacity-80")  # 轻量正文
+        if options:  # 快捷 chips：横向换行，轻量描边（不像表单）
+            with ui.row().classes("w-full flex-wrap gap-2"):  # chips 区
                 for item in options:  # 逐项
                     value = str(item.get("value") or "")  # 值
                     label = str(item.get("label") or value)  # 文案
-                    ui.button(label, on_click=lambda v=value: _choose(view, v)).props("outline").classes("w-full justify-start")  # 整行
+                    ui.button(  # chip 式按钮
+                        label,  # 文案
+                        on_click=lambda v=value: _choose(view, v),  # 点选即回
+                    ).props("outline no-caps size=md unelevated").classes("rounded-full border-2")  # 圆角描边
         with ui.row().classes("w-full items-center justify-between"):  # 底部
-            ui.label("也可以直接在下方输入新的描述。").classes("hp-hint")  # 引导
-            ui.button("取消", on_click=lambda: _dismiss(view)).props("flat")  # 取消本轮
+            hint = (  # 引导语按类型
+                "点上面的选项，或直接在输入框回复（如城市名）。"  # 补参数
+                if kind == "input"  # 输入型
+                else "点上面的选项继续；也可以直接输入新的描述。"  # 选路由
+            )  # 结束
+            ui.label(hint).classes("hp-hint")  # 引导
+            ui.button("取消本轮", on_click=lambda: _dismiss(view)).props("flat dense").classes("opacity-60")  # 取消（弱化）
 
 
 def _dismiss(view: dict[str, Any]) -> None:  # 取消澄清

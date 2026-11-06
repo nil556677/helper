@@ -106,6 +106,7 @@ class RouteSpec:  # 固定路径定义（routes/*.yaml）
     examples: tuple[str, ...] = ()  # 示例
     tools: tuple[str, ...] = ()  # 工具
     node: str = "dispatch_fixed"  # 分流节点
+    required_params: tuple[dict, ...] = ()  # 必需参数（name/extract_regex/question/options）
 
 
 __all__ = [  # 对外导出

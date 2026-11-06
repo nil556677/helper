@@ -71,6 +71,7 @@ def load_routes(directory: str | Path | None = None) -> tuple[RouteSpec, ...]:  
                     examples=tuple(str(x) for x in (raw.get("examples") or ())),  # 示例
                     tools=tuple(str(x) for x in (raw.get("tools") or ())),  # 工具
                     node=str(raw.get("node") or "dispatch_fixed"),  # 分流节点
+                    required_params=tuple(dict(item) for item in (raw.get("required_params") or ()) if isinstance(item, dict)),  # 必需参数
                 )
             )
     return tuple(routes)  # 返回

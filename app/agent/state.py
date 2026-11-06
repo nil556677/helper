@@ -33,6 +33,7 @@ class ChatState(TypedDict, total=False):  # 图状态（字段都可缺省）
     thread_id: str  # 恢复用线程 id
     flags: dict[str, Any]  # 硬约束标志（L3 短路读）
     pending_clarify: dict[str, Any]  # 上轮待澄清（下一轮 phase=followup）
+    pending_param: str  # 待填的必需参数值（追问后用户答复）
     reroute: bool  # 澄清自由输入后标记重路由（after_clarify 读它）
     rule_hits: list[dict[str, Any]]  # 规则层命中明细（可观测）
     semantic_recall: dict[str, Any]  # SemanticRecall 的 JSON 形态（语义层只写）

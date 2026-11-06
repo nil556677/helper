@@ -9,6 +9,7 @@ from app.agent.events import basis as basis_event  # 检索依据事件
 from app.agent.events import tool as tool_event  # 工具事件
 from app.agent.stages import stage  # 过程步骤
 from app.agent.tools.library import current_time, query_weather, search_knowledge_base  # 内置工具
+from app.agent.nodes.semantic.node import route_specs  # 路径定义（含必需参数）
 from app.rag.answer import extractive  # 原文回退（无模型时也能给证据原文）
 
 ArgsBuilder = Callable[[str], dict[str, Any]]  # question → 工具参数
@@ -18,8 +19,49 @@ def _weather_args(question: str) -> dict[str, Any]:  # 从问题里抠城市
     text = str(question or "")  # 原文
     for word in ("的天气", "天气", "怎么样", "气温", "多少", "会不会下雨", "会下雨吗", "吧", "？", "?"):  # 去噪声
         text = text.replace(word, "")  # 去
-    city = text.strip() or "北京"  # 剩余当城市，兜底北京
-    return {"city": city}  # 参数
+    return {"city": text.strip()}  # 剩余当城市（可能为空 → 由必需参数检查兜住）
+
+
+def _param_override(route_name: str, value: str) -> dict[str, Any]:  # 参数名 → 工具参数覆盖
+    """pending_param / resume 值注入到对应工具参数。"""
+    if not value:  # 空
+        return {}  # 不覆盖
+    if route_name == "weather":  # 天气 → city
+        return {"city": value}  # 覆盖
+    return {}  # 其他路径暂无必需参数
+
+
+def _args_complete(route_name: str, args: dict[str, Any]) -> bool:  # 参数是否已齐
+    """weather 需要 city 非空；其他路径恒齐。"""
+    if route_name == "weather":  # 天气
+        return bool(str(args.get("city") or "").strip())  # 城市非空
+    return True  # 其余齐
+
+
+def _extract_param(pattern: str, question: str) -> str:  # 按正则抽参数
+    import re  # 正则
+
+    match = re.search(pattern, str(question or ""))  # 搜索
+    return str(match.group(1)).strip() if match else ""  # 命中取第 1 组
+
+
+def _missing_param(spec: Any, question: str) -> tuple[str, str, tuple[str, ...]]:  # 检查必需参数
+    """返回 (参数名, 追问话术, 快捷选项)；都抽到返回 ("", "", ())。"""
+    import re  # 正则
+
+    for item in (spec.required_params or ()):  # 逐必需参数
+        name = str(item.get("name") or "")  # 名
+        pattern = str(item.get("extract_regex") or "")  # 抽取式
+        question_text = str(item.get("question") or f"请提供{name}？")  # 追问
+        options = tuple(str(x) for x in (item.get("options") or ()))  # 快捷选项
+        if pattern:  # 有抽取式
+            try:  # 坏正则容错
+                if re.search(pattern, question):  # 抽到
+                    continue  # 下一个
+            except re.error:  # 正则坏
+                pass  # 当缺失
+        return name, question_text, options  # 缺
+    return "", "", ()  # 全齐
 
 
 #: route → (工具, 参数生成器)。
@@ -58,8 +100,37 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
     tool, args_builder = entry  # 拆包
     question = str(state.get("question") or "")  # 问题
     plan = None  # 检索预算（仅知识走）
-    args = args_builder(question)  # 基础参数
     run = current_run()  # 当前 run（过程/工具事件）
+    # —— 必需参数检查：缺 → HITL 中断追问 或 模板追问（绝不静默兜底）——
+    spec = route_specs().get(name)  # 路径定义
+    pending_param = str(state.get("pending_param") or "")  # 上轮接住/恢复的参数值
+    args = ({**args_builder(question), **_param_override(name, pending_param)} if pending_param else args_builder(question))  # 基础参数
+    if spec is not None and spec.required_params and not pending_param:  # 声明了必需参数且本轮没带
+        param_name, ask_text, ask_options = _missing_param(spec, question)  # 检查
+        if param_name and not _args_complete(name, args):  # 仍缺（args 里没有兜底值才算缺）
+            if state.get("hitl_enabled"):  # 生产：暂停等用户（重放后 resume 值进 pending_param）
+                from langgraph.types import interrupt  # 原生暂停
+                from app.agent.contracts.routing import InterruptPayload  # 负载
+
+                payload = InterruptPayload(  # 追问负载
+                    run_id=str(state.get("run_id") or ""),  # run
+                    thread_id=str(state.get("thread_id") or ""),  # 线程
+                    node="dispatch_fixed",  # 节点
+                    kind="input",  # 需要补充信息
+                    title="需要补充信息",  # 标题
+                    description=ask_text,  # 追问话术
+                    options=[{"value": item, "label": item} for item in ask_options],  # 快捷城市
+                    risk="low",  # 低风险
+                ).model_dump(mode="json")  # 序列化
+                answer_value = str(interrupt(payload) or "")  # 恢复值 = 用户选择/输入
+                args = {**args_builder(question), **_param_override(name, answer_value)}  # 用恢复值构建
+            else:  # 测试/未启用：模板追问 + pending_clarify（下轮打字接住）
+                return {  # 追问
+                    "answer": ask_text,  # 话术
+                    "note": ask_text,  # 说明
+                    "fragments": [],  # 无引用
+                    "pending_clarify": {"expect": "param", "param": param_name, "route": name, "choices": {}},  # 下轮接住（expect=param 模式）
+                }  # 结束
     if name == "knowledge":  # 知识库：按复杂度动态设定证据数
         from app.agent.routing.retrieval_budget import plan_for  # 预算
 

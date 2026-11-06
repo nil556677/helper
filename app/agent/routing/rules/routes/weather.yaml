@@ -12,3 +12,8 @@ examples:
   - "今天最高温度多少"
 tools: [query_weather]
 node: dispatch_fixed
+required_params:
+  - name: city
+    extract_regex: "(?:在|查|看看)?([\\u4e00-\\u9fa5]{2,6}?)(?:的)?(?:天气|气温|温度|下不下雨|下雨)"
+    question: "请问想查哪个城市的天气？"
+    options: ["北京", "上海", "广州", "深圳"]
