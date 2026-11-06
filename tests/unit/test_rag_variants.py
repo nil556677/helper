@@ -18,3 +18,5 @@ def test_knowledge_agent_tools_resolvable() -> None:  # 知识专家工具都能
     catalog = tool_catalog()  # 目录
     assert descriptor.tools  # 有工具
     assert all(name in catalog for name in descriptor.tools)  # 全部可解析（单源）
+    assert "query_weather" in descriptor.tools  # agentic 也能查天气（消除降级）
+    assert "current_time" in descriptor.tools  # agentic 也能查时间
