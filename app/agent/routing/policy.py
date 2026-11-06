@@ -19,11 +19,11 @@ class PolicySpec:  # 一份策略（版本 + 阈值）
     display_min: float = 0.25  # 澄清展示下限
 
 
-#: 当前线上版本。
-DEFAULT_POLICY = PolicySpec("v1", 0.95, 0.10, 0.30, 0.25)  # 稳定版
+#: 当前线上版本（阈值按 bge-m3 实测分布校准：时间 ~0.75-0.79）。
+DEFAULT_POLICY = PolicySpec("v1", 0.72, 0.15, 0.30, 0.25)  # 稳定版
 
-#: 候选灰度版本（阈值放宽，看召回提升）。
-CANDIDATE_POLICY = PolicySpec("v2", 0.90, 0.08, 0.25, 0.20)  # 候选版
+#: 候选灰度版本（略放宽，观察 direct 是否上升）。
+CANDIDATE_POLICY = PolicySpec("v2", 0.70, 0.12, 0.25, 0.20)  # 候选版
 
 #: 灰度比例（候选版流量占比）。
 _CANDIDATE_WEIGHT = 0.20  # 20%

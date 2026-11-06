@@ -45,6 +45,26 @@ cases:
   - question: "文档第几条说了这个"
     expected: null
 
+  # —— 语义 direct 带：规则不命中，语义应高分（用于阈值校准）——
+  - question: "现在时间是多少"
+    expected: time
+  - question: "现在的日期是几号"
+    expected: time
+  - question: "最近天气如何"
+    expected: weather
+  - question: "外面气温如何"
+    expected: weather
+
+  # —— 语义 miss 带：明显无关，分数应压到低估（用于校准）——
+  - question: "宇宙大爆炸的奇点方程"
+    expected: null
+  - question: "量子纠缠的贝尔不等式怎么推导"
+    expected: null
+  - question: "帮我翻译这段拉丁文"
+    expected: null
+  - question: "相对论和量子力学的统一"
+    expected: null
+
   # —— 无关/闲聊/复杂（应澄清或 agentic，不得 direct）——
   - question: "随便聊两句废话"
     expected: null
