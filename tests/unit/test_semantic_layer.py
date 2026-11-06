@@ -66,10 +66,12 @@ def test_decide_ambiguous_when_close(tmp_path: Path) -> None:  # 近乎同分 �
 
 
 def test_semantic_node_writes_state(tmp_path: Path, monkeypatch) -> None:  # 节点写状态
+    import asyncio  # 跑 async 节点
+
     index = _build(tmp_path)  # 索引
     monkeypatch.setattr(semantic_mod, "default_embed", lambda: _embed)  # 假 embed
     monkeypatch.setattr(semantic_mod, "default_route_index", lambda: index)  # 假索引
-    out = semantic_mod.semantic_node({"question": "现在几点"})  # 跑节点
+    out = asyncio.run(semantic_mod.semantic_node({"question": "现在几点"}))  # 跑节点
     assert out["semantic_recall"]["decision"] == "direct"  # 直接
     assert out["route"]["intent"] == "direct"  # 写了统一决策
     assert out["route"]["route"] == "time"  # 路径

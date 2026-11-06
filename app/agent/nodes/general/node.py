@@ -21,12 +21,16 @@ def _degrade() -> dict[str, Any]:  # 无模型降级
 async def general_agent_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
     """有模型才生成引导话术；无模型/失败用模板，绝不假装有数据。"""
     del config  # 不用图配置
+    from app.agent.contracts import StageGroup  # 分组
+    from app.agent.stages import stage  # 过程步
+
     model = get_chat_model()  # 统一入口
     question = str(state.get("question") or "")  # 问题
     if model is None:  # 无模型
         return _degrade()  # 模板
     try:  # 调模型
-        response = await model.ainvoke([("system", _PROMPT), ("human", question)])  # 请求
+        with stage("生成回答", group=StageGroup.GENERATE):  # 过程区可见
+            response = await model.ainvoke([("system", _PROMPT), ("human", question)])  # 请求
         text = str(getattr(response, "content", "") or "").strip()  # 正文
     except Exception:  # 失败
         return _degrade()  # 模板

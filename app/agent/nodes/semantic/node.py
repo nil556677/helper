@@ -65,17 +65,21 @@ def decide(  # 纯函数：向量 → 三态
     return SemanticRecall(candidates=candidates, top1=top1, margin=margin, decision=decision)  # 返回
 
 
-def semantic_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
+async def semantic_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
     """写 `semantic_recall`；若判定 direct，同时写 `route` 供 dispatch_fixed 使用。"""
     del config  # 不用图配置
+    from app.agent.contracts import StageGroup  # 分组
+    from app.agent.stages import stage  # 过程步
+
     question = str(state.get("question") or "")  # 问题
     key = str(state.get("conversation_id") or state.get("turn_id") or "default")  # 灰度键
     policy = resolve_policy(key)  # 按会话稳定分桶（可复现）
-    try:  # 本地 embedding 可能不可用
-        query_vector = default_embed()(question)  # 唯一一次 embed
-        recall = decide(default_route_index(), query_vector, policy=policy)  # 三态（用策略阈值）
-    except Exception:  # 模型缺失/异常 → 保守 miss
-        recall = SemanticRecall(decision="miss")  # 未命中
+    with stage("判断意图", group=StageGroup.PREPARE):  # 过程区可见
+        try:  # 本地 embedding 可能不可用
+            query_vector = default_embed()(question)  # 唯一一次 embed
+            recall = decide(default_route_index(), query_vector, policy=policy)  # 三态（用策略阈值）
+        except Exception:  # 模型缺失/异常 → 保守 miss
+            recall = SemanticRecall(decision="miss")  # 未命中
     payload: dict[str, Any] = {"semantic_recall": recall.model_dump(mode="json")}  # 写召回
     run = current_run()  # 当前 run（指标打点）
     if run is not None:  # 有 run 才记

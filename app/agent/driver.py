@@ -102,6 +102,31 @@ def _tools_summary(ctx: RunContext) -> dict[str, Any]:  # 工具调用汇总
     }  # 返回
 
 
+def _decision_chain(state: dict[str, Any]) -> dict[str, Any]:  # 决策链(问题→输出)
+    """把路由/分诊/校验等决策快照收进 metadata，供排障回看。"""
+    keys = ("preprocessed", "route", "semantic_recall", "intent", "triage", "verify", "clarify_options")  # 决策通道
+    return {key: state.get(key) for key in keys if state.get(key)}  # 只收有值的
+
+
+def _route_json(state: dict[str, Any]) -> str:  # 真实路由 JSON(不再写死 rag)
+    """取 RouteDecision/Triage 的可读快照；都没有则回退 none。"""
+    route = state.get("route")  # 决策对象
+    if isinstance(route, dict) and route:  # 有路由
+        return json.dumps({  # 快照
+            "mode": route.get("decided_by") or "route",  # 谁定的
+            "reason": route.get("reason") or "",  # 理由
+            "route": route.get("route") or "",  # 路径
+        }, ensure_ascii=False)  # 中文保留
+    triage = state.get("triage")  # 分诊对象
+    if isinstance(triage, dict) and triage:  # 有分诊
+        return json.dumps({  # 快照
+            "mode": "triage",  # 分诊
+            "reason": str(triage.get("escalate_reason") or triage.get("path_type") or ""),  # 原因/路径
+            "route": triage.get("agent") or "",  # 专家
+        }, ensure_ascii=False)  # 中文保留
+    return '{"mode": "none"}'  # 都没有 → 未知
+
+
 def _update_trace(ctx: RunContext, state: dict[str, Any]) -> None:  # 补 trace 摘要
     """补 run 级汇总：route/answer/model/TTFT + 元数据；优先读最终 state（E3）。"""
     with contextlib.suppress(Exception):  # trace 失败不影响
@@ -118,10 +143,11 @@ def _update_trace(ctx: RunContext, state: dict[str, Any]) -> None:  # 补 trace 
             "basis": basis,  # 检索依据
             "tools": _tools_summary(ctx),  # 工具调用汇总（可观测）
             "metrics": _metrics_of(ctx, state),  # 指标汇总（可观测）
+            "decisions": _decision_chain(state),  # 决策链（排障）
         }  # 元数据结束
         trace_store.update_run(  # 写
             ctx.run_id,  # run
-            route_json='{"mode": "rag"}',  # 固定 RAG
+            route_json=_route_json(state),  # 真实路由
             answer=str(state.get("answer") or ctx.partial_answer),  # 已生成
             model="llm",  # 模型槽位
             ttft_ms=ctx.first_token_ms or 0,  # 首 token
@@ -143,13 +169,14 @@ async def _update_trace_async(ctx: RunContext, state: dict[str, Any]) -> None:  
             "usage": usage,  # 用量
             "gate": gate,  # 门限
             "basis": basis,  # 依据
+            "decisions": _decision_chain(state),  # 决策链（排障）
         }  # 结束
         from app.core.trace import store as _store  # 异步写
 
         await _store.update_run_async(  # 异步写
             ctx.db,  # 异步连接
             ctx.run_id,  # run
-            route_json='{"mode": "rag"}',  # 固定 RAG
+            route_json=_route_json(state),  # 真实路由
             answer=str(state.get("answer") or ctx.partial_answer),  # 已生成
             model="llm",  # 模型槽位
             ttft_ms=ctx.first_token_ms or 0,  # 首 token
