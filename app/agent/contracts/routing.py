@@ -16,10 +16,9 @@ from pydantic import BaseModel, Field  # 校验
 from app.agent.contracts.output import Candidate  # 澄清候选（复用单一来源）
 
 #: 专家种类：唯一枚举源（EXPERTS 与 PlanStep.agent 都围绕它校验）。
-AGENT_KINDS: tuple[str, ...] = (  # 专家种类
-    "query_agent",  # 只读查询
-    "action_agent",  # 可逆写
-    "sensitive_agent",  # 不可逆（强制 HITL）
+AGENT_KINDS: tuple[str, ...] = (  # 专家种类（按功能点，单一枚举源）
+    "knowledge_agent",  # 多功能 RAG（检索/资料问答）
+    "general_agent",  # 纯 LLM 兜底（能力外引导）
     "unsupported",  # 无专家可做（显式出口，不静默兜底）
 )
 

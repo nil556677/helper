@@ -1,4 +1,4 @@
-"""兜底子图主循环：规划/执行(含升级)/重规划(含止损)/unsupported。"""
+﻿"""兜底子图主循环：规划/执行(含升级)/重规划(含止损)/unsupported。"""
 
 from __future__ import annotations  # 延迟求值注解
 
@@ -32,7 +32,7 @@ def _replanner(done_after: int = 0) -> object:  # 在第 N 次重规划后完成
         count["n"] += 1  # 计数
         if count["n"] >= done_after:  # 到了
             return ReplanDecision(is_done=True, final_response="答案")  # 完成
-        return ReplanDecision(is_done=False, additional_steps=[PlanStep(step="more", agent="query_agent")])  # 追加
+        return ReplanDecision(is_done=False, additional_steps=[PlanStep(step="more", agent="knowledge_agent")])  # 追加
 
     return replan  # 返回
 
@@ -46,7 +46,7 @@ async def test_normal_path() -> None:  # 正常：两步 → 完成
         return ReplanDecision(is_done=not (state.get("plan") or []))  # 空则完成
 
     result = await run_fallback(
-        _state(), planner=_planner("query_agent", "query_agent"),
+        _state(), planner=_planner("knowledge_agent", "knowledge_agent"),
         replanner=natural, run_expert=_runes({"ok": True, "result": "a"}, {"ok": True, "result": "b"}),
     )
     assert result["is_done"] is True  # 完成
@@ -55,9 +55,9 @@ async def test_normal_path() -> None:  # 正常：两步 → 完成
 
 async def test_escalate_switches_agent() -> None:  # 领域外 → 切专家
     result = await run_fallback(
-        _state(), planner=_planner("query_agent"),
+        _state(), planner=_planner("knowledge_agent"),
         replanner=_replanner(1),
-        run_expert=_runes({"ok": False, "escalate": "action_agent"}, {"ok": True, "result": "e"}),
+        run_expert=_runes({"ok": False, "escalate": "general_agent"}, {"ok": True, "result": "e"}),
     )
     assert result["is_done"] is True  # 完成
     assert result["past_steps"][0][1] == "e"  # 升级后的结果
@@ -74,7 +74,7 @@ async def test_unsupported_explicit() -> None:  # 无专家显式暴露，不静
 
 async def test_stop_loss_forced() -> None:  # 止损
     result = await run_fallback(
-        _state(), planner=_planner("query_agent"),
+        _state(), planner=_planner("knowledge_agent"),
         replanner=_replanner(10),  # 永不完成，一直追加
         run_expert=_runes({"ok": True, "result": "a"}),
         max_replans=2,
@@ -86,7 +86,7 @@ async def test_stop_loss_forced() -> None:  # 止损
 
 async def test_failed_expert_becomes_unsupported() -> None:  # 失败 → unsupported，不静默
     result = await run_fallback(
-        _state(), planner=_planner("query_agent"),
+        _state(), planner=_planner("knowledge_agent"),
         replanner=_replanner(1),
         run_expert=_runes({"ok": False, "error": "network"}),
     )
@@ -107,7 +107,7 @@ async def test_denied_step_never_executes() -> None:  # HITL 审批门：拒绝�
         return False  # 拒绝
 
     result = await run_fallback(
-        _state(), planner=_planner("query_agent"),
+        _state(), planner=_planner("knowledge_agent"),
         replanner=_replanner(1), run_expert=runner, approve=deny,
     )
     assert executed == []  # 一步都没执行
@@ -127,7 +127,7 @@ async def test_approved_step_executes() -> None:  # HITL 审批门：批准则�
         return True  # 批准
 
     result = await run_fallback(
-        _state(), planner=_planner("query_agent"),
+        _state(), planner=_planner("knowledge_agent"),
         replanner=_replanner(1), run_expert=runner, approve=allow,
     )
     assert executed == ["step0"]  # 执行了

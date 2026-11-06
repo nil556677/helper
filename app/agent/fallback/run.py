@@ -13,7 +13,7 @@ from app.agent.fallback.schema import Plan, ReplanDecision  # 结构化输出
 from app.agent.fallback.state import FallbackState  # 状态
 
 #: 真实专家种类（不含 unsupported 出口标记）。
-EXPERT_KINDS: frozenset[str] = frozenset({"query_agent", "action_agent", "sensitive_agent"})  # 专家集合
+EXPERT_KINDS: frozenset[str] = frozenset({"knowledge_agent", "general_agent"})  # 专家集合
 
 Planner = Callable[[str, list[dict[str, Any]]], Plan]  # query+candidates → Plan
 Replanner = Callable[[FallbackState], ReplanDecision]  # state → ReplanDecision

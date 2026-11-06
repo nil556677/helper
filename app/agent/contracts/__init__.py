@@ -45,6 +45,15 @@ from app.agent.contracts.routing import (  # 意图路由契约
     RuleHit,  # 规则命中
     SemanticRecall,  # 语义召回
 )
+from app.agent.contracts.triage import (  # L0–L3/L5 契约
+    AccessContext,  # 接入上下文
+    EntityBundle,  # 实体包
+    IntentDecision,  # 意图决策
+    PreprocessResult,  # 预处理产物
+    TimeRange,  # 时间范围
+    TriageDecision,  # 分诊决策
+    VerifyResult,  # 校验结果
+)
 from app.agent.contracts.serialize import from_dict, make, to_dict, validate_sequence  # 序列化
 from app.agent.contracts.state import (  # 共享状态契约
     WRITE_TABLE,  # 写契约表

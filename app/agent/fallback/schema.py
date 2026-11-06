@@ -14,9 +14,9 @@ class PlanStep(BaseModel):  # 一个计划步骤
     """原子可执行的一步，并标注归属专家。"""
 
     step: str = Field(default="", description="Atomic, actionable step. If it spans domains, split it.")  # 步骤
-    agent: Literal["query_agent", "action_agent", "sensitive_agent", "unsupported"] = Field(  # 归属
+    agent: Literal["knowledge_agent", "general_agent", "unsupported"] = Field(  # 归属
         default="unsupported",  # 默认最保守
-        description="query_agent=read-only; action_agent=reversible writes; sensitive_agent=irreversible ops; unsupported=no existing expert has tools for this",
+        description="knowledge_agent=multi-tool RAG (search/answer); general_agent=pure-LLM fallback for out-of-scope; unsupported=no existing expert handles this step",
     )  # 专家
 
 
