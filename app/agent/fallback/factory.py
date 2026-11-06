@@ -22,16 +22,16 @@ PLANNER_PROMPT = (  # 提示词
 
 def make_planner(model: Any | None) -> Planner:  # 造规划器
     if model is None:  # 没模型
-        def degrade(query, candidates):  # 降级
+        async def degrade(query, candidates):  # 降级
             del candidates  # 不用
             return Plan(steps=[PlanStep(step=str(query), agent="unsupported")])  # 全标 unsupported
 
         return degrade  # 返回降级
     structured = model.with_structured_output(Plan)  # 结构化输出
 
-    def planner(query, candidates):  # 规划
+    async def planner(query, candidates):  # 规划（异步，避免在运行中 loop 里同步 invoke 死锁）
         del candidates  # 由 prompt 承载
-        return structured.invoke(  # 调模型
+        return await structured.ainvoke(  # 异步调模型
             [("system", PLANNER_PROMPT), ("human", str(query))]  # 消息
         )
 
@@ -40,17 +40,17 @@ def make_planner(model: Any | None) -> Planner:  # 造规划器
 
 def make_replanner(model: Any | None) -> Replanner:  # 造重规划器
     if model is None:  # 没模型
-        def degrade(state):  # 降级：空计划即完成
+        async def degrade(state):  # 降级：空计划即完成
             del state  # 不用
             return ReplanDecision(is_done=True)  # 直接结束
 
         return degrade  # 返回
     structured = model.with_structured_output(ReplanDecision)  # 结构化输出
 
-    def replanner(state):  # 重规划
+    async def replanner(state):  # 重规划（异步）
         past = state.get("past_steps") or []  # 已执行
         prompt = "\n".join(f"- {s}\n  {r}" for s, r in past) if past else "（无已执行步骤）"  # 摘要
-        return structured.invoke(  # 调模型
+        return await structured.ainvoke(  # 异步调模型
             [("system", "你评估结果并决定完成/追加/终止。"), ("human", f"已执行:\n{prompt}")]  # 消息
         )
 

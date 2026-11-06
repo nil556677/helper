@@ -5,21 +5,24 @@ from __future__ import annotations  # 延迟求值注解
 from typing import Any, Callable  # 类型
 
 from app.agent.contracts.triage import IntentDecision  # 契约
+from app.agent.llm.provider import get_chat_model  # 统一模型入口（唯一，避免 provider 分叉）
 from app.agent.routing.llm_router import classify  # 分类
 
 __all__ = ["route_llm_node", "set_model_provider"]  # 导出
 
-#: 模型提供者（装配层注入 gateway 产出的 chat_model；默认无模型→降级）。
+#: 兼容旧注入接缝（新代码用 llm.provider；保留供测试）。
 _MODEL_PROVIDER: Callable[[], Any] | None = None  # 提供者
 
 
-def set_model_provider(provider: Callable[[], Any] | None) -> None:  # 注入模型来源
+def set_model_provider(provider: Callable[[], Any] | None) -> None:  # 注入模型来源（兼容）
     global _MODEL_PROVIDER  # 改模块级
     _MODEL_PROVIDER = provider  # 存
 
 
-def _model() -> Any | None:  # 取模型
-    return _MODEL_PROVIDER() if _MODEL_PROVIDER is not None else None  # 无则 None
+def _model() -> Any | None:  # 取模型（统一走 llm.provider，测试注入仍可覆盖）
+    if _MODEL_PROVIDER is not None:  # 显式注入优先（测试）
+        return _MODEL_PROVIDER()  # 返回
+    return get_chat_model()  # 生产走统一入口
 
 
 async def route_llm_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点

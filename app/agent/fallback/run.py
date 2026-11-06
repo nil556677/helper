@@ -33,11 +33,11 @@ def _empty(state: FallbackState) -> FallbackState:  # 构造空结果
     return dict(state or {})  # 拷贝
 
 
-def plan_state(  # Plan 阶段：一次规划产出步骤
+async def plan_state(  # Plan 阶段：一次规划产出步骤（规划器同/异步兼容）
     state: FallbackState,  # 子图状态
     planner: Planner,  # 规划器
-) -> FallbackState:  # 更新后的状态
-    plan = planner(state.get("query", ""), list(state.get("semantic_candidates") or []))  # 规划
+) -> FallbackState:  # 更新后的状态（async：planner 可能返回协程）
+    plan = await _call(planner, state.get("query", ""), list(state.get("semantic_candidates") or []))  # 规划
     out = dict(state)  # 拷贝
     out["plan"] = [step.model_dump(mode="json") for step in plan.steps]  # 步骤（序列化）
     out["replan_count"] = 0  # 计数清零
@@ -109,6 +109,14 @@ def _unsupported(state: FallbackState, step: dict[str, Any]) -> FallbackState:  
     return out  # 返回
 
 
+async def _call(may_be_awaitable: Any, *args: Any, **kwargs: Any) -> Any:  # 兼容同步/异步可调用
+    """注入的 planner/replanner 同步或异步皆可；异步才 await。"""
+    result = may_be_awaitable(*args, **kwargs)  # 调用
+    import inspect  # 判断协程
+
+    return await result if inspect.isawaitable(result) else result  # 异步则 await
+
+
 async def run_fallback(  # 子图主循环
     state: FallbackState,  # 初始状态
     *,
@@ -118,12 +126,12 @@ async def run_fallback(  # 子图主循环
     max_replans: int = 2,  # 止损
     approve: Approver | None = None,  # HITL 审批门
 ) -> FallbackState:  # 最终状态
-    out = plan_state(state, planner)  # Plan
+    out = await plan_state(state, planner)  # Plan（async）
     while not out.get("is_done"):  # 终止前
         out, _ = await execute_once(out, run_expert, approve=approve)  # Execute 一步（含审批/升级/unsupported）
         if out.get("is_done"):  # 已收敛
             break
-        decision = replanner(out)  # Replan 判断（即使 plan 空也要它给结论）
+        decision = await _call(replanner, out)  # Replan 判断（async/同步兼兼容）
         out["replan_count"] = int(out.get("replan_count") or 0) + 1  # 计数
         if decision.is_done:  # 完成
             return _finish(out, response=decision.final_response or "", kind="replan_done")  # 给回答
