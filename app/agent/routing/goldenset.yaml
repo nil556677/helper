@@ -1,4 +1,5 @@
-# 路由金标集：question → expected（route id 或 null=应当未命中）
+# 路由金标集：question → expected（route id 或 null）
+# 说明：null = "不得直接走固定路径"，应落到兜底/澄清（如知识类走 agentic 子图、闲聊走澄清）。
 cases:
   - question: "现在几点"
     expected: time
@@ -8,10 +9,11 @@ cases:
     expected: weather
   - question: "明天气温多少"
     expected: weather
+  # 知识类问题按架构应走 agentic（knowledge_agent），不应被 direct 命中固定路径
   - question: "合同违约金怎么算"
-    expected: knowledge
+    expected: null
   - question: "内部制度是怎么规定的"
-    expected: knowledge
+    expected: null
   - question: "随便聊两句废话"
     expected: null
   - question: "帮我解读一段陌生代码的深层语义"
