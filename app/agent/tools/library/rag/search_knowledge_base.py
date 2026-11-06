@@ -65,6 +65,11 @@ class KnowledgeQuery(BaseModel):  # 参数契约
 async def search_knowledge_base(query: str, top_k: int = 6):  # 异步纯函数（返回 data）
     """成功返回 data（含编号文本/证据/门限/依据）；检索失败抛给 tool_spec 转带内可重试。"""
     result = await _runner().run(query, top_k=int(top_k))  # 跑检索链路（异常冒泡 -> execution.failed）
+    return _data(result)  # 固定 data 结构
+
+
+def _data(result: Any) -> dict:  # 检索结果 → 固定 data
+    """编号文本 + 结构化证据 + 门限 + 依据（各检索工具共用同一形状）。"""
     return {  # 固定 data 结构
         "model_view": _format(result),  # 给模型的编号文本
         "evidence": list(result.evidence),  # 结构化证据（供回填/审计）
@@ -76,3 +81,35 @@ async def search_knowledge_base(query: str, top_k: int = 6):  # 异步纯函数�
             "selected_count": result.selected_count,  # 证据数
         },  # basis 结束
     }  # 返回
+
+
+class HybridQuery(BaseModel):  # 混合检索参数
+    query: str = Field(description="要在知识库检索的问题或关键词")  # 查询
+    top_k: int = Field(default=10, ge=1, le=20, description="返回的命中片段条数")  # 条数
+
+
+class DeepQuery(BaseModel):  # 深度检索参数
+    query: str = Field(description="要深度检索的问题或关键词")  # 查询
+    top_k: int = Field(default=20, ge=1, le=50, description="深度检索返回条数（更大召回）")  # 条数
+
+
+@tool_spec(  # 混合检索（语义+关键词 + 重排）
+    description="多路混合检索（语义 + 关键词，含重排），返回带 [编号] 的命中片段。",  # 能力
+    args_schema=HybridQuery,  # 参数
+    ttl=600.0,  # 幂等缓存
+)  # 装饰结束
+async def search_hybrid(query: str, top_k: int = 10):  # 混合检索
+    """唯一底层仍是 nodes/rag；这里只是换召回规模/重排。"""
+    result = await _runner().run(query, top_k=int(top_k), rerank=True)  # 同一检索源
+    return _data(result)  # 统一结构
+
+
+@tool_spec(  # 深度检索（更大召回 + 重排）
+    description="深度检索：更大召回并重排，适合复杂/多跳问题。",  # 能力
+    args_schema=DeepQuery,  # 参数
+    ttl=600.0,  # 幂等缓存
+)  # 装饰结束
+async def search_deep(query: str, top_k: int = 20):  # 深度检索
+    """唯一底层仍是 nodes/rag；只放大 top_k。"""
+    result = await _runner().run(query, top_k=int(top_k), rerank=True)  # 同一检索源
+    return _data(result)  # 统一结构
