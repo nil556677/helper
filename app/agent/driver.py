@@ -226,6 +226,17 @@ async def _run_graph(  # 跑父图并驱动状态机
                     ctx.transition(event)  # driver 统一驱动迁移（发 state 事件）
         else:  # values：完整状态快照
             final_state = dict(chunk)  # 收敛为最新（reducer 已合并）
+    # 非流式图（dispatch/general/兜底）不产出 DELTA：收尾前把最终答案/引用/说明补发给前端
+    answer = str(final_state.get("answer") or "")  # 最终答案
+    if ctx.machine.state is RunState.DONE and answer and not ctx.partial_answer:  # 没流过字才补
+        emit(events.replace(answer))  # 整段下发（UI 会替换正文区）
+        ctx.partial_answer = answer  # 记为已产出（落库/对账共用）
+        fragments = [item for item in (final_state.get("fragments") or []) if isinstance(item, dict)]  # 引用
+        if fragments:  # 有引用
+            emit(events.citation(fragments))  # 引用事件
+        note = str(final_state.get("note") or "")  # 说明
+        if note:  # 有说明
+            emit(events.note(note))  # 说明事件
     if ctx.machine.state is RunState.DONE:  # 正常走到 done（finalize 已驱动迁移）
         emit(  # 发完成终态（最后一帧，顺序在 state 事件之后）
             events.done(  # 完成事件
