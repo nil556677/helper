@@ -276,8 +276,8 @@ def _render_clarify(view: dict[str, Any], data: dict[str, Any]) -> None:  # 澄�
         ui.label("也可以直接在下方输入新的描述。").classes("hp-hint")  # 引导自由输入
 
 
-def _choose(view: dict[str, Any], value: str) -> None:  # 选定后恢复
-    """清卡并把选择交回后台（同 thread_id 恢复）。"""
+def _resume_action(view: dict[str, Any], value: Any) -> None:  # 恢复当前运行
+    """清卡→回到运行态→把选择/自由输入交回（兼容同步/异步句柄）。"""
     import asyncio  # 后台任务
     import inspect  # 判断是否协程
 
@@ -293,6 +293,11 @@ def _choose(view: dict[str, Any], value: str) -> None:  # 选定后恢复
     result = handle.resume(value)  # 交回（RunSession 内部起任务，返回 None）
     if inspect.isawaitable(result):  # 异步实现才需要 create_task
         asyncio.create_task(result)  # 起任务
+
+
+def _choose(view: dict[str, Any], value: str) -> None:  # 选定候选后恢复
+    """点澄清卡上的候选 → 恢复同一运行。"""
+    _resume_action(view, value)  # 恢复
 
 
 def _decide(view: dict[str, Any], request_id: str, allow: bool) -> None:  # 决定

@@ -18,7 +18,7 @@ from app.agent.events import error as event_error
 from app.agent.run import RunInput, RunSession, get_run_client
 from app.ui.components.dialog import notify
 from app.ui.screens.chat.events import _apply_live_event, _turn_from_live
-from app.ui.screens.chat.live import _build_live, _refresh_header
+from app.ui.screens.chat.live import _build_live, _refresh_header, _resume_action
 from app.ui.screens.chat.scroll import _schedule_scroll, _set_follow
 from app.ui.screens.chat.state import _FIRST_EVENT_S, _RUN_CAP_S, _ActiveStream, _LiveState
 from app.ui.screens.chat.widgets import _build_pending
@@ -169,9 +169,27 @@ async def drain(refs: StreamRefs) -> None:  # 串行消费队列
         refs.busy['value'] = False
 
 
+def _waiting_handle(refs: StreamRefs) -> tuple[Any, dict[str, Any]] | None:  # 找暂停中的流
+    """当前会话若有运行停在 HITL(waiting)，返回 (handle, view)，用于自由输入恢复。"""
+    handle = refs.active.handle  # 当前流
+    if handle is None:  # 没在跑
+        return None  # 无
+    for view in refs.live_state.views:  # 找对应实时视图
+        if view.get("handle") is handle and view.get("run_state") == "waiting":  # 同一个且暂停
+            return handle, view  # 命中
+    return None  # 无
+
+
 async def send(refs: StreamRefs) -> None:  # 发送
     """发送：输入永远可用；正在检索就进队列，空闲就立即开始消费。"""
-    text = (refs.box.value or '').strip()
+    text = (refs.box.value or '').strip()  # 文本
+    # 路径 0：上一轮停在 HITL 澄清，此时直接输入 = 用自由描述恢复同一运行（不排队）。
+    waiting = _waiting_handle(refs)  # 暂停流
+    if waiting is not None and text:  # 有暂停且输入了文字
+        _resume_action(waiting[1], text)  # 恢复（自由输入重新路由）
+        refs.box.value = ''  # 清输入
+        refs.sync_button()  # 刷新按钮
+        return  # 不排队
     # 路径 1：没有文字也没有附件 → 忽略。
     if not text and not refs.pending_files:
         return

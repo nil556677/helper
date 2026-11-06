@@ -2,7 +2,7 @@
 
 from __future__ import annotations  # 类型注解延迟求值
 
-from typing import TypedDict  # 状态类型
+from typing import Any, TypedDict  # 状态类型
 
 
 class RagState(TypedDict, total=False):  # RAG 子图状态
@@ -20,3 +20,4 @@ class RagState(TypedDict, total=False):  # RAG 子图状态
     gate: dict  # 门限判决（pass/weak/reject + 分数）
     evidence: list[dict]  # 最终证据
     errors: list[dict]  # 非致命错误
+    plan: Any  # 检索预算（RetrievalPlan；缺省按 top_k 反推）

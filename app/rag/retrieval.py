@@ -13,6 +13,7 @@ from app.integrations.embeddings import OnnxBgeM3Embeddings  # 查询嵌入
 from app.integrations.qdrant import build_stores, qdrant_client  # Qdrant
 from app.integrations.rerank import OnnxReranker  # 精排
 from app.integrations.sparse import JiebaBm25SparseEmbeddings  # 关键词
+from app.rag.adaptive import cliff_cut  # 断崖切分
 from app.rag.evidence import build_evidence, compose_candidates  # 证据
 
 #: 检索时的 active 状态过滤（仅命中 status=active 的 chunk，避免搜到未发布/待删数据）。
@@ -140,19 +141,21 @@ def fuse_hits(  # 融合
     sparse_hits: list[dict[str, Any]],  # 关键词
     *,
     top_k: int = FUSED_CANDIDATES,  # 保留数
+    weights: tuple[float, float] = (DENSE_WEIGHT, SPARSE_WEIGHT),  # (语义, 关键词) 权重
 ) -> list[dict[str, Any]]:  # 结果
-    """RRF 按名次融合，不跨路比原始分。"""
+    """RRF 按名次融合，不跨路比原始分；权重随预算档位可调。"""
+    dense_w, sparse_w = weights  # 拆权
     scores: dict[str, float] = {}  # 名次分
     by_key: dict[str, dict[str, Any]] = {}  # key -> hit
     for rank, hit in enumerate(dense_hits, 1):  # 语义
         key = str((hit.get("metadata") or {}).get("chunk_key") or "")  # key
         if key:  # 有 key
-            scores[key] = scores.get(key, 0.0) + DENSE_WEIGHT / (RRF_K + rank)  # 累加
+            scores[key] = scores.get(key, 0.0) + dense_w / (RRF_K + rank)  # 累加
             by_key.setdefault(key, hit)  # 保留
     for rank, hit in enumerate(sparse_hits, 1):  # 关键词
         key = str((hit.get("metadata") or {}).get("chunk_key") or "")  # key
         if key:  # 有 key
-            scores[key] = scores.get(key, 0.0) + SPARSE_WEIGHT / (RRF_K + rank)  # 累加
+            scores[key] = scores.get(key, 0.0) + sparse_w / (RRF_K + rank)  # 累加
             by_key.setdefault(key, hit)  # 保留
     ordered = sorted(scores.items(), key=lambda item: item[1], reverse=True)[:top_k]  # 排序截断
     fused: list[dict[str, Any]] = []  # 结果
@@ -189,15 +192,49 @@ def backfill(fused: list[dict[str, Any]]) -> list[dict[str, Any]]:  # 父块回�
     return [_doc_to_hit(doc) for doc in candidates]  # 转回
 
 
-def rerank(question: str, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:  # 精排
-    """质量优先：默认执行；候选 <2 时压缩器自然短路。"""
+def rerank(question: str, candidates: list[dict[str, Any]], top_n: int = RERANK_TOP) -> list[dict[str, Any]]:  # 精排
+    """质量优先：默认执行；候选 <2 时压缩器自然短路。精确复议可在使用侧关闭。"""
     docs = [_hit_to_doc(hit) for hit in candidates]  # 转文档
-    ranked = OnnxReranker(top_n=RERANK_TOP).compress_documents(docs, question)  # 精排
+    ranked = OnnxReranker(top_n=max(1, int(top_n))).compress_documents(docs, question)  # 精排
     return [_doc_to_hit(doc) for doc in ranked]  # 转回
 
 
-def evidence(ranked: list[dict[str, Any]], top_k: int = TOP_K) -> list[dict[str, Any]]:  # 证据
-    """去重/表格限流/截断，输出前端片段。"""
+def _rerank_scores(ranked: list[dict[str, Any]]) -> list[float]:  # 取重排分
+    """优先取重排分，缺失退回 RRF 分；用于断崖切分。"""
+    out: list[float] = []  # 结果
+    for hit in ranked:  # 逐条
+        meta = hit.get("metadata") or {}  # metadata
+        score = meta.get("rerank_score")  # 重排分
+        if score is None:  # 缺失
+            score = meta.get("score") or 0.0  # 退回 RRF
+        out.append(float(score))  # 收集
+    return out  # 返回
+
+
+def evidence(ranked: list[dict[str, Any]], plan_or_top_k: Any) -> list[dict[str, Any]]:  # 证据
+    """去重/表格限流/截断，输出前端片段。
+
+    传入 int 走原固定条数；传入 ``RetrievalPlan`` 走**断崖切分**（不取固定值）。
+    """
     docs = [_hit_to_doc(hit) for hit in ranked]  # 转文档
-    return build_evidence(docs, top_k=top_k)  # 组装
+    if isinstance(plan_or_top_k, int):  # 固定条数（兼容旧调用）
+        return build_evidence(docs, top_k=int(plan_or_top_k))  # 组装
+    plan = plan_or_top_k  # 预算
+    scores = _rerank_scores(ranked)  # 重排分
+    n, reason = cliff_cut(  # 断崖切分
+        scores,  # 分数
+        max_n=int(plan.final_max),  # 上限
+        min_n=int(plan.final_min),  # 下限
+        cliff_ratio=float(plan.cliff_ratio),  # 相对
+        min_cliff=float(plan.min_cliff),  # 绝对
+    )  # 结束
+    _trace_cut(reason, n, scores)  # 留痕
+    return build_evidence(docs[:n], top_k=n)  # 组装前 n 条
+
+
+def _trace_cut(reason: str, n: int, scores: list[float]) -> None:  # 切分留痕
+    """记断崖/上限等切分原因与断点。"""
+    from app.core.trace.recorder import trace_hit  # 复用留痕
+
+    trace_hit(stage=f"evidence_cliff:{reason}", rank=n, chunk_id="", chunk_key="", doc_id="", source_name="", heading="", loc={}, score=float(scores[n - 1]) if scores and n else 0.0, score_kind="cliff", text="")  # 留痕
 

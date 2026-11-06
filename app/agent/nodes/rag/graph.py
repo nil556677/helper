@@ -28,6 +28,11 @@ class RagSteps:  # 七个纯步骤
     evidence: Callable[[list[dict], int], list[dict]]  # 精排 -> 证据
 
 
+def _plan_of(state: RagState) -> Any:  # 取检索预算
+    """优先用 state 里的 RetrievalPlan；没有返回 None（走默认常量）。"""
+    return state.get("plan") if isinstance(state.get("plan"), object) else None
+
+
 def build_rag_graph(steps: RagSteps):  # 建 RAG 子图
     """节点只读 state、调 step、写 state；不写库。"""
     graph = StateGraph(RagState)  # 状态图
@@ -40,25 +45,38 @@ def build_rag_graph(steps: RagSteps):  # 建 RAG 子图
         return {"query_vector": vector}  # 写回
 
     async def dense_node(state: RagState) -> dict[str, Any]:  # 语义召回
-        """向量 -> dense hits。"""
+        """向量 -> dense hits（候选数随预算）。"""
+        plan = _plan_of(state)  # 预算
+        k = int(plan.dense) if plan is not None else 40  # 候选数
         with stage("查找资料", group=StageGroup.SEARCH) as info:  # 步骤事件
-            hits = await asyncio.to_thread(steps.dense, state["query_vector"], 40)  # 查询
+            hits = await asyncio.to_thread(steps.dense, state["query_vector"], k)  # 查询
             info.detail = f"找到 {len(hits)} 段资料"  # 明细
         return {"dense_hits": hits}  # 写回
 
     async def sparse_node(state: RagState) -> dict[str, Any]:  # 关键词召回
-        """问题 -> sparse hits。"""
+        """问题 -> sparse hits（候选数随预算）。"""
+        plan = _plan_of(state)  # 预算
+        k = int(plan.sparse) if plan is not None else 50  # 候选数
         with stage("查找资料", group=StageGroup.SEARCH) as info:  # 步骤事件
-            hits = await asyncio.to_thread(steps.sparse, state["question"], 50)  # 查询
+            hits = await asyncio.to_thread(steps.sparse, state["question"], k)  # 查询
             info.detail = f"找到 {len(hits)} 段资料"  # 明细
         return {"sparse_hits": hits}  # 写回
 
     async def fuse_node(state: RagState) -> dict[str, Any]:  # RRF 融合
-        """两路 -> 融合。"""
+        """两路 -> 融合（权重随预算）。"""
+        plan = _plan_of(state)  # 预算
         with stage("合并结果", group=StageGroup.SEARCH) as info:  # 步骤事件
-            fused = await asyncio.to_thread(  # 融合
-                steps.fuse, state.get("dense_hits", []), state.get("sparse_hits", [])  # 参数
-            )  # 融合结束
+            if plan is not None:  # 有预算
+                fused = await asyncio.to_thread(  # 融合
+                    steps.fuse,  # 步骤
+                    state.get("dense_hits", []),  # 语义
+                    state.get("sparse_hits", []),  # 关键词
+                    weights=(float(plan.dense_weight), float(plan.sparse_weight)),  # 权重
+                )  # 结束
+            else:  # 默认
+                fused = await asyncio.to_thread(  # 融合
+                    steps.fuse, state.get("dense_hits", []), state.get("sparse_hits", [])  # 默认
+                )  # 结束
             info.detail = f"合并 {len(fused)} 段"  # 明细
         return {"fused": fused}  # 写回
 

@@ -35,11 +35,13 @@ def after_dispatch(state: dict[str, Any]) -> str:  # 固定路径之后
 
 
 def after_clarify(state: dict[str, Any]) -> str:  # 澄清之后
-    """resume 后若已定 direct 路由 → 固定路径；否则收尾（自由输入请重述）。"""
+    """resume 选固定路径→dispatch；自由输入(reroute)→重走预处理；否则收尾。"""
     route = state.get("route") or {}  # 决策 JSON
     if isinstance(route, dict) and route.get("intent") == "direct" and route.get("route"):  # 已选路径
         return "dispatch_fixed"  # 去执行
-    return "finalize"  # 收尾
+    if state.get("reroute"):  # 自由输入 → 用新问题重走全流程
+        return "preprocess"  # 重新路由
+    return "finalize"  # 模板澄清 → 收尾
 
 
 def after_triage(state: dict[str, Any]) -> str:  # 分诊之后

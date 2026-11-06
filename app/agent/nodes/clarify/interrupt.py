@@ -51,10 +51,11 @@ def clarify_interrupt_node(state: dict[str, Any], config: Any = None) -> dict[st
         )  # 决策结束
         return {"route": decision.model_dump(mode="json"), "clarify_attempt": attempt}  # 写回
     pending = {"choices": {str(item.text): str(item.id) for item in options.options}}  # 记录可接住的选项
-    return {  # 自由输入 → 请重述，并留下 pending_clarify
+    return {  # 自由输入 → 标记重路由，用新问题重走全流程
         "question": str(choice or ""),  # 新问题
         "route": None,  # 未定
         "clarify_attempt": attempt,  # 次数
+        "reroute": True,  # 触发重新路由（after_clarify 读它）
         "pending_clarify": pending,  # 下一轮 phase=followup 可短路
-        "answer": "请重新描述你的需求，或选择上面的选项。",  # 提示
+        "answer": "",  # 不在这里给话术（重走流程后会出答案）
     }  # 返回

@@ -58,3 +58,26 @@ async def test_driver_pauses_then_resumes(tmp_path) -> None:  # 暂停 + 恢复
     assert resumed.state.get("route", {}).get("route") == "time"  # 落到路径
     assert str(resumed.state.get("answer") or "").startswith("现在是 ")  # 固定路径作答
     assert any(event.type is EventType.DONE for event in sink.events)  # 有终态
+
+
+async def test_pause_then_free_input_reroutes(tmp_path) -> None:  # 自由输入重路由
+    async def noop_finalize(state, config=None):  # 打桩收尾
+        del config  # 不用
+        return {}  # 不落库
+
+    async def fake_semantic(state, config=None):  # 强制 miss（带候选）
+        del state, config  # 不用
+        return {"semantic_recall": {"decision": "miss", "candidates": [{"route": "time", "score": 0.26}], "top1": 0.26, "margin": 0.0}}  # 召回
+
+    agent_mod.finalize_node = noop_finalize  # 换收尾
+    agent_mod.semantic_node = fake_semantic  # 换语义
+    saver = await build_async_saver(path=tmp_path / "cp2.sqlite")  # saver
+    graph = agent_mod.build_route_graph(checkpointer=saver)  # 图
+    sink = _Sink()  # 事件
+    ctx = RunContext(run_id="r2", question="随便问", conversation_id="c2", emit=sink)  # 上下文
+    initial = {"question": "随便问", "conversation_id": "c2", "turns": [], "attachments": [], "hitl_enabled": True, "run_id": "r2", "thread_id": "c2"}  # 初始
+    paused = await drive(graph, ctx, initial_state=initial)  # 暂停
+    assert paused.status == "waiting"  # 停在澄清
+    resumed = await drive(graph, ctx, initial_state={}, resume_value="现在几点")  # 自由输入一个新问题
+    assert resumed.status == "done"  # 完成
+    assert str(resumed.state.get("answer") or "").startswith("现在是 ")  # 重路由后被规则命中并作答

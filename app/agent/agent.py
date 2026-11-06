@@ -86,7 +86,8 @@ def build_route_graph(*, checkpointer: Any = None) -> Any:  # 意图路由父图
         after_clarify,  # 分支函数
         {  # 映射
             "dispatch_fixed": "dispatch_fixed",  # resume 选了固定路径
-            "finalize": "finalize",  # 自由输入/未恢复
+            "preprocess": "preprocess",  # 自由输入 → 重新路由
+            "finalize": "finalize",  # 模板澄清 → 收尾
             "fallback": END,  # 未知键兜底
         },  # 映射结束
     )  # 条件边结束
