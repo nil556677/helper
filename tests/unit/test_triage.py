@@ -37,6 +37,14 @@ def test_escalate_guard() -> None:  # 防乒乓
     assert decided.path_type == "fast_single" and decided.escalate_reason == "escalate_blocked"  # 锁定
 
 
+def test_no_fixed_path_goes_agentic() -> None:  # 无固定路径 → 专家
+    decided = decide_triage("亚太共同体 是什么", _intent(), {}, has_route=False)  # 无路由
+    assert decided.path_type == "agentic" and decided.agent == "knowledge_agent"  # 走专家
+    assert decided.escalate_reason == "no_fixed_path"  # 原因
+    with_route = decide_triage("亚太共同体 是什么", _intent(), {}, has_route=True)  # 有路由
+    assert with_route.path_type == "fast_single"  # 快速
+
+
 def test_missing_entities_and_retry() -> None:  # 缺参/重试字段
     action = decide_triage("退款", _intent("action"), {}, entities={})  # 操作缺单号
     assert action.missing_entities == ["order_id"]  # 缺 order_id

@@ -1,4 +1,5 @@
 id: time
+label: 查时间
 description: "查询当前时间、日期、时区"
 examples:
   - "现在几点"

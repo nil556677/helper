@@ -1,4 +1,5 @@
 id: knowledge
+label: 查资料
 description: "在本地知识库/资料中检索并回答制度、条款、政策、规定、流程类问题"
 examples:
   - "合同违约金怎么算"

@@ -101,6 +101,7 @@ class RouteSpec:  # 固定路径定义（routes/*.yaml）
     """语义层 embedding 的源文本 + 分流目标。"""
 
     route_id: str  # 路径 id
+    label: str = ""  # 人话标签（澄清卡展示用；空则回退 id）
     description: str = ""  # 主描述
     examples: tuple[str, ...] = ()  # 示例
     tools: tuple[str, ...] = ()  # 工具

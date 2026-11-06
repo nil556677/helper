@@ -47,6 +47,7 @@ def decide_triage(  # 纯函数：产出统一执行计划
     entities: dict[str, Any] | None = None,  # 补全后的实体
     time_range: Any = None,  # 解析出的时间范围
     last_failed: bool = False,  # 上一轮是否失败
+    has_route: bool = True,  # 是否已有固定路径（规则/语义 direct 命中）
 ) -> TriageDecision:  # 决策
     """顺序：flags 短路 > 意图判定 > 兜底。"""
     text = str(query or "")  # 原文
@@ -69,6 +70,8 @@ def decide_triage(  # 纯函数：产出统一执行计划
     if kind == "clarify":  # 已判定需澄清
         return TriageDecision(intent="clarify", domain=domain, path_type="clarify", **extras)  # 澄清
     # query
+    if not has_route and not escalated:  # 没有固定路径可直连 → 交给 agentic 专家
+        return TriageDecision(intent="query", domain=domain, path_type="agentic", agent="knowledge_agent", escalate_reason="no_fixed_path", **extras)  # 专家子图
     if escalated:  # 防 fast→agentic→fast 乒乓
         return TriageDecision(intent="query", domain=domain, path_type="fast_single", escalate_reason="escalate_blocked", **extras)  # 锁定
     if _has(text, AGENTIC_MARKERS):  # 有依赖链

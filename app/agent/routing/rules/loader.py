@@ -66,6 +66,7 @@ def load_routes(directory: str | Path | None = None) -> tuple[RouteSpec, ...]:  
             routes.append(  # 收集
                 RouteSpec(  # 契约
                     route_id=route_id,  # id
+                    label=str(raw.get("label") or ""),  # 人话标签
                     description=str(raw.get("description") or ""),  # 描述
                     examples=tuple(str(x) for x in (raw.get("examples") or ())),  # 示例
                     tools=tuple(str(x) for x in (raw.get("tools") or ())),  # 工具

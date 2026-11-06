@@ -1,4 +1,5 @@
 id: weather
+label: 查天气
 description: "查询城市当前或未来天气、气温、下雨、冷暖"
 examples:
   - "北京天气怎么样"

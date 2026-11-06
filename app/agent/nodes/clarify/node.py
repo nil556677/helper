@@ -38,12 +38,15 @@ def build_options(recall: dict[str, Any], attempt: int) -> ClarifyOptions:  # �
     candidates = [item for item in (recall.get("candidates") or []) if isinstance(item, dict)]  # 候选
     scores = [float(item.get("score") or 0.0) for item in candidates]  # 分数
     if candidates and max(scores) >= DISPLAY_MIN:  # ① 有可展示候选
+        from app.agent.routing.labels import route_label  # 人话标签
+
         selected = [  # 取 2–3 个最高分
-            Candidate(id=str(item.get("route") or ""), text=str(item.get("route") or ""), extra={"score": float(item.get("score") or 0.0)})
+            Candidate(id=str(item.get("route") or ""), text=route_label(str(item.get("route") or "")), extra={"score": float(item.get("score") or 0.0)})
             for item in candidates[:3]
             if float(item.get("score") or 0.0) >= DISPLAY_MIN  # 达标
         ]
-        return ClarifyOptions(kind="candidates", options=tuple(selected), clarify_attempt=attempt)  # 选项
+        if selected:  # 有标签候选
+            return ClarifyOptions(kind="candidates", options=tuple(selected), clarify_attempt=attempt)  # 选项
     if candidates:  # ② 有候选但全是噪声
         presets = tuple(Candidate(id=route, text=label) for label, route in PRESET_ENTRIES)  # 业务预设
         return ClarifyOptions(kind="open", options=presets, clarify_attempt=attempt)  # 开放澄清

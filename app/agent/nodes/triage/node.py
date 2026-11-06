@@ -60,6 +60,7 @@ def triage_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  #
         entities=_entities_of(pre),  # 补全后的实体
         time_range=pre.get("time_range") if isinstance(pre, dict) else None,  # 时间范围
         last_failed=str(state.get("last_turn_status") or "") == "failed",  # 上轮失败
+        has_route=bool(state.get("route")),  # 是否已有固定路径
     )  # 结束
     return {"triage": _with_approval(decision)}  # 写回（补审批标记）
 
