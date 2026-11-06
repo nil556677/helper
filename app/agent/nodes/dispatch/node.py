@@ -60,4 +60,10 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
     data = getattr(envelope, "data", None) or {}  # 结果数据
     text = _format(name, data)  # 模板化
     fragments = list(data.get("evidence") or []) if name == "knowledge" else []  # 知识库带引用
-    return {"answer": text, "route": route, "fragments": fragments}  # 返回
+    escalate_reason = ""  # 默认不升级
+    if name == "knowledge":  # 知识库走质量信号
+        from app.agent.routing.quality import assess  # 判定
+
+        escalate, reason = assess(list(data.get("evidence") or []), str(state.get("question") or ""))  # 评估
+        escalate_reason = reason if escalate else ""  # 不够好 → 带原因升级
+    return {"answer": text, "route": route, "fragments": fragments, "escalate_reason": escalate_reason}  # 返回

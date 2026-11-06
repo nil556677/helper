@@ -25,6 +25,7 @@ class ChatState(TypedDict, total=False):  # 图状态（字段都可缺省）
     intent: dict[str, Any]  # IntentDecision 的 JSON 形态（L2 产物）
     triage: dict[str, Any]  # TriageDecision 的 JSON 形态（L3 产物）
     escalated_this_session: bool  # 本会话是否已升级过（防乒乓）
+    escalate_reason: str  # 快捷搜索质量不足的升级原因（空=不升级）
     hitl_enabled: bool  # 是否启用 HITL（生产图带 checkpointer 时开）
     run_id: str  # 运行 id（HITL 负载用）
     thread_id: str  # 恢复用线程 id

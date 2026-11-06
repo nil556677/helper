@@ -16,7 +16,7 @@ from app.agent.nodes.route.node import rule_route_node  # 规则层
 from app.agent.nodes.route_llm.node import route_llm_node  # LLM 兜底
 from app.agent.nodes.semantic.node import semantic_node  # 语义层
 from app.agent.nodes.triage.node import triage_node  # L3 分诊
-from app.agent.routing.edges import after_clarify, after_rule, after_semantic, after_triage  # 条件边
+from app.agent.routing.edges import after_clarify, after_dispatch, after_rule, after_semantic, after_triage  # 条件边
 from app.agent.state import ChatState  # 状态
 
 
@@ -64,7 +64,15 @@ def build_route_graph(*, checkpointer: Any = None) -> Any:  # 意图路由父图
             "fallback": END,  # 未知键兜底
         },  # 映射结束
     )  # 条件边结束
-    graph.add_edge("dispatch_fixed", "finalize")  # 固定路径后收尾
+    graph.add_conditional_edges(  # 固定路径后分支（质量不足→升级）
+        "dispatch_fixed",  # 来源
+        after_dispatch,  # 分支函数
+        {  # 映射
+            "llm_fallback": "llm_fallback",  # 升级 agentic
+            "finalize": "finalize",  # 收尾
+            "fallback": END,  # 未知键兜底
+        },  # 映射结束
+    )  # 条件边结束
     graph.add_edge("llm_fallback", "finalize")  # 兜底后收尾
     graph.add_conditional_edges(  # 澄清/暂停后的分支
         "clarify_or_end",  # 来源

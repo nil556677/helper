@@ -24,7 +24,11 @@ class _NoopTool:  # 打桩的检索工具
         return SimpleNamespace(  # 包络
             data={  # 数据
                 "model_view": "#### 资料\n证据正文内容\n\n> 暂无",  # 编号文本
-                "evidence": [{"index": 1, "text": "证据正文内容", "source_name": "资料", "origin": "第 1 段"}],  # 证据
+                "evidence": [  # 三条多源高分（避免质量信号升级）
+                    {"index": 1, "text": "证据正文内容", "source_name": "资料", "origin": "第 1 段", "score": 0.9},  # 证据1
+                    {"index": 2, "text": "补充内容", "source_name": "文档", "origin": "第 2 段", "score": 0.85},  # 证据2
+                    {"index": 3, "text": "更多内容", "source_name": "FAQ", "origin": "第 3 段", "score": 0.8},  # 证据3
+                ],  # 证据
                 "gate": {"decision": "pass"},  # 门限
             }  # 数据结束
         )  # 返回

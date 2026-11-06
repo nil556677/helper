@@ -7,7 +7,7 @@ from __future__ import annotations  # 延迟求值注解
 
 from typing import Any  # 任意值
 
-__all__ = ["after_clarify", "after_rule", "after_semantic", "after_triage"]  # 导出
+__all__ = ["after_clarify", "after_dispatch", "after_rule", "after_semantic", "after_triage"]  # 导出
 
 
 def after_rule(state: dict[str, Any]) -> str:  # 规则层之后
@@ -27,6 +27,11 @@ def after_semantic(state: dict[str, Any]) -> str:  # 语义层之后
     if decision == "ambiguous":  # 有候选但分不出
         return "route_llm"  # 轻量 LLM 兜底
     return "clarify_or_end"  # miss → 澄清/拒绝（不进 LLM）
+
+
+def after_dispatch(state: dict[str, Any]) -> str:  # 固定路径之后
+    """质量不够（带升级原因）→ 兜底子图；否则收尾。"""
+    return "llm_fallback" if state.get("escalate_reason") else "finalize"  # 升级或收尾
 
 
 def after_clarify(state: dict[str, Any]) -> str:  # 澄清之后
