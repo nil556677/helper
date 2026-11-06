@@ -56,6 +56,67 @@ def _meta(run: Any) -> dict[str, Any]:  # 解析元数据
         return {}  # 空
 
 
+#: Span 类型 → 配色（节点蓝 / 模型紫 / 检索绿 / 工具橙 / 其它灰）。
+_KIND_COLOR = {  # 配色表
+    "node": "#3182ce",  # 节点 蓝
+    "llm": "#805ad5",  # 模型 紫
+    "retrieval": "#38a169",  # 检索 绿
+    "tool": "#dd6b20",  # 工具 橙
+}  # 结束
+
+
+def _span_scale(spans: list[Any]) -> tuple[float, float]:  # 时间轴起止（秒）
+    """所有 span 的最小开始 → 最大结束，用来把条按真实时间对齐。"""
+    starts = [float(s.started_at) for s in spans if s.started_at]  # 起点集
+    if not starts:  # 没有
+        return 0.0, 1.0  # 兜底
+    ends = [float(s.started_at) + float(s.duration_ms or 0) / 1000 for s in spans if s.started_at]  # 终点集
+    return min(starts), max(ends)  # 起止
+
+
+def _span_json(span: Any) -> None:  # 该步全量 JSON（弹窗）
+    """点击时间条右边的 JSON：把该 span 的 input/output 全量弹出来。"""
+    if not getattr(span, "output_json", None):  # 没有输出
+        notify("该步没有输出数据", kind="info")  # 提示
+        return  # 结束
+    with ui.dialog() as dlg, ui.card().classes("w-full"):  # 弹窗
+        ui.label(str(span.name or "—")).classes("hp-card-title")  # 标题
+        ui.code(  # 全量 JSON
+            json.dumps(json.loads(span.output_json or "{}"), ensure_ascii=False, indent=2),  # 输出
+            language="json",  # 高亮
+        ).classes("w-full q-pa-sm")  # 样式
+    dlg.open()  # 打开
+
+
+def _draw_waterfall(spans: list[Any]) -> None:  # 执行瀑布
+    """横向时间条：宽度 ∝ 耗时、起点按时间对齐、颜色按类型；点 JSON 看该步。"""
+    if not spans:  # 无
+        return  # 跳过
+    ordered = sorted(spans, key=lambda s: float(s.started_at or 0))  # 按时间排
+    start, end = _span_scale(ordered)  # 区间
+    total = max(1e-6, end - start)  # 总时长
+    with ui.expansion(f"执行瀑布（{len(ordered)} 段）· 横条 ∝ 耗时", icon="timeline", value=True).classes("w-full hp-sources"):
+        for span in ordered:  # 逐段
+            dur = float(span.duration_ms or 0) / 1000  # 秒
+            left = (float(span.started_at or 0) - start) / total * 100.0  # 起点 %
+            width = max(0.5, dur / total * 100.0)  # 宽度 %
+            color = _KIND_COLOR.get(span.kind or "", "#9ca3af")  # 类型色
+            with ui.row().classes("w-full items-center gap-2 no-wrap"):  # 一行
+                ui.label(str(span.kind or "—")).classes("hp-field-help").style("width: 52px;")  # 类型
+                ui.label(str(span.name or "—")).classes("hp-field-name").style(  # 名
+                    "width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+                )  # 名
+                with ui.element("div").classes("flex-1").style(  # 轨道
+                    "height: 12px; background: #e5e7eb; border-radius: 3px; position: relative;"
+                ):  # 轨道
+                    ui.element("div").style(  # 条
+                        f"height: 12px; border-radius: 3px; background: {color};",  # 样式
+                        f"position: absolute; left: {left:.1f}%; width: {width:.1f}%;",  # 位置
+                    )  # 条
+                ui.label(_ms(span.duration_ms)).classes("hp-field-help").style("width: 60px;")  # 耗时
+                ui.button("JSON", on_click=lambda _, s=span: _span_json(s)).props("flat dense no-caps")  # 该步 JSON
+
+
 #: 决策链各阶段的人话标签。
 _STAGE_LABEL = {  # 标签表
     "preprocessed": "输入 / 预处理",  # 归一/实体/时间/flags
@@ -164,6 +225,7 @@ def _detail(run_id: str) -> None:  # 详情弹窗
                 )  # 输入+输出
                 _kpi_tile(str(len(view.hits)), "命中")  # 命中数
                 _kpi_tile(str(len(view.spans)), "节点")  # 时间线段数
+            _draw_waterfall(view.spans)  # 执行瀑布
             if run.normalized_query or run.rewritten_query:  # 有查询归一/改写
                 ui.label(  # 查询链
                     f"查询：{run.normalized_query or run.question}"  # 归一
