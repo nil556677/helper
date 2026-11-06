@@ -50,4 +50,4 @@ def clarify_interrupt_node(state: dict[str, Any], config: Any = None) -> dict[st
             decided_by="config",  # 用户选择
         )  # 决策结束
         return {"route": decision.model_dump(mode="json"), "clarify_attempt": attempt}  # 写回
-    return {"question": str(choice or ""), "route": None, "clarify_attempt": attempt}  # 自由输入 → 重路由
+    return {"question": str(choice or ""), "route": None, "clarify_attempt": attempt, "answer": "请重新描述你的需求，或选择上面的选项。"}  # 自由输入 → 请重述
