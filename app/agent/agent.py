@@ -17,6 +17,7 @@ from app.agent.nodes.route.node import rule_route_node  # 规则层
 from app.agent.nodes.route_llm.node import route_llm_node  # LLM 兜底
 from app.agent.nodes.semantic.node import semantic_node  # 语义层
 from app.agent.nodes.triage.node import triage_node  # L3 分诊
+from app.agent.nodes.verify.node import verify_node  # L5 校验
 from app.agent.routing.edges import after_clarify, after_dispatch, after_rule, after_semantic, after_triage  # 条件边
 from app.agent.state import ChatState  # 状态
 
@@ -34,6 +35,7 @@ def build_route_graph(*, checkpointer: Any = None) -> Any:  # 意图路由父图
     graph.add_node("dispatch_fixed", dispatch_node)  # 固定路径
     graph.add_node("llm_fallback", llm_fallback_node)  # 兜底子图
     graph.add_node("general_agent", general_agent_node)  # L4e 通用兜底
+    graph.add_node("verify", verify_node)  # L5 校验
     graph.add_node("clarify_or_end", clarify_interrupt_node)  # 澄清/拒绝（可暂停）
     graph.add_node("finalize", finalize_node)  # 收尾
 
@@ -67,17 +69,18 @@ def build_route_graph(*, checkpointer: Any = None) -> Any:  # 意图路由父图
             "fallback": END,  # 未知键兜底
         },  # 映射结束
     )  # 条件边结束
-    graph.add_edge("general_agent", "finalize")  # 兜底后收尾
+    graph.add_edge("general_agent", "verify")  # 兜底后校验
     graph.add_conditional_edges(  # 固定路径后分支（质量不足→升级）
         "dispatch_fixed",  # 来源
         after_dispatch,  # 分支函数
         {  # 映射
             "llm_fallback": "llm_fallback",  # 升级 agentic
-            "finalize": "finalize",  # 收尾
+            "verify": "verify",  # 去校验
             "fallback": END,  # 未知键兜底
         },  # 映射结束
     )  # 条件边结束
-    graph.add_edge("llm_fallback", "finalize")  # 兜底后收尾
+    graph.add_edge("llm_fallback", "verify")  # 兜底后校验
+    graph.add_edge("verify", "finalize")  # 校验后收尾
     graph.add_conditional_edges(  # 澄清/暂停后的分支
         "clarify_or_end",  # 来源
         after_clarify,  # 分支函数

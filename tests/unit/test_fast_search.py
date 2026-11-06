@@ -56,4 +56,4 @@ async def test_fast_search_uses_runner() -> None:  # 编排调用唯一检索源
 
 def test_after_dispatch() -> None:  # 边
     assert after_dispatch({"escalate_reason": "coverage_low"}) == "llm_fallback"  # 升级
-    assert after_dispatch({}) == "finalize"  # 收尾
+    assert after_dispatch({}) == "verify"  # 去校验

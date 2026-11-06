@@ -30,8 +30,8 @@ def after_semantic(state: dict[str, Any]) -> str:  # 语义层之后
 
 
 def after_dispatch(state: dict[str, Any]) -> str:  # 固定路径之后
-    """质量不够（带升级原因）→ 兜底子图；否则收尾。"""
-    return "llm_fallback" if state.get("escalate_reason") else "finalize"  # 升级或收尾
+    """质量不够（带升级原因）→ 兜底子图；否则去校验。"""
+    return "llm_fallback" if state.get("escalate_reason") else "verify"  # 升级或校验
 
 
 def after_clarify(state: dict[str, Any]) -> str:  # 澄清之后

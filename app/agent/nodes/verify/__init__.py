@@ -1,0 +1,7 @@
+"""校验节点包。"""
+
+from __future__ import annotations  # 延迟求值注解
+
+from app.agent.nodes.verify.node import verify_node  # 节点
+
+__all__ = ["verify_node"]  # 导出
