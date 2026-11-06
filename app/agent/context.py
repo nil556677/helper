@@ -67,6 +67,7 @@ class RunContext:  # 一轮运行的运行时上下文
     turn_id: str = ""  # 逻辑轮次 id（落库后 = user 消息 id；供 trace/对账关联）
     metrics: dict[str, Any] = field(default_factory=new_metrics)  # 本次 run 指标（可观测，收尾汇总）
     interrupt_payload: dict[str, Any] | None = None  # HITL 暂停时的待办负载（澄清/审批）
+    step_records: list[dict[str, Any]] = field(default_factory=list)  # 逐节点记录（节点名 + 返回 update，排障）
 
     def __post_init__(self) -> None:  # 初始化后挂监听
         """状态迁移自动转成 state 事件。"""

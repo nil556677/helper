@@ -49,6 +49,25 @@ def _ms(value: int | None) -> str:  # 毫秒文案
     return human_duration(value / 1000) if value is not None else "—"  # 转换
 
 
+def _meta(run: Any) -> dict[str, Any]:  # 解析元数据
+    try:  # 容错
+        return json.loads(run.metadata_json or "{}")  # 解析
+    except Exception:  # 坏数据
+        return {}  # 空
+
+
+#: 决策链各阶段的人话标签。
+_STAGE_LABEL = {  # 标签表
+    "preprocessed": "输入 / 预处理",  # 归一/实体/时间/flags
+    "route": "路由决策",  # RouteDecision
+    "semantic_recall": "语义召回",  # 候选 + 三态
+    "intent": "意图",  # IntentDecision
+    "triage": "分诊",  # TriageDecision
+    "verify": "校验",  # VerifyResult
+    "clarify_options": "澄清选项",  # 澄清
+}  # 结束
+
+
 def _route_label(run: Any) -> str:  # 路由文案
     """从 route_json 里取个能读的短标签（解析失败就回退 rag）。"""
     try:  # 解析 JSON
@@ -150,6 +169,23 @@ def _detail(run_id: str) -> None:  # 详情弹窗
                     f"查询：{run.normalized_query or run.question}"  # 归一
                     f" → {run.rewritten_query or '（未改写）'}"  # 改写
                 ).classes("hp-field-help")  # 样式
+            metadata = _meta(run)  # 元数据
+            decisions = metadata.get("decisions") or {}  # 决策链
+            steps = metadata.get("steps") or []  # 逐步
+            if decisions or steps:  # 有排障数据
+                with ui.expansion("决策链 / 步骤", icon="account_tree", value=True).classes("w-full hp-sources"):
+                    for key, label in _STAGE_LABEL.items():  # 逐阶段
+                        value = decisions.get(key)  # 该阶段决策
+                        if not value:  # 没有
+                            continue  # 跳过
+                        with ui.expansion(f"{label}", classes="w-full hp-step"):  # 折叠
+                            ui.code(json.dumps(value, ensure_ascii=False, indent=2)).classes("w-full")  # 原始 JSON
+                    if steps:  # 逐步
+                        with ui.expansion(f"逐步（节点做了什么，{len(steps)}）", classes="w-full hp-step"):
+                            for s in steps:  # 逐条
+                                with ui.row().classes("w-full items-start gap-2 no-wrap"):  # 一行
+                                    ui.label(str(s.get("node") or "")).classes("hp-field-name").style("width: 210px;")  # 节点
+                                    ui.code(str(s.get("update") or "")[:500]).classes("w-full q-pa-sm")  # 返回 update
             if run.error_detail:  # 有错误
                 with ui.row().classes("w-full items-start gap-2 no-wrap hp-note-error"):  # 错误行
                     ui.icon("error_outline").classes("text-base")  # 图标

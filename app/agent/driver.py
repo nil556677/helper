@@ -144,6 +144,7 @@ def _update_trace(ctx: RunContext, state: dict[str, Any]) -> None:  # 补 trace 
             "tools": _tools_summary(ctx),  # 工具调用汇总（可观测）
             "metrics": _metrics_of(ctx, state),  # 指标汇总（可观测）
             "decisions": _decision_chain(state),  # 决策链（排障）
+            "steps": list(ctx.step_records),  # 逐步骤（节点做了什么）
         }  # 元数据结束
         trace_store.update_run(  # 写
             ctx.run_id,  # run
@@ -170,6 +171,7 @@ async def _update_trace_async(ctx: RunContext, state: dict[str, Any]) -> None:  
             "gate": gate,  # 门限
             "basis": basis,  # 依据
             "decisions": _decision_chain(state),  # 决策链（排障）
+            "steps": list(ctx.step_records),  # 逐步骤（节点做了什么）
         }  # 结束
         from app.core.trace import store as _store  # 异步写
 
@@ -248,6 +250,9 @@ async def _run_graph(  # 跑父图并驱动状态机
                 )  # emit 结束
                 break  # 停止消费（图已暂停）
             for node, update in chunk.items():  # 逐个完成的节点
+                if "__interrupt__" == node:  # 防御：跳过暂停伪节点
+                    continue  # 下一个
+                ctx.step_records.append({"node": node, "update": json.dumps(update, ensure_ascii=False)[:600]})  # 记该步做了什么
                 event = project_event(node, update)  # 节点 → 迁移事件
                 if event is not None and ctx.machine.can(event):  # 有事件且当前状态允许
                     ctx.transition(event)  # driver 统一驱动迁移（发 state 事件）
