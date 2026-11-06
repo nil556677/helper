@@ -14,6 +14,7 @@ from app.ui.screens.chat.widgets import (
     _render_answer_text,
     _render_attachments,
     _render_basis_content,
+    _render_steps_flow,  # 时间线（与实时展开共用）
 )
 from app.ui.state import presentation
 from app.ui.state.chat_model import Entry, Step, Turn
@@ -117,14 +118,13 @@ def _render_process(turn: Turn) -> None:
 
 
 def _render_process_body(process: Any) -> None:
-    """过程组正文：推理预览 + 每一步（工具/命令行）。"""
+    """过程组正文：推理 + 有序时间线（与实时展开**同一渲染器**）。"""
     with ui.column().classes('w-full gap-0 pt-1 pl-6'):
         # 路径 1：有推理预览才画"推理"折叠块。
         if process.reasoning:
             _render_reasoning(process.reasoning)
-        # 路径 2：逐个步骤画可展开的一行（空列表就不画）。
-        for step in process.steps:
-            _render_step(step)
+        # 路径 2：时间线（有序步骤；空列表就不画）。实时/历史用同一份渲染。
+        _render_steps_flow(process.steps)
 
 
 def _render_reasoning(text: str) -> None:

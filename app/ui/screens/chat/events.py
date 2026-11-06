@@ -6,11 +6,9 @@ import time
 from typing import Any
 
 from app.agent.contracts import (  # 契约层直连（消除对旧门面的协议耦合）
-    GROUP_LABELS,
-    GROUP_ORDER,
-    RETRY_KIND_LABELS,
-    EventEnvelope,
-    EventType,
+    RETRY_KIND_LABELS,  # 重试类别文案
+    EventEnvelope,  # 事件信封
+    EventType,  # 事件类型
 )
 from app.ui.screens.chat.citations import _render_citations
 from app.ui.screens.chat.live import (
@@ -19,12 +17,23 @@ from app.ui.screens.chat.live import (
     _render_approval,
     _render_basis,
     _render_clarify,
-    _render_groups,
+    _render_steps,
     _set_details,
-    _update_group,
+    _upsert_step,
 )
 from app.ui.screens.chat.state import _RENDER_INTERVAL_S, _alive
 from app.ui.state.chat_model import Fragment, Process, Step, Turn
+
+#: 工具类别 → 人话标题（扩展点：新增工具类别加一行即可）。
+_TOOL_TITLES: dict[str, str] = {
+    "read": "读取文件",  # 读
+    "write": "写入文件",  # 写
+    "edit": "编辑文件",  # 改
+    "bash": "运行命令",  # 命令
+    "search": "查找资料",  # 检索
+    "weather": "查询天气",  # 天气
+    "time": "查询时间",  # 时间
+}
 
 
 def _fragment_list(items: list[dict[str, Any]]) -> list[Fragment]:  # 事件转 Fragment
@@ -95,22 +104,22 @@ def _apply_live_event(view: dict[str, Any], event: EventEnvelope) -> None:  # �
         view["run_state"] = payload.after  # 记录
         _refresh_header(view)  # 组头
         return  # 结束
-    if event.type is EventType.STAGE:  # 步骤
-        _update_group(  # 合并到用户分组
+    if event.type is EventType.STAGE:  # 步骤：加进时间线（按发生顺序，不再按固定分组归并）
+        _upsert_step(  # 更新/追加
             view,  # 视图
             payload.stage_id,  # 步骤 id
-            payload.group,  # 分组（调用处声明，前端不再查表）
-            payload.title or payload.stage_id,  # 显示标题
-            payload.status,  # 状态
-            payload.detail,  # 明细
-            payload.duration_ms,  # 耗时
+            group=payload.group,  # 分组（仅选图标，所有步骤都展示）
+            title=payload.title or payload.stage_id,  # 人话标题
+            status=payload.status,  # 状态
+            detail=payload.detail,  # 明细
+            ms=payload.duration_ms,  # 耗时
         )  # 更新结束
         return  # 结束
     if event.type is EventType.RETRY:  # 重试
         kind = RETRY_KIND_LABELS.get(payload.error_kind, payload.error_kind or "错误")  # 类别说明
         wait = f"，{payload.delay_ms / 1000:.1f}s 后继续" if payload.delay_ms else ""  # 等待
         view["retry_note"] = f"第 {payload.attempt}/{payload.max_attempts} 次重试：{kind}{wait}"  # 一句话
-        _render_groups(view)  # 过程区带上提示
+        _render_steps(view)  # 时间线带上提示
         return  # 结束
     if event.type is EventType.CONTEXT:  # 上下文
         view["context"] = payload.model_dump()  # 记录
@@ -118,29 +127,21 @@ def _apply_live_event(view: dict[str, Any], event: EventEnvelope) -> None:  # �
     if event.type is EventType.PII:  # 脱敏
         view["redactions"] = payload.model_dump()  # 记录
         return  # 结束
-    if event.type is EventType.TOOL:  # 工具
+    if event.type is EventType.TOOL:  # 工具：作为时间线的一步（子项带参数/结果）
         call_id = str(payload.call_id or payload.tool_name)  # id
-        item = next((tool for tool in view["tools"] if str(tool.get("call_id") or tool.get("name")) == call_id), None)  # 已有
-        if item is None:  # 新建
-            item = {"call_id": call_id}  # 形状
-            view["tools"].append(item)  # 追加
-        item.update(  # 更新
-            name=payload.tool_name,  # 名称
+        kind_label = _TOOL_TITLES.get(payload.variant, str(payload.tool_name or "工具"))  # 人话标题
+        children: list[dict] = []  # 子项
+        if payload.diff:  # 有改动
+            children.append({"id": f"{call_id}.diff", "group": "tool", "title": "查看改动", "status": "done", "detail": payload.diff, "ms": 0, "children": []})  # 改动子项
+        _upsert_step(  # 更新/追加工具步骤
+            view,  # 视图
+            call_id,  # 工具 id
+            group="tool",  # 工具分组（图标））
+            title=f"{kind_label} · {payload.tool_name}" if payload.variant in _TOOL_TITLES else str(payload.tool_name or kind_label),  # 标题
             status=payload.status,  # 状态
             detail=payload.detail,  # 明细
-            variant=payload.variant,  # 类别
-            path=payload.path,  # 文件
-            diff=payload.diff,  # 改动
+            children=children,  # 子项
         )  # 更新结束
-        _update_group(  # 工具组
-            view,  # 视图
-            "tool",  # 组
-            "使用工具",  # 名称
-            payload.status,  # 状态
-            payload.detail,  # 明细
-            None,  # 耗时
-        )  # 更新结束
-        _render_groups(view)  # 重画工具行
         return  # 结束
     if event.type is EventType.APPROVAL:  # 审批
         _render_approval(view, payload.model_dump())  # 画审批卡
@@ -275,24 +276,32 @@ def _show_note(view: dict[str, Any]) -> None:  # 显示说明
 
 
 def _turn_from_live(view: dict[str, Any]) -> Turn:  # 实时视图转 Turn
-    """用户级步骤 + 答案 + 引用 + 检索依据，供历史重画。"""
+    """有序步骤 + 答案 + 引用 + 检索依据，供历史重画（与展开的时间线**同一份 steps**）。"""
     steps: list[Step] = []  # 步骤
-    for group_key in GROUP_ORDER:  # 固定顺序
-        group = view["groups"].get(group_key.value)  # 组
-        if group is None:  # 没有
-            continue  # 跳过
+    for item in view["steps"]:  # 逐条（按发生顺序））
         steps.append(  # 追加
             Step(  # 步骤
-                group=group_key.value,  # 分组
-                title=GROUP_LABELS[group_key],  # 组名
-                detail=str(group.get("detail") or ""),  # 明细
-                status="failed" if group.get("status") == "failed" else "done",  # 状态
+                group=str(item.get("group") or ""),  # 分组
+                title=str(item.get("title") or ""),  # 标题
+                detail=str(item.get("detail") or ""),  # 明细
+                status=str(item.get("status") or "done"),  # 状态
+                ms=int(item.get("ms") or 0),  # 耗时
+                children=[  # 子项（递归映射））
+                    Step(  # 子步骤
+                        group=str(c.get("group") or ""),  # 分组
+                        title=str(c.get("title") or ""),  # 标题
+                        detail=str(c.get("detail") or ""),  # 明细
+                        status=str(c.get("status") or "done"),  # 状态
+                        ms=int(c.get("ms") or 0),  # 耗时
+                    )
+                    for c in (item.get("children") or []) if isinstance(c, dict)  # 逐个
+                ],
             )  # 步骤结束
         )  # 追加结束
     process = Process(  # 过程组
         running="",  # 已完成
         done=str(view["headline"].text if view["headline"] is not None else "完成"),  # 标题
-        steps=steps,  # 步骤
+        steps=steps,  # 步骤（有序时间线）
         reasoning=view["reasoning_text"],  # 思考
     ) if steps or view["reasoning_text"] else None  # 有内容才建
     usage = {  # 本轮用量

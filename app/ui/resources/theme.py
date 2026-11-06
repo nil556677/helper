@@ -427,6 +427,15 @@ body {
 .hp-reasoning > .hp-md-compact {
   padding: 4px 0 4px 20px;
 }
+.hp-timeline-row { border-left: none; }
+.hp-timeline-rail { align-items: center; }
+.hp-timeline-dot { font-size: 11px; line-height: 16px; width: 16px; text-align: center; }
+.hp-timeline-connector {
+  width: 2px;
+  min-height: 4px;
+  background: var(--hp-border);
+  margin: 0 auto;
+}
 .hp-step-icon, .hp-reasoning-icon { color: inherit; }
 .hp-step-title, .hp-reasoning-title { font-size: 12.5px; line-height: 20px; }
 .hp-step-error { color: var(--hp-negative); }

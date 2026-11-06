@@ -9,7 +9,34 @@ from typing import Any
 from nicegui import ui
 
 from app.services import chat_stats
-from app.ui.screens.chat.state import _HISTORY_PREVIEW_CHARS
+from app.ui.screens.chat.state import _HISTORY_PREVIEW_CHARS, _STEP_ICONS
+
+
+def _render_attachments(items: list[dict]) -> None:  # 气泡下附件
+    """文件名 + 大小；图片给缩略图（点开新窗口看原图），文件缺失回落成图标。"""
+    if not items:  # 没有附件
+        return  # 跳过
+    with ui.column().classes("w-full justify-end gap-1 pt-1 items-end"):  # 右侧排附件
+        for item in items:  # 逐个
+            name = str(item.get("name") or "附件")  # 名
+            size = int(item.get("size") or 0)  # 大小
+            path = Path(str(item.get("path") or ""))  # 路径
+            meta = []  # 元信息
+            if size:  # 有大小
+                meta.append(f"{size / 1024:.0f}KB")  # KB
+            if item.get("kind") == "image" and path.is_absolute() and path.is_file():  # 图片存在
+                with ui.row().classes("items-center gap-2 hp-attachment-chip"):  # 芯片
+                    with ui.image(str(path)).classes("hp-attach-thumb").props("cursor-pointer"):  # 缩略图
+                        ui.link("", str(path), new_tab=True).classes("absolute inset-0")  # 点开大图
+                    ui.label(name)  # 文件名
+                    if meta:  # 有元信息
+                        ui.label(" · ".join(meta)).classes("hp-field-help")  # 大小
+                continue  # 下一个
+            with ui.row().classes("items-center gap-1 hp-attachment-chip"):  # 文件/缺失
+                ui.icon("attach_file").classes("text-sm")  # 图标
+                ui.label(name).classes("hp-field-help")  # 名
+                if meta:  # 有元信息
+                    ui.label(" · ".join(meta)).classes("hp-field-help")  # 大小
 
 
 def _seg_width(tokens: int) -> str:
@@ -32,22 +59,64 @@ def _build_pending(stream: Any, *, question: str, attachments: list[dict] | None
     return box
 
 
-def _render_attachments(items: list[dict]) -> None:  # 气泡下附件
-    """文件名 + 大小；图片给缩略图。"""
-    if not items:
-        return
-    with ui.row().classes("w-full justify-end gap-2 flex-wrap pt-1"):
-        for item in items:
-            name = str(item.get("name") or "附件")
-            size = int(item.get("size") or 0)
-            with ui.row().classes("items-center gap-1 hp-attachment-chip"):
-                if item.get("kind") == "image" and Path(str(item.get("path") or "")).is_file():  # 图片
-                    ui.image(str(item["path"])).classes("hp-attach-thumb")  # 缩略图
-                else:  # 文件
-                    ui.icon("attach_file").classes("text-sm")  # 图标
-                ui.label(name).classes("hp-field-help")
-                if size:
-                    ui.label(f"{size / 1024:.0f}KB").classes("hp-field-help")
+def _step_dict(step: Any) -> dict[str, Any]:  # Step(dataclass) 或 dict → 统一 dict
+    """历史给 Step 对象、实时给 dict；这里归一，渲染器只认 dict（单一事实）。"""
+    if isinstance(step, dict):  # 已是 dict
+        return dict(step)  # 原样
+    return {  # dataclass Step
+        "group": str(getattr(step, "group", "")),  # 分组
+        "title": str(getattr(step, "title", "")),  # 标题
+        "detail": str(getattr(step, "detail", "")),  # 明细
+        "status": str(getattr(step, "status", "done")),  # 状态
+        "ms": int(getattr(step, "ms", 0) or 0),  # 耗时
+        "children": [_step_dict(c) for c in getattr(step, "children", [])],  # 子项递归
+    }  # 返回
+
+
+def _render_steps_flow(steps: list[Any], *, live: bool = False) -> None:  # 时间线渲染器（实时/历史共用）
+    """一条垂直时间线：圆点 + 连线 + 每步一行，子步骤缩进。**单一事实源**。
+
+    在当前 NiceGUI 上下文里直接画；live 仅作语义位（历史不滚）。
+    """
+    entries = [_step_dict(s) for s in steps]  # 归一
+    if not entries:  # 没有步骤
+        return  # 跳过
+    for idx, step in enumerate(entries):  # 逐步骤（保持发生顺序）
+        group = str(step.get("group") or "")  # 分组
+        title = str(step.get("title") or "")  # 标题
+        detail = str(step.get("detail") or "")  # 明细
+        status = str(step.get("status") or "done")  # 状态
+        ms = int(step.get("ms") or 0)  # 耗时
+        icon = _STEP_ICONS.get(group, "chevron_right")  # 图标
+        marks = {"running": "…", "done": "✓", "failed": "✗", "skipped": "·"}  # 状态符号
+        with ui.row().classes("w-full items-stretch gap-2 no-wrap hp-timeline-row"):  # 时间线行
+            with ui.column().classes("hp-timeline-rail").style("width:20px;"):  # 圆点+连线轨
+                with contextlib.suppress(Exception):  # 首行无上连线
+                    if idx > 0:  # 非首行
+                        ui.element("div").classes("hp-timeline-connector").style("flex:1;")  # 上连线
+                ui.label(marks.get(status, "·")).classes("hp-timeline-dot").style(  # 状态点
+                    "color:%s;" % ("var(--hp-accent)" if status == "running" else ("var(--hp-danger)" if status == "failed" else "var(--hp-label-tertiary)"))
+                )  # 点结束
+                with contextlib.suppress(Exception):  # 末行无下连线
+                    if idx < len(entries) - 1:  # 非末行
+                        ui.element("div").classes("hp-timeline-connector").style("flex:1;")  # 下连线
+            with ui.column().classes("w-full gap-0 pt-1"):  # 该步内容
+                with ui.row().classes("w-full items-center gap-2 no-wrap"):  # 该步头
+                    ui.icon(icon).classes("text-sm hp-step-icon")  # 图标
+                    ui.label(title).classes("hp-step-title")  # 标题
+                    if detail:  # 有明细
+                        ui.label(detail).classes("hp-field-help").style("overflow:hidden;text-overflow:ellipsis")  # 一行
+                    children = step.get("children") or []  # 子项
+                    if children:  # 有子项
+                        ui.label(f"{len(children)} 项").classes("hp-hint")  # 数量
+                    ui.space()  # 撑开
+                    if step.get("status") == "failed":  # 失败
+                        ui.icon("error").classes("text-sm hp-step-error")  # 错误图标
+                    if ms:  # 有耗时
+                        ui.label(f"{ms}ms").classes("hp-field-help")  # 耗时
+                if children:  # 子步骤缩排
+                    with ui.column().classes("w-full gap-0 pl-6"):  # 缩进区
+                        _render_steps_flow(children, live=False)  # 递归子项（不再滚）
 
 
 def _preview_text(text: str, limit: int = 400) -> str:  # 长答案的预览

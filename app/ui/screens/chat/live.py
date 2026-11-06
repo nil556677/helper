@@ -8,11 +8,11 @@ from typing import Any  # 任意值
 
 from nicegui import ui
 
-from app.agent.contracts import GROUP_LABELS, GROUP_ORDER, StageGroup
 from app.services import settings as settings_service
 from app.ui.screens.chat.dialogs import _open_settings_dialog
-from app.ui.screens.chat.state import _GROUP_KEYS, _alive, _LiveState
-from app.ui.screens.chat.widgets import _render_basis_content  # 依据正文（历史/实时共用）
+from app.ui.screens.chat.scroll import _schedule_scroll
+from app.ui.screens.chat.state import _alive, _LiveState
+from app.ui.screens.chat.widgets import _render_basis_content, _render_steps_flow  # 依据/时间线（历史实时共用）
 
 
 def _build_live(live_state: _LiveState, box: Any, scroll: Any = None) -> dict[str, Any]:  # 建实时视图
@@ -36,7 +36,9 @@ def _build_live(live_state: _LiveState, box: Any, scroll: Any = None) -> dict[st
         "conflict_label": None,  # 资料冲突提示
         "citations_box": None,  # 引用
         "usage": None,  # 用量
-        "groups": {},  # 分组状态
+        "groups": {},  # 兼容旧字段（新用 steps）
+        "steps": [],  # 有序步骤（时间线单一事实源）
+        "step_ids": {},  # step_id → 索引（原地更新）
         "basis": {},  # 检索依据
         "settings": {},  # 本轮设置
         "answer_text": "",  # 已生成文本
@@ -145,96 +147,83 @@ def _toggle_basis(view: dict[str, Any]) -> None:  # 展开/收起依据
     view["basis_box"].update()  # 刷新
 
 
-def _group_status(stages: dict[str, dict[str, Any]]) -> str:  # 组状态
-    """running 优先，其次 failed，最后 done。"""
-    statuses = [str(item.get("status") or "") for item in stages.values()]  # 全部
+def _steps_status(steps: list[dict[str, Any]]) -> str:  # 整体状态
+    """running 优先，其次 failed，最后 done/pending。"""
+    statuses = [str(item.get("status") or "") for item in steps]  # 全部
     if "running" in statuses:  # 运行中
         return "running"  # 运行
     if "failed" in statuses:  # 失败
         return "failed"  # 失败
-    if statuses and all(status in ("done", "skipped") for status in statuses):  # 全完成
+    if statuses and all(s in ("done", "skipped") for s in statuses):  # 全完成
         return "done"  # 完成
     return "pending"  # 其他
 
 
-def _update_group(  # 更新分组
+def _upsert_step(  # 新增/更新一个时间线步骤（单一事实源）
     view: dict[str, Any],  # 视图
-    stage_id: str,  # 步骤 id（只在组内做原地更新的键）
-    group: str,  # 分组（事件自带，不再按 id 查表）
-    label: str,  # 本次步骤的文案
+    step_id: str,  # 步骤 id（stage_id / 工具 call_id）
+    *,  # 关键字
+    group: str,  # 分组（决定图标）
+    title: str,  # 人话标题
     status: str,  # 状态
     detail: str = "",  # 明细
     ms: int | None = None,  # 耗时
+    children: list[dict] | None = None,  # 子步骤（工具参数/结果）
 ) -> None:  # 无返回
-    """把内部步骤按事件自带的分组合并成用户能懂的一行。"""
-    if group not in _GROUP_KEYS:  # 没有分组 / 只埋 trace 的步骤
-        return  # 不展示
-    group_state = view["groups"].setdefault(  # 取/建这一组
-        group,  # 分组
-        {"label": GROUP_LABELS[StageGroup(group)], "stages": {}},  # 组名 + 组内步骤
-    )  # 取组结束
-    group_state["stages"][stage_id] = {"label": label, "status": status, "detail": detail, "ms": ms}  # 记录
-    group_state["status"] = _group_status(group_state["stages"])  # 状态
-    group_state["ms"] = sum(int(item.get("ms") or 0) for item in group_state["stages"].values())  # 耗时
-    details: list[str] = []  # 明细
-    for item in group_state["stages"].values():  # 逐项
-        text = str(item.get("detail") or "").strip()  # 明细
-        if text and text not in details:  # 去重
-            details.append(text)  # 追加
-    group_state["detail"] = "；".join(details[:3])  # 最多三条
-    _render_groups(view)  # 重画分组
-    _refresh_header(view)  # 更新组头
+    """按 step_id 原地更新或追加；再重画时间线并（运行中）滚到底。"""
+    steps = view["steps"]  # 有序步骤
+    index = view["step_ids"].get(step_id)  # 已有索引
+    if index is None:  # 新增
+        steps.append({  # 追加到末尾
+            "id": step_id,  # id
+            "group": group,  # 分组
+            "title": title,  # 标题
+            "status": status,  # 状态
+            "detail": detail,  # 明细
+            "ms": int(ms or 0),  # 耗时
+            "children": children or [],  # 子项
+        })  # 追加结束
+        view["step_ids"][step_id] = len(steps) - 1  # 记索引
+    else:  # 已有：原地更新
+        item = steps[index]  # 取
+        item.update(  # 合并
+            group=group,  # 分组
+            title=title,  # 标题
+            status=status,  # 状态
+            detail=detail,  # 明细
+        )  # 合并结束
+        if ms is not None:  # 只给就更新（不改"未知"）
+            item["ms"] = int(ms)  # 耗时
+        if children:  # 有子项
+            item["children"] = children  # 覆盖子项
+    _render_steps(view)  # 重画
+    _refresh_header(view)  # 组头
+    _maybe_scroll(view)  # 运行中滚到底
 
 
-def _render_groups(view: dict[str, Any]) -> None:  # 画分组
-    """只画用户级步骤，不画内部 stage。"""
+def _maybe_scroll(view: dict[str, Any]) -> None:  # 运行中自动滚到底
+    """有滚动区且还在跑，就滚到最新一步（节流，别每步都刷）。"""
+    if not (view.get("scroll") and view.get("run_state") not in ("done", "error", "cancelled", "waiting")):  # 不在跑/没滚动区
+        return  # 跳过
+    now = time.perf_counter()  # 当前时刻
+    if now - view.get("scrolled_at", 0.0) < 0.15:  # 节流 150ms
+        return  # 跳过
+    view["scrolled_at"] = now  # 记时刻
+    _schedule_scroll(view["scroll"])  # 排一次延迟滚动
+
+
+def _render_steps(view: dict[str, Any]) -> None:  # 画时间线（实时）
+    """把有序步骤画进 details 区；tools 已并入步骤（工具调用成为子步骤/独立步骤）。"""
     if view["details"] is None or not _alive(view):  # 没 UI
         return  # 跳过
     view["details"].clear()  # 清空
     with view["details"]:  # 画
-        for group_key in GROUP_ORDER:  # 固定顺序
-            group = view["groups"].get(group_key.value)  # 组
-            if group is None:  # 没有
-                continue  # 跳过
-            mark_map = {"running": "…", "done": "✓", "failed": "✗", "pending": "·"}  # 符号
-            with ui.row().classes("w-full items-center gap-2 no-wrap"):  # 行
-                ui.label(mark_map.get(group["status"], "·")).classes("hp-field-name").style("width: 18px;")  # 符号
-                ui.label(group["label"]).classes("hp-field-name")  # 名称
-                ui.label(group.get("detail") or "").classes("hp-field-help")  # 明细
-                ui.space()  # 撑开
-                ms = int(group.get("ms") or 0)  # 耗时
-                if ms:  # 有耗时
-                    ui.label(f"{ms}ms").classes("hp-field-help")  # 显示
-        for tool in view["tools"]:  # 工具行
-            _render_tool_row(tool)  # 画
+        _render_steps_flow(view["steps"])  # 单一时间线渲染器（实时）
         if view.get("retry_note"):  # 有重试提示
             with ui.row().classes("w-full items-center gap-2 no-wrap"):  # 一行
                 ui.icon("autorenew").classes("text-sm hp-hint")  # 图标
                 ui.label(view["retry_note"]).classes("hp-hint")  # 文案
     view["details"].update()  # 刷新
-
-
-def _render_tool_row(tool: dict[str, Any]) -> None:  # 工具行
-    """读取/写入/编辑/命令：图标 + 人话 + 路径/明细。"""
-    variant = str(tool.get("variant") or "")  # 类型
-    icons = {"read": "menu_book", "write": "note_add", "edit": "edit", "bash": "terminal"}  # 图标
-    titles = {"read": "读取文件", "write": "写入文件", "edit": "编辑文件", "bash": "运行命令"}  # 标题
-    status = str(tool.get("status") or "done")  # 状态
-    marks = {"running": "…", "done": "✓", "failed": "✗", "stopped": "·"}  # 符号
-    with ui.row().classes("w-full items-center gap-2 no-wrap"):  # 行
-        ui.icon(icons.get(variant, "build")).classes("text-sm hp-field-name")  # 图标
-        ui.label(titles.get(variant, str(tool.get("name") or "工具"))).classes("hp-field-name")  # 标题
-        path = str(tool.get("path") or "")  # 文件
-        if path:  # 有路径
-            ui.label(path).classes("hp-field-help").style("overflow:hidden;text-overflow:ellipsis")  # 路径
-        detail = str(tool.get("detail") or "")  # 明细
-        if detail:  # 有明细
-            ui.label(detail).classes("hp-field-help")  # 明细
-        ui.space()  # 撑开
-        ui.label(marks.get(status, "·")).classes("hp-field-help")  # 状态
-    if tool.get("diff"):  # 有改动
-        with ui.expansion("查看改动").classes("w-full hp-step"):  # 折叠
-            ui.code(str(tool["diff"])).classes("w-full")  # diff
 
 
 def _render_approval(view: dict[str, Any], data: dict[str, Any]) -> None:  # 审批卡
@@ -389,38 +378,41 @@ def _running_line(view: dict[str, Any]) -> str:  # 运行中的那行文案
 
 
 def _refresh_header(view: dict[str, Any]) -> None:  # 更新组头
-    """运行中显示“正在思考中，用时X ···”，结束显示“已…”，并用转圈图标表示还活着。"""
+    """运行中显示"正在<当前步> · N 步 · 用时X"，完成显示"已完成 · N 步 · 总耗时"。
+
+    折叠即摘要（方案 A），展开看时间线（方案 B）。
+    """
     if view["headline"] is None or not _alive(view):  # 没 UI
         if view.get("ticker") is not None:  # 有计时器也要停（防泄漏）
             with contextlib.suppress(Exception):  # 停表失败不阻断
                 view["ticker"].cancel()  # 停
             view["ticker"] = None  # 置空
         return  # 跳过
-    running = next((g for g in view["groups"].values() if g.get("status") == "running"), None)  # 运行中
-    failed = any(g.get("status") == "failed" for g in view["groups"].values())  # 失败
+    steps = view["steps"]  # 有序步骤
+    running_step = next((s for s in steps if s.get("status") == "running"), None)  # 当前步
+    failed = any(s.get("status") == "failed" for s in steps)  # 失败
+    step_n = len(steps)  # 步数
     if view["run_state"] == "error" or failed:  # 失败
         text = "本轮失败"  # 文案
     elif view["run_state"] == "cancelled":  # 停止
         text = "已停止生成"  # 文案
-    elif view["run_state"] == "waiting":  # HITL 暂停：等用户选择
+    elif view["run_state"] == "waiting":  # HITL 暂停：等用户
         text = "等待你的选择…"  # 文案
-    elif view["run_state"] == "cancelling":  # 正在停止（已点停止、还没收到终态）
+    elif view["run_state"] == "cancelling":  # 正在停止
         text = "正在停止…"  # 文案
-    elif running is not None:  # 运行中
+    elif running_step is not None:  # 有正在跑的步骤
+        running_title = str(running_step.get("title") or "处理")  # 当前步标题
+        count = f" · {step_n} 步" if step_n else ""  # 步数
+        text = f"正在{running_title}{count} · {_elapsed_text(time.perf_counter() - view['started_at'])}"  # 实时文案
+    elif view.get("run_state") in ("context_loading", "retrieving"):  # 准备/检索
         text = _running_line(view)  # 努力求索中，用时X ···
-    elif view["groups"].get(StageGroup.GENERATE.value) is not None:  # 生成过
-        text = "已查找资料并生成回答"  # 文案
-    elif view["groups"].get(StageGroup.SEARCH.value) is not None:  # 查过
-        text = "已查找资料"  # 文案
-    elif view["run_state"] in ("context_loading", "retrieving"):  # 准备/检索（从检索起就计时）
-        text = _running_line(view)  # 努力求索中，用时X ···
-    elif view["run_state"] == "done":  # 完成
-        text = "已完成"  # 文案
+    elif view["run_state"] in ("done",):  # 完成
+        text = f"已完成 · {step_n} 步" if step_n else "已完成"  # 摘要
     else:  # 初始
         text = _running_line(view)  # 努力求索中，用时X ···
-    terminal = view["run_state"] in ("done", "error", "cancelled")  # 是否已到终态
-    waiting = view["run_state"] == "waiting"  # 是否等用户选择
-    view["headline"].style(  # 运行中"文案+时间"用强调色，终态恢复默认
+    terminal = view["run_state"] in ("done", "error", "cancelled")  # 是否到终态
+    waiting = view["run_state"] == "waiting"  # 是否等用户
+    view["headline"].style(  # 运行中"文案+时间"用强调色
         f"color: {'var(--hp-accent)' if (not terminal and not waiting) else 'inherit'}"
     )  # 样式结束
     if (terminal or waiting) and view.get("ticker") is not None:  # 到终态/暂停：停表
