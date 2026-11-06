@@ -31,7 +31,12 @@ TRANSITIONS: dict[tuple[RunState, RunEvent], RunState] = {  # 迁移表
     (RunState.FINALIZING, RunEvent.FINALIZED): RunState.DONE,  # 收尾完成
     (RunState.FINALIZING, RunEvent.FAIL): RunState.FAILED,  # 收尾失败
     (RunState.FINALIZING, RunEvent.CANCEL_REQUEST): RunState.CANCELLING,  # 取消
-    (RunState.WAITING, RunEvent.RESUME): RunState.CONTEXT_LOADING,  # 补参恢复
+    # 暂停等待用户（澄清/审批）：任意活跃态可进入 WAITING
+    (RunState.CONTEXT_LOADING, RunEvent.INTERRUPT): RunState.WAITING,  # 上下文阶段暂停
+    (RunState.RETRIEVING, RunEvent.INTERRUPT): RunState.WAITING,  # 检索阶段暂停
+    (RunState.GENERATING, RunEvent.INTERRUPT): RunState.WAITING,  # 生成阶段暂停
+    (RunState.FINALIZING, RunEvent.INTERRUPT): RunState.WAITING,  # 收尾阶段暂停
+    (RunState.WAITING, RunEvent.RESUME): RunState.GENERATING,  # 补参/选择恢复 → 继续生成
     (RunState.WAITING, RunEvent.CANCEL_REQUEST): RunState.CANCELLING,  # 取消
     (RunState.WAITING, RunEvent.FAIL): RunState.FAILED,  # 等待失败
     (RunState.CANCELLING, RunEvent.CANCEL_ACK): RunState.CANCELLED,  # 取消完成

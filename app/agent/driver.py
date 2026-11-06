@@ -19,6 +19,7 @@ from dataclasses import dataclass  # 数据类
 from typing import Any  # 任意值
 
 from langgraph.errors import GraphRecursionError  # 递归超限
+from langgraph.types import Command  # HITL 恢复命令
 from loguru import logger  # 日志（失败要能查堆栈）
 
 from app.agent import events  # 事件
@@ -174,7 +175,7 @@ def _sink_run_id(emit: Any, run_id: str) -> None:  # 回填 run id
 
 async def _run_graph(  # 跑父图并驱动状态机
     graph: Any,  # 编译父图
-    initial_state: dict[str, Any],  # 初始状态
+    graph_input: Any,  # 输入（普通 state 或 Command(resume)）
     ctx: RunContext,  # 运行上下文
     emit: Any,  # 事件出口
 ) -> dict[str, Any]:  # 权威最终状态
@@ -191,17 +192,24 @@ async def _run_graph(  # 跑父图并驱动状态机
         },  # configurable 结束
         "metadata": {  # checkpoint 元数据（对账定位）
             "turn_id": ctx.turn_id,  # 轮次
-            "attempt": int(initial_state.get("attempt") or 1),  # 尝试次数
+            "attempt": int(graph_input.get("attempt") or 1) if isinstance(graph_input, dict) else 1,  # 尝试次数
         },  # 元数据结束
         "recursion_limit": RECURSION_LIMIT,  # 图步上限
     }  # config 结束
     final_state: dict[str, Any] = {}  # 权威最终状态
     async for mode, chunk in graph.astream(  # 流式观测（双模式）
-        initial_state,  # 初始状态
+        graph_input,  # 输入
         config,  # 配置
         stream_mode=["updates", "values"],  # 更新 + 完整状态快照
     ):  # 双模式开始
         if mode == "updates":  # 节点完成记录
+            if "__interrupt__" in chunk:  # HITL 暂停（澄清/审批）
+                items = chunk.get("__interrupt__") or ()  # 中断列表
+                value = getattr(items[0], "value", None) if items else None  # 首个负载
+                ctx.interrupt_payload = value if isinstance(value, dict) else {"value": value}  # 记录待办
+                if ctx.machine.can(RunEvent.INTERRUPT):  # 可迁移
+                    ctx.transition(RunEvent.INTERRUPT, reason="hitl")  # 进入 WAITING
+                break  # 停止消费（图已暂停）
             for node, update in chunk.items():  # 逐个完成的节点
                 event = project_event(node, update)  # 节点 → 迁移事件
                 if event is not None and ctx.machine.can(event):  # 有事件且当前状态允许
@@ -225,6 +233,7 @@ async def drive(  # 驱动图
     *,  # 仅关键字
     initial_state: dict[str, Any],  # 初始状态
     emit: Any | None = None,  # 事件出口（默认用 ctx.emit）
+    resume_value: Any = None,  # HITL 恢复值（非 None 时用 Command(resume) 继续）
 ) -> DriverResult:  # 结果
     """驱动图跑到终态；ctx.db 存在则 trace 走 async（单一异步写者），否则同步。"""
     emit = emit if emit is not None else ctx.emit  # 事件出口
@@ -232,6 +241,8 @@ async def drive(  # 驱动图
     state: dict[str, Any] = {}  # 图最终状态
     status = "failed"  # 终态，先按失败
     error: BaseException | None = None  # 可选错误
+    resuming = resume_value is not None  # 是否恢复
+    graph_input: Any = Command(resume=resume_value) if resuming else initial_state  # 输入
 
     async def _body(session: Any) -> DriverResult:  # 执行体（sync/async trace 共用）
         nonlocal state, status, error  # 改外层
@@ -243,17 +254,24 @@ async def drive(  # 驱动图
             emit(events.cancelled("user"))  # 事件
             return DriverResult({}, "cancelled")  # 短路
         try:  # 图执行
-            ctx.transition(RunEvent.START)  # 进入上下文
+            if resuming and ctx.machine.can(RunEvent.RESUME):  # 恢复
+                ctx.transition(RunEvent.RESUME)  # WAITING → CONTEXT_LOADING
+            else:  # 新跑
+                ctx.transition(RunEvent.START)  # 进入上下文
             await _CHAIN.before_run(ctx)  # 中间件（如取消边界）
             with run_context(ctx):  # 绑定当前 run
                 state = await _run_graph(  # 跑父图 + 驱动状态机
                     graph,  # 编译父图
-                    initial_state,  # 初始状态
+                    graph_input,  # 输入（state 或 Command）
                     ctx,  # 上下文（投影用）
                     emit,  # 事件出口（driver 收权后发 state/done）
                 )  # 图结束
-            status = "done"  # 正常结束
-            _seal_state(ctx, state, status)  # 封业务字段进最终 state
+            if ctx.machine.state is RunState.WAITING:  # HITL 暂停
+                status = "waiting"  # 非终态（等用户）
+                _seal_state(ctx, state, status)  # 封业务字段
+            else:  # 正常
+                status = "done"  # 正常结束
+                _seal_state(ctx, state, status)  # 封业务字段进最终 state
         except RunCancelled:  # 用户取消
             session.set_status("cancelled")  # trace
             _mark_cancelled(ctx)  # 收敛状态

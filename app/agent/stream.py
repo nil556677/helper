@@ -89,13 +89,13 @@ class StreamHandle:  # UI 拿到的句柄
         if self.started and self.task is not None and not self.task.done():  # 已在跑
             self.task.cancel()  # 任务级取消（阻塞的 await 立即中断）
 
-    async def resume(self, value: Any) -> dict[str, Any]:  # HITL 恢复
-        """在被暂停的图上用同 thread_id 继续；返回恢复后的状态。"""
-        from app.agent.resume import resume as _resume  # 延迟导入
+    async def resume(self, value: Any) -> Any:  # HITL 恢复
+        """在被暂停的图上用同 thread_id 继续（走 driver，保留 FSM/事件）。"""
+        from app.agent.driver import drive as _drive  # 延迟导入
 
-        if self.graph is None or not self.thread_id:  # 没有可恢复的运行
-            raise RuntimeError("该运行未挂载可恢复的图/线程")
-        return await _resume(self.graph, self.thread_id, value)  # 恢复
+        if self.graph is None:  # 没有可恢复的运行
+            raise RuntimeError("该运行未挂载可恢复的图")
+        return await _drive(self.graph, self.ctx, initial_state={}, emit=self.ctx.emit, resume_value=value)  # 恢复
 
 
 def _graph() -> Any:  # 取父图
@@ -130,6 +130,7 @@ async def _run(handle: StreamHandle) -> None:  # 后台执行
             "attachments": [attachments.public(item) for item in ctx.attachments],  # 附件公开元数据（正文不入 state）
             "run_id": ctx.run_id,  # 运行 id（HITL 负载用）
             "thread_id": handle.thread_id,  # 恢复用线程
+            "hitl_enabled": True,  # 生产开启 HITL（clarify 可暂停）
         }  # 状态结束
         await drive(graph, ctx, initial_state=initial, emit=ctx.emit)  # 驱动
         handle.run_id = ctx.run_id  # 句柄同步真实 run id

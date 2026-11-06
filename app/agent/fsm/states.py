@@ -30,6 +30,7 @@ class RunEvent(StrEnum):  # 驱动状态迁移的事件
     NO_EVIDENCE = "no_evidence"  # 检索完成但无证据
     GENERATION_DONE = "generation_done"  # 生成完成
     FINALIZED = "finalized"  # 收尾完成
+    INTERRUPT = "interrupt"  # 暂停等待用户（澄清/审批）
     CANCEL_REQUEST = "cancel_request"  # 请求取消
     CANCEL_ACK = "cancel_ack"  # 上游已停
     FAIL = "fail"  # 失败
