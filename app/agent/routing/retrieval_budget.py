@@ -69,8 +69,8 @@ def plan_for(  # 按问题+意图出预算
 
 def plan_for_top_k(top_k: int) -> RetrievalPlan:  # 由最终证据数反推预算（工具壳用）
     """搜索工具的顶层 top_k 直接映射到档位，保证同一把尺。"""
-    if int(top_k) >= 20:  # 超大召回（search_deep 默认 20）
+    if int(top_k) >= 8:  # 复杂（search_deep 等大召回）
         return COMPLEX  # 复杂
-    if int(top_k) >= 8:  # 中
+    if int(top_k) >= 6:  # 中（search_hybrid 默认 10 → 复杂，但 6~7 命中中档）
         return MEDIUM  # 中等
     return SIMPLE  # 简单

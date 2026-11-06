@@ -265,15 +265,41 @@ def _render_clarify(view: dict[str, Any], data: dict[str, Any]) -> None:  # 澄�
     options = [item for item in (data.get("options") or []) if isinstance(item, dict)]  # 选项
     box.clear()  # 清旧
     with box, ui.card().classes("w-full hp-card gap-2"):  # 画
-        ui.label(str(data.get("title") or "需要确认")).classes("hp-card-title")  # 标题
+        with ui.row().classes("w-full items-center gap-2"):  # 标题行
+            ui.icon("help_outline").classes("text-lg")  # 图标
+            ui.label(str(data.get("title") or "需要确认")).classes("hp-card-title")  # 标题
         if data.get("description"):  # 说明
             ui.label(str(data["description"])).classes("hp-field-help")  # 说明
-        with ui.row().classes("w-full justify-end gap-2"):  # 选项按钮
-            for item in options:  # 逐项
-                value = str(item.get("value") or "")  # 值
-                label = str(item.get("label") or value)  # 文案
-                ui.button(label, on_click=lambda v=value: _choose(view, v)).props("unelevated")  # 选它
-        ui.label("也可以直接在下方输入新的描述。").classes("hp-hint")  # 引导自由输入
+        if options:  # 有候选：整行按钮，点选即继续
+            with ui.column().classes("w-full gap-2"):  # 竖排
+                for item in options:  # 逐项
+                    value = str(item.get("value") or "")  # 值
+                    label = str(item.get("label") or value)  # 文案
+                    ui.button(label, on_click=lambda v=value: _choose(view, v)).props("outline").classes("w-full justify-start")  # 整行
+        with ui.row().classes("w-full items-center justify-between"):  # 底部
+            ui.label("也可以直接在下方输入新的描述。").classes("hp-hint")  # 引导
+            ui.button("取消", on_click=lambda: _dismiss(view)).props("flat")  # 取消本轮
+
+
+def _dismiss(view: dict[str, Any]) -> None:  # 取消澄清
+    """清卡并请求取消当前运行（暂停态走专门出口）。"""
+    box = view.get("approval_box")  # 容器
+    if box is not None and not box.is_deleted:  # 还在
+        box.clear()  # 清空
+        box.update()  # 刷新
+    handle = view.get("handle")  # 句柄
+    if handle is not None and hasattr(handle, "cancel"):  # 能取消
+        view["run_state"] = "cancelling"  # 立即反馈
+        _refresh_header(view)  # 组头
+        handle.cancel()  # 请求取消
+
+
+def _clear_clarify(view: dict[str, Any]) -> None:  # 终态清卡
+    """运行结束/失败/取消后清掉澄清卡，避免残留。"""
+    box = view.get("approval_box")  # 容器
+    if box is not None and not box.is_deleted:  # 还在
+        box.clear()  # 清空
+        box.update()  # 刷新
 
 
 def _resume_action(view: dict[str, Any], value: Any) -> None:  # 恢复当前运行

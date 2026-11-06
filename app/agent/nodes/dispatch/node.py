@@ -52,18 +52,27 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
         note = f"固定路径 {name!r} 未配置。" if name else "缺少固定路径。"  # 说明
         return {"answer": note, "note": note, "fragments": []}  # 不带内错误
     tool, args_builder = entry  # 拆包
+    question = str(state.get("question") or "")  # 问题
+    plan = None  # 检索预算（仅知识走）
+    args = args_builder(question)  # 基础参数
+    if name == "knowledge":  # 知识库：按复杂度动态设定证据数
+        from app.agent.routing.retrieval_budget import plan_for  # 预算
+
+        plan = plan_for(question)  # 动态档位
+        args["top_k"] = int(plan.final_max)  # 动态 top_k（简单少/复杂多）
     try:  # 直调工具
-        envelope = await tool.ainvoke(args_builder(str(state.get("question") or "")))  # 执行
-    except Exception as exc:  # 工具失败转带内
+        envelope = await tool.ainvoke(args)  # 执行
+    except Exception as exc:  # 工具失败 → 带内 + 升级（让 agentic 再试/降级）
         note = f"{name} 查询失败：{exc}"  # 说明
-        return {"answer": note, "note": note, "fragments": []}  # 带内
+        return {"answer": note, "note": note, "fragments": [], "escalate_reason": "search_failed", "escalated_this_session": True}  # 失败也升级
     data = getattr(envelope, "data", None) or {}  # 结果数据
     text = _format(name, data)  # 模板化
     fragments = list(data.get("evidence") or []) if name == "knowledge" else []  # 知识库带引用
     escalate_reason = ""  # 默认不升级
-    if name == "knowledge":  # 知识库走质量信号
+    if name == "knowledge":  # 知识库走质量信号（阈值随档位）
         from app.agent.routing.quality import assess  # 判定
 
-        escalate, reason = assess(list(data.get("evidence") or []), str(state.get("question") or ""))  # 评估
+        min_results = int(plan.min_results) if plan is not None else 3  # 最少命中（随预算）
+        escalate, reason = assess(list(data.get("evidence") or []), question, min_results=min_results)  # 评估
         escalate_reason = reason if escalate else ""  # 不够好 → 带原因升级
     return {"answer": text, "route": route, "fragments": fragments, "escalate_reason": escalate_reason, "escalated_this_session": bool(escalate_reason)}  # 返回（升级则记防乒乓标记）

@@ -88,11 +88,17 @@ def build_rag_graph(steps: RagSteps):  # 建 RAG 子图
         return {"candidates": candidates}  # 写回
 
     async def rerank_node(state: RagState) -> dict[str, Any]:  # 精排
-        """问题 + 候选 -> 精排。"""
+        """问题 + 候选 -> 精排（保留数随预算）。"""
+        plan = _plan_of(state)  # 预算
         with stage("筛选重点", group=StageGroup.FILTER) as info:  # 步骤事件
-            ranked = await asyncio.to_thread(  # 精排
-                steps.rerank, state["question"], state.get("candidates", [])  # 参数
-            )  # 精排结束
+            if plan is not None:  # 有预算
+                ranked = await asyncio.to_thread(  # 精排
+                    steps.rerank, state["question"], state.get("candidates", []), plan.rerank_top  # 参数
+                )  # 结束
+            else:  # 默认
+                ranked = await asyncio.to_thread(  # 精排
+                    steps.rerank, state["question"], state.get("candidates", [])  # 默认
+                )  # 结束
             info.detail = f"选出 {len(ranked)} 段"  # 明细
         return {"ranked": ranked}  # 写回
 
@@ -106,10 +112,12 @@ def build_rag_graph(steps: RagSteps):  # 建 RAG 子图
         return {"ranked": list(decision.kept), "gate": decision.as_dict()}  # 写回
 
     async def evidence_node(state: RagState) -> dict[str, Any]:  # 证据
-        """精排 -> 证据。"""
+        """精排 -> 证据（有预算走断崖切分，否则固定条数）。"""
+        plan = _plan_of(state)  # 预算
         with stage("整理引用", group=StageGroup.FILTER) as info:  # 步骤事件
+            target = plan if plan is not None else int(state.get("top_k") or 6)  # 传入预算或条数
             items = await asyncio.to_thread(  # 组装
-                steps.evidence, state.get("ranked", []), int(state.get("top_k") or 6)  # 参数
+                steps.evidence, state.get("ranked", []), target  # 参数
             )  # 组装结束
             info.detail = f"{len(items)} 段引用"  # 明细
         return {"evidence": items}  # 写回

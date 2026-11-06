@@ -211,7 +211,7 @@ def _rerank_scores(ranked: list[dict[str, Any]]) -> list[float]:  # 取重排分
     return out  # 返回
 
 
-def evidence(ranked: list[dict[str, Any]], plan_or_top_k: Any) -> list[dict[str, Any]]:  # 证据
+def evidence(ranked: list[dict[str, Any]], plan_or_top_k: Any = TOP_K) -> list[dict[str, Any]]:  # 证据
     """去重/表格限流/截断，输出前端片段。
 
     传入 int 走原固定条数；传入 ``RetrievalPlan`` 走**断崖切分**（不取固定值）。
@@ -233,8 +233,8 @@ def evidence(ranked: list[dict[str, Any]], plan_or_top_k: Any) -> list[dict[str,
 
 
 def _trace_cut(reason: str, n: int, scores: list[float]) -> None:  # 切分留痕
-    """记断崖/上限等切分原因与断点。"""
-    from app.core.trace.recorder import trace_hit  # 复用留痕
+    """记断崖/上限等切分原因与断点（debug 级，不进 trace_hit 以免签名耦合）。"""
+    from loguru import logger  # 日志
 
-    trace_hit(stage=f"evidence_cliff:{reason}", rank=n, chunk_id="", chunk_key="", doc_id="", source_name="", heading="", loc={}, score=float(scores[n - 1]) if scores and n else 0.0, score_kind="cliff", text="")  # 留痕
+    logger.debug("evidence_cliff: reason={} cut_n={} cut_score={:.4f}", reason, n, float(scores[n - 1]) if (scores and 0 < n <= len(scores)) else 0.0)  # 留痕
 

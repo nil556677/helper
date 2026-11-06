@@ -18,10 +18,10 @@ COVERAGE_BASELINE = 0.30  # 基准
 _OPEN_MARKERS = ("参见", "前提是", "详见", "见附件")  # 表述
 
 
-def assess(evidence: list[dict[str, Any]], query: str) -> tuple[bool, str]:  # 评估
-    """返回 (是否升级, 原因)；no 时为 ("", "")。"""
+def assess(evidence: list[dict[str, Any]], query: str, *, min_results: int = MIN_RESULTS) -> tuple[bool, str]:  # 评估
+    """返回 (是否升级, 原因)；no 时为 ("", "")。min_results 随检索预算档位。"""
     text = str(query or "")  # 原问题
-    if len(evidence or []) < MIN_RESULTS:  # 结果太少
+    if len(evidence or []) < int(min_results):  # 结果太少（简单/复杂阈值不同）
         return True, "insufficient_results"  # 升级
     scores = [float(item.get("score") or 0.0) for item in evidence if isinstance(item, dict)]  # 分数
     if scores and (sum(scores) / len(scores)) < COVERAGE_BASELINE:  # 平均分低

@@ -38,9 +38,13 @@ class RagRunner:  # 子图运行器
         *,
         top_k: int = 6,  # 证据数
         rerank: bool = True,  # 质量优先默认精排
+        plan: Any | None = None,  # 检索预算（缺省按 top_k 反推）
     ) -> RagResult:  # 结果
         """不挂 checkpointer；中间态不落库。检索结果按问 10 分钟内幂等。"""
-        key = (question, int(top_k), bool(rerank))  # 缓存键
+        from app.agent.routing.retrieval_budget import plan_for_top_k  # 反推
+
+        budget = plan if plan is not None else plan_for_top_k(int(top_k))  # 预算
+        key = (question, int(top_k), bool(rerank), budget.level)  # 缓存键（含档位）
         cached = _RETRIEVAL_CACHE.get(key)  # 命中检查
         if cached is not None:  # 窗口内命中
             return cached  # 直接返回（幂等）
@@ -48,6 +52,7 @@ class RagRunner:  # 子图运行器
             "question": question,  # 问题
             "top_k": int(top_k),  # 证据数
             "rerank": bool(rerank),  # 精排开关
+            "plan": budget,  # 检索预算（驱动各阶段参数与断崖切分）
         }  # 初始状态结束
         result = await self._graph.ainvoke(state)  # 跑子图
         evidence = list(result.get("evidence", []))  # 证据

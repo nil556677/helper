@@ -14,6 +14,7 @@ from app.agent.contracts import (  # 契约层直连（消除对旧门面的协�
 )
 from app.ui.screens.chat.citations import _render_citations
 from app.ui.screens.chat.live import (
+    _clear_clarify,
     _refresh_header,
     _render_approval,
     _render_basis,
@@ -213,6 +214,7 @@ def _apply_live_event(view: dict[str, Any], event: EventEnvelope) -> None:  # �
         view["ttft_ms"] = payload.ttft_ms  # 首字
         view["usage_data"] = dict(payload.usage)  # 用量
         view["run_state"] = "done"  # 状态
+        _clear_clarify(view)  # 终态清卡（去掉澄清残留）
         _refresh_header(view)  # 组头
         _render_usage(view)  # 底部用量
         return  # 结束
@@ -221,6 +223,7 @@ def _apply_live_event(view: dict[str, Any], event: EventEnvelope) -> None:  # �
         view["answer_dirty"] = True  # 强制重画（去光标）
         _render_answer(view, force=True)  # 已生成的部分要先画出来
         view["run_state"] = "cancelled"  # 状态
+        _clear_clarify(view)  # 终态清卡
         view["note"] = "已停止生成。"  # 说明
         view["note_kind"] = "plain"  # 普通
         _show_note(view)  # 渲染
@@ -232,6 +235,7 @@ def _apply_live_event(view: dict[str, Any], event: EventEnvelope) -> None:  # �
         view["answer_dirty"] = True  # 强制重画（去光标）
         _render_answer(view, force=True)  # 错误前已生成的部分不能丢
         view["run_state"] = "error"  # 状态
+        _clear_clarify(view)  # 终态清卡
         view["note"] = payload.message  # 说明
         view["note_kind"] = "error"  # 错误色
         _show_note(view)  # 渲染
