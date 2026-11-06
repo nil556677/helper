@@ -1,0 +1,18 @@
+# 路由金标集：question → expected（route id 或 null=应当未命中）
+cases:
+  - question: "现在几点"
+    expected: time
+  - question: "今天几号"
+    expected: time
+  - question: "北京天气怎么样"
+    expected: weather
+  - question: "明天气温多少"
+    expected: weather
+  - question: "合同违约金怎么算"
+    expected: knowledge
+  - question: "内部制度是怎么规定的"
+    expected: knowledge
+  - question: "随便聊两句废话"
+    expected: null
+  - question: "帮我解读一段陌生代码的深层语义"
+    expected: null
