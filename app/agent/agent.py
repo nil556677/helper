@@ -11,6 +11,7 @@ from app.agent.nodes.context.node import load_context  # 上下文
 from app.agent.nodes.dispatch.node import dispatch_node  # 固定路径直调
 from app.agent.nodes.fallback.node import llm_fallback_node  # 兜底子图
 from app.agent.nodes.finalize.node import finalize_node  # 收尾
+from app.agent.nodes.preprocess.node import preprocess_node  # L1 预处理
 from app.agent.nodes.route.node import rule_route_node  # 规则层
 from app.agent.nodes.semantic.node import semantic_node  # 语义层
 from app.agent.routing.edges import after_rule, after_semantic  # 条件边
@@ -22,6 +23,7 @@ def build_route_graph(*, checkpointer: Any = None) -> Any:  # 意图路由父图
     → dispatch_fixed | llm_fallback | clarify_or_end → finalize → END。"""
     graph = StateGraph(ChatState)  # 状态图
     graph.add_node("load_context", load_context)  # 上下文
+    graph.add_node("preprocess", preprocess_node)  # L1 预处理
     graph.add_node("rule_route", rule_route_node)  # 规则层
     graph.add_node("semantic_router", semantic_node)  # 语义层
     graph.add_node("dispatch_fixed", dispatch_node)  # 固定路径
@@ -30,7 +32,8 @@ def build_route_graph(*, checkpointer: Any = None) -> Any:  # 意图路由父图
     graph.add_node("finalize", finalize_node)  # 收尾
 
     graph.add_edge(START, "load_context")  # 入口
-    graph.add_edge("load_context", "rule_route")  # 上下文到规则
+    graph.add_edge("load_context", "preprocess")  # 上下文到预处理
+    graph.add_edge("preprocess", "rule_route")  # 预处理到规则
     graph.add_conditional_edges(  # 规则后分支
         "rule_route",  # 来源
         after_rule,  # 分支函数

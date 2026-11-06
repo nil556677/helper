@@ -21,6 +21,9 @@ class ChatState(TypedDict, total=False):  # 图状态（字段都可缺省）
 
     # 路由（唯一决策对象）
     route: dict[str, Any]  # RouteDecision 的 JSON 形态；迁移与边路由都读它
+    preprocessed: dict[str, Any]  # PreprocessResult 的 JSON 形态（L1 产物）
+    flags: dict[str, Any]  # 硬约束标志（L3 短路读）
+    pending_clarify: dict[str, Any]  # 上轮待澄清（下一轮 phase=followup）
     rule_hits: list[dict[str, Any]]  # 规则层命中明细（可观测）
     semantic_recall: dict[str, Any]  # SemanticRecall 的 JSON 形态（语义层只写）
 
