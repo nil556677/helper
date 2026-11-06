@@ -279,16 +279,20 @@ def _render_clarify(view: dict[str, Any], data: dict[str, Any]) -> None:  # 澄�
 def _choose(view: dict[str, Any], value: str) -> None:  # 选定后恢复
     """清卡并把选择交回后台（同 thread_id 恢复）。"""
     import asyncio  # 后台任务
+    import inspect  # 判断是否协程
 
     box = view.get("approval_box")  # 容器
     if box is not None and not box.is_deleted:  # 还在
         box.clear()  # 清空
         box.update()  # 刷新
-    handle = view.get("handle")  # 句柄
-    if handle is not None:  # 有
-        view["run_state"] = "running"  # 恢复后回到运行态
-        _refresh_header(view)  # 组头
-        asyncio.create_task(handle.resume(value))  # 恢复
+    handle = view.get("handle")  # 句柄（RunSession 同步发 / StreamHandle 异步）
+    if handle is None:  # 没有
+        return  # 结束
+    view["run_state"] = "running"  # 恢复后回到运行态
+    _refresh_header(view)  # 组头
+    result = handle.resume(value)  # 交回（RunSession 内部起任务，返回 None）
+    if inspect.isawaitable(result):  # 异步实现才需要 create_task
+        asyncio.create_task(result)  # 起任务
 
 
 def _decide(view: dict[str, Any], request_id: str, allow: bool) -> None:  # 决定
