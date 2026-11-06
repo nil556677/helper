@@ -51,6 +51,6 @@ async def finalize_node(state: dict[str, Any], config: RunnableConfig) -> dict[s
     with stage("收尾"):  # 步骤（不给 group：只埋 trace，收尾不属于用户步骤）
         await _persist(state, ctx)  # 落库（异步优先）
         note = str(state.get("note") or "")  # 说明（只进 state）
-        if note:  # 有说明
+        if note and ctx is not None:  # 有说明且有 run（说明事件由 driver 的 REPLACE/NOTE 兜底，这里只补一手）
             ctx.emit(note_event(note))  # 发说明
     return {}  # 不改状态

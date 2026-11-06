@@ -17,6 +17,10 @@ async def call_fallback_subgraph(  # 父图 wrapper 节点
     """三步：父图 State → 子图输入 → run_fallback → 输出转回父图。"""
     from app.agent.fallback.factory import make_planner, make_replanner, make_run_expert  # 工厂
 
+    if experts is None:  # 未显式传入 → 用自动发现的专家注册表
+        from app.agent.agents.experts import EXPERTS  # 单一注册表
+
+        experts = EXPERTS  # 注入
     planner = make_planner(model)  # 规划器
     replanner = make_replanner(model)  # 重规划器
     run_expert = await make_run_expert(model, experts)  # 专家执行器

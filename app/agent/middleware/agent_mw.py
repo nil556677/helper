@@ -17,7 +17,7 @@ class CancelAgentMiddleware(AgentMiddleware):  # 取消中间件
 
     name = "cancel"  # 名称
 
-    def abefore_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:  # 模型调用前
+    async def abefore_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:  # 模型调用前（必须 async：框架 await 此钩子）
         """有活跃 run 且已取消则抛 RunCancelled。"""
         del state, runtime  # 不读
         ctx = current_run()  # 当前 run
