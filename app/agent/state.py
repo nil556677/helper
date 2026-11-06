@@ -23,6 +23,8 @@ class ChatState(TypedDict, total=False):  # 图状态（字段都可缺省）
     route: dict[str, Any]  # RouteDecision 的 JSON 形态；迁移与边路由都读它
     preprocessed: dict[str, Any]  # PreprocessResult 的 JSON 形态（L1 产物）
     intent: dict[str, Any]  # IntentDecision 的 JSON 形态（L2 产物）
+    triage: dict[str, Any]  # TriageDecision 的 JSON 形态（L3 产物）
+    escalated_this_session: bool  # 本会话是否已升级过（防乒乓）
     flags: dict[str, Any]  # 硬约束标志（L3 短路读）
     pending_clarify: dict[str, Any]  # 上轮待澄清（下一轮 phase=followup）
     rule_hits: list[dict[str, Any]]  # 规则层命中明细（可观测）

@@ -7,7 +7,7 @@ from __future__ import annotations  # 延迟求值注解
 
 from typing import Any  # 任意值
 
-__all__ = ["after_llm", "after_rule", "after_semantic"]  # 导出
+__all__ = ["after_rule", "after_semantic", "after_triage"]  # 导出
 
 
 def after_rule(state: dict[str, Any]) -> str:  # 规则层之后
@@ -29,10 +29,14 @@ def after_semantic(state: dict[str, Any]) -> str:  # 语义层之后
     return "clarify_or_end"  # miss → 澄清/拒绝（不进 LLM）
 
 
-def after_llm(state: dict[str, Any]) -> str:  # LLM 兜底之后
-    """query/action → 兜底子图（agentic）；其余（clarify）→ 澄清节点。"""
-    intent = state.get("intent") or {}  # 意图 JSON
-    kind = intent.get("intent") if isinstance(intent, dict) else None  # 意图
-    if kind in ("query", "action"):  # 可执行
+def after_triage(state: dict[str, Any]) -> str:  # 分诊之后
+    """只读 `triage.path_type`：快速→固定路径；多源/专家→兜底子图；澄清/不支持→澄清。"""
+    triage = state.get("triage") or {}  # 分诊 JSON
+    path = triage.get("path_type") if isinstance(triage, dict) else None  # 路径
+    if path == "fast_single":  # 单源快速
+        return "dispatch_fixed"  # 固定路径
+    if path in ("fast_multi", "agentic"):  # 多源/专家
         return "llm_fallback"  # 兜底子图
-    return "clarify_or_end"  # 澄清/拒绝
+    if path in ("fast_action", "expert_action"):  # 本期不做
+        return "clarify_or_end"  # 先走澄清（显式，不静默）
+    return "clarify_or_end"  # clarify / unsupported

@@ -16,8 +16,8 @@ from app.agent.contracts.output import Candidate  # 澄清候选（复用单一�
 #: 意图大类（无闲聊）。
 IntentKind = Literal["query", "action", "clarify"]  # 意图
 
-#: 分诊路径类型。
-PathType = Literal["fast_single", "fast_multi", "agentic", "fast_action", "expert_action", "unsupported"]  # 路径
+#: 分诊路径类型（clarify = 需澄清，unsupported = 无能力）。
+PathType = Literal["fast_single", "fast_multi", "agentic", "fast_action", "expert_action", "clarify", "unsupported"]  # 路径
 
 #: 会话阶段。
 Phase = Literal["start", "middle", "followup"]  # 阶段
