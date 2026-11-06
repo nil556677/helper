@@ -25,12 +25,14 @@ def test_build_react_agent_accepts_tools_and_middleware() -> None:  # 可构造
 
 
 def test_cancel_middleware_raises_when_cancelled() -> None:  # 取消能抛
+    import asyncio  # 钩子已改 async
+
     ctx = RunContext(run_id="r", question="q")  # 上下文
     ctx.cancel_event.set()  # 已取消
     with run_context(ctx):  # 绑定
         middleware = CancelAgentMiddleware()  # 中间件
         try:  # 期望抛
-            middleware.abefore_model({}, None)  # 模型前检查
+            asyncio.run(middleware.abefore_model({}, None))  # 模型前检查（await 钩子）
         except Exception as exc:  # 捕获
             assert type(exc).__name__ == "RunCancelled"  # 正确异常
         else:  # 没抛
