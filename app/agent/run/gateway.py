@@ -31,3 +31,7 @@ class RunGateway(Protocol):  # 运行网关协议
     async def approve(self, run_id: str, request_id: str, allow: bool) -> None:  # 审批
         """对补参/审批请求给结论。"""
         ...  # 协议说明
+
+    async def resume(self, run_id: str, value: Any) -> None:  # HITL 恢复
+        """用用户选择恢复被暂停的 run（同 thread_id）。"""
+        ...  # 协议说明

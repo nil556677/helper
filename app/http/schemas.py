@@ -26,6 +26,12 @@ class ApproveRequest(BaseModel):  # 审批请求
     allow: bool  # 是否允许
 
 
+class ResumeRequest(BaseModel):  # HITL 恢复请求
+    """用户对澄清/审批的选择（原样回传给运行）。"""
+
+    value: Any = None  # 选择值（route id / 布尔 / 文本）
+
+
 def ok(data: Any = None, *, code: int = 0, message: str = "ok", request_id: str = "") -> dict:  # 成功体
     """构造统一成功响应。"""
     return {  # 返回

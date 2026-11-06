@@ -54,3 +54,8 @@ class LocalBackend:  # worker 内部后端
         handle = self._handles.get(run_id)  # 找
         if handle is not None:  # 有
             handle.approve(request_id, allow)  # 转发
+
+    async def resume(self, run_id: str, value: Any) -> None:  # HITL 恢复
+        handle = self._handles.get(run_id)  # 找
+        if handle is not None and hasattr(handle, "resume"):  # 有且支持
+            await handle.resume(value)  # 恢复（走 driver）

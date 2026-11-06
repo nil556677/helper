@@ -87,6 +87,10 @@ class RunSession:  # UI 句柄适配器
     def approve(self, request_id: str, allow: bool) -> None:  # 审批（同步可调）
         self._spawn(self.client.approve(self.run_id, request_id, allow))  # 异步发
 
+    def resume(self, value: Any) -> None:  # HITL 恢复（同步可调）
+        """把用户选择发回 worker；事件流继续，直到终态。"""
+        self._spawn(self.client.resume(self.run_id, value))  # 异步发
+
     @staticmethod
     def _spawn(coro: Any) -> None:  # 起任务
         """有 loop 就起；没有（极少）就忽略。"""

@@ -93,6 +93,14 @@ class HttpClient:  # 远端客户端
         resp.raise_for_status()  # 非 2xx 抛
         _envelope_ok(resp.json())  # 校验
 
+    async def resume(self, run_id: str, value: Any) -> None:  # HITL 恢复
+        resp = await self._client.post(  # POST
+            f"{self.base_url}{API_PREFIX}/runs/{run_id}/resume",  # 路径
+            json={"value": value},  # 体
+        )  # 请求
+        resp.raise_for_status()  # 非 2xx 抛
+        _envelope_ok(resp.json())  # 校验
+
 
 async def _parse_sse(  # 解析 SSE 行
     resp: httpx.Response,  # 响应
