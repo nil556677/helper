@@ -37,6 +37,15 @@ def test_escalate_guard() -> None:  # 防乒乓
     assert decided.path_type == "fast_single" and decided.escalate_reason == "escalate_blocked"  # 锁定
 
 
+def test_missing_entities_and_retry() -> None:  # 缺参/重试字段
+    action = decide_triage("退款", _intent("action"), {}, entities={})  # 操作缺单号
+    assert action.missing_entities == ["order_id"]  # 缺 order_id
+    with_time = decide_triage("上周怎么样", _intent(), {}, time_range=None)  # 有时间词无范围
+    assert "time_range" in with_time.missing_entities  # 缺 time_range
+    retried = decide_triage("问题", _intent(), {}, last_failed=True)  # 上轮失败
+    assert retried.retry_after_failure is True  # 标记重试
+
+
 def test_triage_node_and_edge() -> None:  # 节点 + 边
     out = triage_node(  # 跑
         {"question": "为什么这样", "preprocessed": {"query": "为什么这样"}, "intent": _intent().model_dump(), "flags": {}}  # 输入

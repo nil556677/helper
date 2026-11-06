@@ -57,5 +57,19 @@ def triage_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  #
         _intent_of(state),  # 意图
         _flags_of(state),  # 硬约束
         escalated=bool(state.get("escalated_this_session")),  # 乒乓防护
+        entities=_entities_of(pre),  # 补全后的实体
+        time_range=pre.get("time_range") if isinstance(pre, dict) else None,  # 时间范围
+        last_failed=str(state.get("last_turn_status") or "") == "failed",  # 上轮失败
     )  # 结束
     return {"triage": decision.model_dump(mode="json")}  # 写回
+
+
+def _entities_of(pre: Any) -> dict[str, Any]:  # 合并显式/继承实体
+    if not isinstance(pre, dict):  # 没有预处理
+        return {}  # 空
+    bundle = pre.get("entities")  # 实体包
+    if not isinstance(bundle, dict):  # 没有
+        return {}  # 空
+    inherited = bundle.get("inherited") if isinstance(bundle.get("inherited"), dict) else {}  # 继承
+    explicit = bundle.get("explicit") if isinstance(bundle.get("explicit"), dict) else {}  # 显式
+    return {**inherited, **explicit}  # 显式覆盖继承

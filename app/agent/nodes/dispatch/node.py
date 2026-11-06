@@ -66,4 +66,4 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
 
         escalate, reason = assess(list(data.get("evidence") or []), str(state.get("question") or ""))  # 评估
         escalate_reason = reason if escalate else ""  # 不够好 → 带原因升级
-    return {"answer": text, "route": route, "fragments": fragments, "escalate_reason": escalate_reason}  # 返回
+    return {"answer": text, "route": route, "fragments": fragments, "escalate_reason": escalate_reason, "escalated_this_session": bool(escalate_reason)}  # 返回（升级则记防乒乓标记）
