@@ -11,6 +11,7 @@ from app.agent.nodes.context.node import load_context  # 上下文
 from app.agent.nodes.dispatch.node import dispatch_node  # 固定路径直调
 from app.agent.nodes.fallback.node import llm_fallback_node  # 兜底子图
 from app.agent.nodes.finalize.node import finalize_node  # 收尾
+from app.agent.nodes.general.node import general_agent_node  # L4e 通用兜底
 from app.agent.nodes.preprocess.node import preprocess_node  # L1 预处理
 from app.agent.nodes.route.node import rule_route_node  # 规则层
 from app.agent.nodes.route_llm.node import route_llm_node  # LLM 兜底
@@ -32,6 +33,7 @@ def build_route_graph(*, checkpointer: Any = None) -> Any:  # 意图路由父图
     graph.add_node("triage", triage_node)  # L3 分诊
     graph.add_node("dispatch_fixed", dispatch_node)  # 固定路径
     graph.add_node("llm_fallback", llm_fallback_node)  # 兜底子图
+    graph.add_node("general_agent", general_agent_node)  # L4e 通用兜底
     graph.add_node("clarify_or_end", clarify_interrupt_node)  # 澄清/拒绝（可暂停）
     graph.add_node("finalize", finalize_node)  # 收尾
 
@@ -60,10 +62,12 @@ def build_route_graph(*, checkpointer: Any = None) -> Any:  # 意图路由父图
         {  # 映射
             "dispatch_fixed": "dispatch_fixed",  # fast_single
             "llm_fallback": "llm_fallback",  # fast_multi / agentic
+            "general_agent": "general_agent",  # 通用兜底
             "clarify_or_end": "clarify_or_end",  # clarify / unsupported / 动作类
             "fallback": END,  # 未知键兜底
         },  # 映射结束
     )  # 条件边结束
+    graph.add_edge("general_agent", "finalize")  # 兜底后收尾
     graph.add_conditional_edges(  # 固定路径后分支（质量不足→升级）
         "dispatch_fixed",  # 来源
         after_dispatch,  # 分支函数

@@ -43,8 +43,10 @@ def after_clarify(state: dict[str, Any]) -> str:  # 澄清之后
 
 
 def after_triage(state: dict[str, Any]) -> str:  # 分诊之后
-    """只读 `triage.path_type`：快速→固定路径；多源/专家→兜底子图；澄清/不支持→澄清。"""
+    """只读 `triage`：general_agent→兜底；fast_single→固定；多源/专家→子图；其余→澄清。"""
     triage = state.get("triage") or {}  # 分诊 JSON
+    if isinstance(triage, dict) and triage.get("agent") == "general_agent":  # 通用兜底
+        return "general_agent"  # 兜底节点
     path = triage.get("path_type") if isinstance(triage, dict) else None  # 路径
     if path == "fast_single":  # 单源快速
         return "dispatch_fixed"  # 固定路径
