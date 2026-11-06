@@ -257,6 +257,37 @@ def _render_approval(view: dict[str, Any], data: dict[str, Any]) -> None:  # 审
             ui.button("允许一次", on_click=lambda: _decide(view, request_id, True)).props("unelevated")  # 允许
 
 
+def _render_clarify(view: dict[str, Any], data: dict[str, Any]) -> None:  # 澄清卡
+    """HITL 暂停：展示候选项，用户点选后恢复运行。"""
+    box = view.get("approval_box")  # 容器
+    if box is None or not _alive(view):  # 没 UI
+        return  # 跳过
+    options = [item for item in (data.get("options") or []) if isinstance(item, dict)]  # 选项
+    box.clear()  # 清旧
+    with box, ui.card().classes("w-full hp-card gap-2"):  # 画
+        ui.label(str(data.get("title") or "需要确认")).classes("hp-card-title")  # 标题
+        if data.get("description"):  # 说明
+            ui.label(str(data["description"])).classes("hp-field-help")  # 说明
+        with ui.row().classes("w-full justify-end gap-2"):  # 选项按钮
+            for item in options:  # 逐项
+                value = str(item.get("value") or "")  # 值
+                label = str(item.get("label") or value)  # 文案
+                ui.button(label, on_click=lambda v=value: _choose(view, v)).props("unelevated")  # 选它
+
+
+def _choose(view: dict[str, Any], value: str) -> None:  # 选定后恢复
+    """清卡并把选择交回后台（同 thread_id 恢复）。"""
+    import asyncio  # 后台任务
+
+    box = view.get("approval_box")  # 容器
+    if box is not None and not box.is_deleted:  # 还在
+        box.clear()  # 清空
+        box.update()  # 刷新
+    handle = view.get("handle")  # 句柄
+    if handle is not None:  # 有
+        asyncio.create_task(handle.resume(value))  # 恢复
+
+
 def _decide(view: dict[str, Any], request_id: str, allow: bool) -> None:  # 决定
     """把决定交回后台；清掉卡。"""
     handle = view.get("handle")  # 流句柄

@@ -52,6 +52,7 @@ async def test_driver_pauses_then_resumes(tmp_path) -> None:  # 暂停 + 恢复
     paused = await drive(graph, ctx, initial_state=initial)  # 第一次
     assert paused.status == "waiting"  # 暂停
     assert ctx.interrupt_payload and ctx.interrupt_payload.get("kind") == "choose"  # 负载
+    assert any(event.type is EventType.CLARIFY for event in sink.events)  # 推了澄清事件
     resumed = await drive(graph, ctx, initial_state={}, resume_value="time")  # 恢复
     assert resumed.status == "done"  # 完成
     assert resumed.state.get("route", {}).get("route") == "time"  # 落到路径

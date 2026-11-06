@@ -209,6 +209,16 @@ async def _run_graph(  # 跑父图并驱动状态机
                 ctx.interrupt_payload = value if isinstance(value, dict) else {"value": value}  # 记录待办
                 if ctx.machine.can(RunEvent.INTERRUPT):  # 可迁移
                     ctx.transition(RunEvent.INTERRUPT, reason="hitl")  # 进入 WAITING
+                payload = ctx.interrupt_payload or {}  # 取负载
+                emit(  # 发给前端渲染（等待用户选择）
+                    events.clarify(  # 澄清待办
+                        str(payload.get("thread_id") or ctx.conversation_id),  # 线程
+                        str(payload.get("title") or "需要确认"),  # 标题
+                        str(payload.get("description") or ""),  # 说明
+                        list(payload.get("options") or []),  # 选项
+                        str(payload.get("risk") or "low"),  # 风险
+                    )  # 事件结束
+                )  # emit 结束
                 break  # 停止消费（图已暂停）
             for node, update in chunk.items():  # 逐个完成的节点
                 event = project_event(node, update)  # 节点 → 迁移事件

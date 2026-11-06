@@ -138,6 +138,24 @@ def approval(  # 审批
     )  # 事件结束
 
 
+def clarify(  # 澄清待办
+    thread_id: str,  # 恢复用线程
+    title: str = "需要确认",  # 标题
+    description: str = "",  # 说明
+    options: list[dict] | None = None,  # 选项
+    risk: str = "low",  # 风险
+) -> EventEnvelope:  # 事件
+    """HITL 暂停：前端渲染选项并回传选择。"""
+    return make(  # 事件
+        EventType.CLARIFY,  # 类型
+        thread_id=thread_id,  # 线程
+        title=title,  # 标题
+        description=description,  # 说明
+        options=list(options or []),  # 选项
+        risk=risk,  # 风险
+    )  # 事件结束
+
+
 def delta(text: str) -> EventEnvelope:  # 答案增量
     """一个 token/chunk。"""
     return make(EventType.DELTA, text=text)  # 事件

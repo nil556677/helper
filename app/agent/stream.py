@@ -66,6 +66,7 @@ class StreamHandle:  # UI 拿到的句柄
     started: bool = False  # 后台任务是否已开始执行（取消时判断能不能 cancel 任务）
     graph: Any = None  # 被驱动的图（HITL 恢复用）
     thread_id: str = ""  # 恢复用的线程 id（同 thread_id）
+    paused: bool = False  # 是否停在 HITL 暂停（等待恢复）
 
     async def request_approval(self, request_id: str, payload: dict[str, Any]) -> bool:  # 请求审批
         """发 approval 事件并等待 UI 决定；默认为拒绝。"""
@@ -95,7 +96,11 @@ class StreamHandle:  # UI 拿到的句柄
 
         if self.graph is None:  # 没有可恢复的运行
             raise RuntimeError("该运行未挂载可恢复的图")
-        return await _drive(self.graph, self.ctx, initial_state={}, emit=self.ctx.emit, resume_value=value)  # 恢复
+        result = await _drive(self.graph, self.ctx, initial_state={}, emit=self.ctx.emit, resume_value=value)  # 恢复
+        self.paused = result.status == "waiting"  # 仍暂停？
+        if not self.paused:  # 已继续到终态
+            self.events.put_nowait(SENTINEL)  # 结束标记
+        return result  # 返回
 
 
 def _graph() -> Any:  # 取父图
@@ -132,8 +137,9 @@ async def _run(handle: StreamHandle) -> None:  # 后台执行
             "thread_id": handle.thread_id,  # 恢复用线程
             "hitl_enabled": True,  # 生产开启 HITL（clarify 可暂停）
         }  # 状态结束
-        await drive(graph, ctx, initial_state=initial, emit=ctx.emit)  # 驱动
+        result = await drive(graph, ctx, initial_state=initial, emit=ctx.emit)  # 驱动
         handle.run_id = ctx.run_id  # 句柄同步真实 run id
+        handle.paused = result.status == "waiting"  # 记录暂停态（供恢复）
     finally:  # 一定结束队列
         if owned_db is not None:  # 本轮开的
             import contextlib  # 抑制
@@ -141,7 +147,8 @@ async def _run(handle: StreamHandle) -> None:  # 后台执行
             with contextlib.suppress(Exception):  # 关失败不影响收尾
                 await owned_db.close()  # 关
             ctx.db = None  # 摘掉
-        handle.events.put_nowait(SENTINEL)  # 结束标记
+        if not getattr(handle, "paused", False):  # 暂停时保留流（等待恢复）
+            handle.events.put_nowait(SENTINEL)  # 结束标记
 
 
 def start_stream(  # 启动

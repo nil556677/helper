@@ -17,6 +17,7 @@ from app.ui.screens.chat.live import (
     _refresh_header,
     _render_approval,
     _render_basis,
+    _render_clarify,
     _render_groups,
     _set_details,
     _update_group,
@@ -142,6 +143,11 @@ def _apply_live_event(view: dict[str, Any], event: EventEnvelope) -> None:  # �
         return  # 结束
     if event.type is EventType.APPROVAL:  # 审批
         _render_approval(view, payload.model_dump())  # 画审批卡
+        return  # 结束
+    if event.type is EventType.CLARIFY:  # 澄清待办（HITL 暂停）
+        view["run_state"] = "waiting"  # 等待用户
+        _refresh_header(view)  # 组头
+        _render_clarify(view, payload.model_dump())  # 画澄清卡
         return  # 结束
     if event.type is EventType.BASIS:  # 检索依据
         view["basis"] = payload.model_dump()  # 记录

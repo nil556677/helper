@@ -29,6 +29,7 @@ class EventType(StrEnum):  # 事件类型
     CANCELLED = "cancelled"  # 已停止
     ERROR = "error"  # 失败
     RETRY = "retry"  # 外部请求重试（第几次 / 什么错误 / 等多久）
+    CLARIFY = "clarify"  # 澄清待办（HITL 暂停：展示选项，等待用户选择）
 
 
 TERMINAL_TYPES: frozenset[EventType] = frozenset(  # 终态集合

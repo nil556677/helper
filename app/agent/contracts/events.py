@@ -98,6 +98,17 @@ class ApprovalPayload(_Payload):  # 等待审批
     diff: str = ""  # 改动预览
 
 
+class ClarifyPayload(_Payload):  # 澄清待办
+    """HITL 暂停：前端渲染选项，用户选择后用同 thread_id 恢复。"""
+
+    type: Literal[EventType.CLARIFY] = EventType.CLARIFY  # 判别字段
+    thread_id: str  # 恢复用线程 id
+    title: str = "需要确认"  # 标题
+    description: str = ""  # 说明
+    options: list[dict] = []  # [{value,label}]
+    risk: str = "low"  # 风险分级
+
+
 class ContextPayload(_Payload):  # 上下文装载/裁剪/压缩
     """只报数量与分块占用，不报正文。"""
 
@@ -234,6 +245,7 @@ PAYLOAD_BY_TYPE: dict[EventType, type[BaseModel]] = {  # 事件类型 -> 载荷�
     EventType.REASONING: ReasoningPayload,  # 思考流
     EventType.CONFLICT: ConflictPayload,  # 资料冲突
     EventType.APPROVAL: ApprovalPayload,  # 审批
+    EventType.CLARIFY: ClarifyPayload,  # 澄清待办
     EventType.CONTEXT: ContextPayload,  # 上下文
     EventType.PII: PiiPayload,  # 脱敏
     EventType.TOOL: ToolPayload,  # 工具
@@ -259,6 +271,7 @@ PayloadUnion = Annotated[  # 判别联合
     | ReasoningPayload  # 思考流
     | ConflictPayload  # 资料冲突
     | ApprovalPayload  # 审批
+    | ClarifyPayload  # 澄清待办
     | ContextPayload  # 上下文
     | PiiPayload  # 脱敏
     | ToolPayload  # 工具
