@@ -273,6 +273,7 @@ def _render_clarify(view: dict[str, Any], data: dict[str, Any]) -> None:  # 澄�
                 value = str(item.get("value") or "")  # 值
                 label = str(item.get("label") or value)  # 文案
                 ui.button(label, on_click=lambda v=value: _choose(view, v)).props("unelevated")  # 选它
+        ui.label("也可以直接在下方输入新的描述。").classes("hp-hint")  # 引导自由输入
 
 
 def _choose(view: dict[str, Any], value: str) -> None:  # 选定后恢复
@@ -285,6 +286,8 @@ def _choose(view: dict[str, Any], value: str) -> None:  # 选定后恢复
         box.update()  # 刷新
     handle = view.get("handle")  # 句柄
     if handle is not None:  # 有
+        view["run_state"] = "running"  # 恢复后回到运行态
+        _refresh_header(view)  # 组头
         asyncio.create_task(handle.resume(value))  # 恢复
 
 
@@ -347,6 +350,8 @@ def _refresh_header(view: dict[str, Any]) -> None:  # 更新组头
         text = "本轮失败"  # 文案
     elif view["run_state"] == "cancelled":  # 停止
         text = "已停止生成"  # 文案
+    elif view["run_state"] == "waiting":  # HITL 暂停：等用户选择
+        text = "等待你的选择…"  # 文案
     elif view["run_state"] == "cancelling":  # 正在停止（已点停止、还没收到终态）
         text = "正在停止…"  # 文案
     elif running is not None:  # 运行中
@@ -362,10 +367,11 @@ def _refresh_header(view: dict[str, Any]) -> None:  # 更新组头
     else:  # 初始
         text = _running_line(view)  # 努力求索中，用时X ···
     terminal = view["run_state"] in ("done", "error", "cancelled")  # 是否已到终态
+    waiting = view["run_state"] == "waiting"  # 是否等用户选择
     view["headline"].style(  # 运行中"文案+时间"用强调色，终态恢复默认
-        f"color: {'var(--hp-accent)' if not terminal else 'inherit'}"
+        f"color: {'var(--hp-accent)' if (not terminal and not waiting) else 'inherit'}"
     )  # 样式结束
-    if terminal and view.get("ticker") is not None:  # 到终态：停表
+    if (terminal or waiting) and view.get("ticker") is not None:  # 到终态/暂停：停表
         with contextlib.suppress(Exception):  # 停表失败不阻断
             view["ticker"].cancel()  # 停止
         view["ticker"] = None  # 置空
@@ -373,7 +379,7 @@ def _refresh_header(view: dict[str, Any]) -> None:  # 更新组头
     view["meta"].text = _meta_text(view)  # 右侧
     view["headline"].update()  # 刷新
     view["meta"].update()  # 刷新
-    alive = view["run_state"] not in ("done", "error", "cancelled")  # 只要没到终态就一直转
+    alive = view["run_state"] not in ("done", "error", "cancelled", "waiting")  # 暂停时不再转圈
     if view["busy"] is not None:  # 有图标
         view["busy"].visible = alive  # 跑着才转
         view["busy"].update()  # 刷新

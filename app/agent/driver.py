@@ -261,6 +261,10 @@ async def drive(  # 驱动图
         emit(events.ack(ctx.run_id))  # 先回执
         if ctx.cancel_event.is_set():  # 启动前就取消
             session.set_status("cancelled")  # trace
+            if ctx.machine.can(RunEvent.CANCEL_REQUEST):  # 暂停/活跃态可请求取消
+                ctx.transition(RunEvent.CANCEL_REQUEST, reason="user")  # 取消中
+            if ctx.machine.can(RunEvent.CANCEL_ACK):  # 再确认完成
+                ctx.transition(RunEvent.CANCEL_ACK, reason="user")  # 已取消
             emit(events.cancelled("user"))  # 事件
             return DriverResult({}, "cancelled")  # 短路
         try:  # 图执行

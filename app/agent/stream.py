@@ -13,6 +13,7 @@ from app.agent import (
 )
 from app.agent.context import RunContext  # 上下文
 from app.agent.driver import drive  # 驱动器（图驱动 + 终态收敛）
+from app.agent.fsm.states import RunEvent  # 状态事件（暂停态取消）
 from app.services import attachments  # 附件公开字段
 
 SENTINEL = object()  # 队列结束标记
@@ -85,10 +86,23 @@ class StreamHandle:  # UI 拿到的句柄
             future.set_result(allow)  # 唤醒
 
     def cancel(self) -> None:  # 停止
-        """信号式取消：置位 + 任务已开始则直接 cancel；幂等。"""
+        """信号式取消：运行中取消任务；暂停态直接收敛为已取消（专门出口）。"""
         self.ctx.request_cancel()  # 置位（启动前取消靠它）
         if self.started and self.task is not None and not self.task.done():  # 已在跑
             self.task.cancel()  # 任务级取消（阻塞的 await 立即中断）
+        elif self.paused:  # 暂停在 HITL，任务已结束
+            self._settle_cancel()  # 专门出口：直接收敛
+
+    def _settle_cancel(self) -> None:  # 暂停态取消收敛
+        """WAITING → CANCELLING → CANCELLED，发 cancelled 事件并关流。"""
+        ctx = self.ctx  # 上下文
+        if ctx.machine.can(RunEvent.CANCEL_REQUEST):  # 可进入取消中
+            ctx.transition(RunEvent.CANCEL_REQUEST, reason="user")  # 请求取消
+        if ctx.machine.can(RunEvent.CANCEL_ACK):  # 可完成取消
+            ctx.transition(RunEvent.CANCEL_ACK, reason="paused")  # 取消完成
+        ctx.emit(events.cancelled("user"))  # 事件
+        self.paused = False  # 不再暂停
+        self.events.put_nowait(SENTINEL)  # 关流
 
     async def resume(self, value: Any) -> Any:  # HITL 恢复
         """在被暂停的图上用同 thread_id 继续（走 driver，保留 FSM/事件）。"""
