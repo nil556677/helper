@@ -1,20 +1,68 @@
 # 路由金标集：question → expected（route id 或 null）
-# 说明：null = "不得直接走固定路径"，应落到兜底/澄清（如知识类走 agentic 子图、闲聊走澄清）。
+# null = "不得直接走固定路径"（应落到兜底/澄清；如知识类走 agentic 子图、闲聊走澄清）。
+# 说明：目前 direct 只由规则层产出，故"期望 direct"的样本都用规则可命中的句式；
+# 语义层当前设计对知识/闲聊一律 ambiguous（进 agentic/澄清），故 expected=null。
 cases:
+  # —— 时间（规则可命中 → 应 direct time）——
   - question: "现在几点"
+    expected: time
+  - question: "当前时间是多少"
+    expected: time
+  - question: "北京时间"
     expected: time
   - question: "今天几号"
     expected: time
-  - question: "北京天气怎么样"
+  - question: "今天日期"
+    expected: time
+
+  # —— 天气（规则可命中 → 应 direct weather）——
+  - question: "天气怎么样"
     expected: weather
-  - question: "明天气温多少"
+  - question: "今天天气"
     expected: weather
-  # 知识类问题按架构应走 agentic（knowledge_agent），不应被 direct 命中固定路径
+  - question: "明天天气如何"
+    expected: weather
+  - question: "气温多少"
+    expected: weather
+  - question: "会下雨吗"
+    expected: weather
+
+  # —— 知识问答（应走 agentic 子图，不得 direct）——
   - question: "合同违约金怎么算"
     expected: null
   - question: "内部制度是怎么规定的"
     expected: null
+  - question: "公司政策里怎么写的"
+    expected: null
+  - question: "合同条款是怎么解释的"
+    expected: null
+  - question: "报销流程怎么走"
+    expected: null
+  - question: "考勤制度怎么规定"
+    expected: null
+  - question: "员工手册里怎么说的"
+    expected: null
+  - question: "文档第几条说了这个"
+    expected: null
+
+  # —— 无关/闲聊/复杂（应澄清或 agentic，不得 direct）——
   - question: "随便聊两句废话"
     expected: null
   - question: "帮我解读一段陌生代码的深层语义"
+    expected: null
+  - question: "今天心情不错"
+    expected: null
+  - question: "讲个笑话"
+    expected: null
+  - question: "帮我写一首诗"
+    expected: null
+  - question: "你叫什么名字"
+    expected: null
+  - question: "那个东西怎么样了"
+    expected: null
+  - question: "它多少钱"
+    expected: null
+  - question: "帮我安排一个复杂任务"
+    expected: null
+  - question: "完全无关的话题"
     expected: null
