@@ -169,23 +169,26 @@ def _detail(run_id: str) -> None:  # 详情弹窗
                     f"查询：{run.normalized_query or run.question}"  # 归一
                     f" → {run.rewritten_query or '（未改写）'}"  # 改写
                 ).classes("hp-field-help")  # 样式
-            metadata = _meta(run)  # 元数据
-            decisions = metadata.get("decisions") or {}  # 决策链
-            steps = metadata.get("steps") or []  # 逐步
-            if decisions or steps:  # 有排障数据
-                with ui.expansion("决策链 / 步骤", icon="account_tree", value=True).classes("w-full hp-sources"):
-                    for key, label in _STAGE_LABEL.items():  # 逐阶段
-                        value = decisions.get(key)  # 该阶段决策
-                        if not value:  # 没有
-                            continue  # 跳过
-                        with ui.expansion(f"{label}", classes="w-full hp-step"):  # 折叠
-                            ui.code(json.dumps(value, ensure_ascii=False, indent=2)).classes("w-full")  # 原始 JSON
-                    if steps:  # 逐步
-                        with ui.expansion(f"逐步（节点做了什么，{len(steps)}）", classes="w-full hp-step"):
-                            for s in steps:  # 逐条
-                                with ui.row().classes("w-full items-start gap-2 no-wrap"):  # 一行
-                                    ui.label(str(s.get("node") or "")).classes("hp-field-name").style("width: 210px;")  # 节点
-                                    ui.code(str(s.get("update") or "")[:500]).classes("w-full q-pa-sm")  # 返回 update
+            try:  # 决策链/步骤：metadata 有坏数据也绝不能让整个详情空白
+                metadata = _meta(run)  # 元数据
+                decisions = metadata.get("decisions") or {}  # 决策链
+                steps = metadata.get("steps") or []  # 逐步
+                if decisions or steps:  # 有排障数据
+                    with ui.expansion("决策链 / 步骤", icon="account_tree", value=True).classes("w-full hp-sources"):
+                        for key, label in _STAGE_LABEL.items():  # 逐阶段
+                            value = decisions.get(key)  # 该阶段决策
+                            if not value:  # 没有
+                                continue  # 跳过
+                            with ui.expansion(f"{label}", classes="w-full hp-step"):  # 折叠
+                                ui.code(json.dumps(value, ensure_ascii=False, indent=2)).classes("w-full")  # 原始 JSON
+                        if steps:  # 逐步
+                            with ui.expansion(f"逐步（节点做了什么，{len(steps)}）", classes="w-full hp-step"):
+                                for s in steps:  # 逐条
+                                    with ui.row().classes("w-full items-start gap-2 no-wrap"):  # 一行
+                                        ui.label(str(s.get("node") or "")).classes("hp-field-name").style("width: 210px;")  # 节点
+                                        ui.code(str(s.get("update") or "")[:500]).classes("w-full q-pa-sm")  # 返回 update
+            except Exception as exc:  # 兜底
+                ui.label(f"决策链渲染跳过：{exc}").classes("hp-field-help")  # 提示
             if run.error_detail:  # 有错误
                 with ui.row().classes("w-full items-start gap-2 no-wrap hp-note-error"):  # 错误行
                     ui.icon("error_outline").classes("text-base")  # 图标
