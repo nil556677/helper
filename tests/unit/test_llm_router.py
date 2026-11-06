@@ -21,8 +21,8 @@ class _Model:  # 假模型
 
 async def test_classify_degrades_without_model() -> None:  # 无模型
     decision = await classify("q", [], None)  # 分类
-    assert decision.intent == "clarify"  # 降级
-    assert degrade("x").intent == "clarify"  # 直接降级
+    assert decision.intent == "query"  # 派检索，不弹窗
+    assert degrade("x").intent == "query"  # 直接降级进 agentic
 
 
 async def test_classify_with_model() -> None:  # 有模型
@@ -37,7 +37,7 @@ async def test_classify_swallows_model_error() -> None:  # 模型异常降级
             raise RuntimeError("boom")  # 失败
 
     decision = await classify("q", [], _Bad())  # 分类
-    assert decision.intent == "clarify"  # 降级
+    assert decision.intent == "query"  # 派检索，不弹窗
 
 
 async def test_route_llm_node_writes_intent() -> None:  # 节点写 intent
@@ -48,4 +48,4 @@ async def test_route_llm_node_writes_intent() -> None:  # 节点写 intent
     finally:  # 复位
         node_mod.set_model_provider(None)  # 清
     out2 = await node_mod.route_llm_node({"question": "q"})  # 无模型
-    assert out2["intent"]["intent"] == "clarify"  # 降级
+    assert out2["intent"]["intent"] == "query"  # 派检索

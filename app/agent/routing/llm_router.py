@@ -21,9 +21,13 @@ PROMPT = (  # 提示
 )  # 提示结束
 
 
-def degrade(reason: str = "no_model") -> IntentDecision:  # 降级决策
-    """模型不可用/失败时的保守出口：让下游走澄清。"""
-    return IntentDecision(intent="clarify", confidence=0.0, source="llm", reason=reason)  # 澄清
+def degrade(reason: str = "llm_error") -> IntentDecision:  # 降级决策
+    """模型不可用/失败时的**保守出口：默认按 query 派搜索 agent**（L3 职责 = 去检索，不是弹窗）。
+
+    三层语义：规则可漏、语义可 ambiguous；到了 L3 即便没有 LLM 分类，
+    也宁可"派 knowledge/general agent 去查一遍"，也不把简单问题推回给用户选澄清。
+    """
+    return IntentDecision(intent="query", confidence=0.0, source="llm", reason=reason)  # 进 agentic 搜索
 
 
 async def classify(  # 轻量分类
@@ -31,9 +35,9 @@ async def classify(  # 轻量分类
     candidates: Sequence[dict[str, Any]],  # 语义候选（帮助模型分域）
     model: Any | None = None,  # chat_model（gateway 产出）
 ) -> IntentDecision:  # 意图决策
-    """有模型才分类；无模型/异常一律降级 clarify。"""
+    """有模型才分类；无模型/异常降级为 query（派搜索 agent），不降级成澄清。"""
     if model is None:  # 无模型
-        return degrade("no_model")  # 降级
+        return degrade("no_model")  # 派检索，不弹窗
     try:  # 调模型
         runner = model.with_structured_output(IntentDecision)  # 结构化
         hints = "、".join(str(item.get("route") or "") for item in candidates if isinstance(item, dict))  # 候选

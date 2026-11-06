@@ -27,7 +27,7 @@ def test_route_graph_direct_e2e(monkeypatch) -> None:  # direct 端到端
     assert str(result.get("answer") or "").startswith("现在是 ")  # 模板回答
 
 
-def test_route_graph_ambiguous_degrades_to_clarify(monkeypatch) -> None:  # ambiguous → LLM 兜底 → 无模型降级澄清
+def test_route_graph_ambiguous_goes_to_search_agent(monkeypatch) -> None:  # ambiguous → L3 派搜索 agent，不弹窗
     async def noop_finalize(state, config=None):  # 打桩收尾
         del config  # 不用
         return {}  # 不落库
@@ -43,5 +43,5 @@ def test_route_graph_ambiguous_degrades_to_clarify(monkeypatch) -> None:  # ambi
         graph,
         {"question": "帮我安排一个复杂任务", "conversation_id": "c", "turn_id": "", "turns": [], "attachments": []},  # 输入
     )  # 结束
-    assert result.get("clarify_options")  # 无模型 → LLM 兜底降级 clarify
-    assert result.get("answer")  # 有澄清话术
+    assert result.get("fallback_used")  # 走了 l3 搜索 agent（llm_fallback），不给秋清弹窗
+    assert not result.get("clarify_options")  # 不再让用户选
