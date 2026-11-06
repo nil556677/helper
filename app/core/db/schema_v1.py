@@ -455,6 +455,37 @@ def _ensure_turn_commits_table(conn: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_audit_tables(conn: sqlite3.Connection) -> None:
+    """幂等补审计/成本表（append-only 决策链 + LLM 成本台账）。"""
+    conn.executescript(  # 幂等建表
+        # 注释行结尾必须有 \n：否则 -- 注释会吞掉后面的 CREATE TABLE。
+        "-- 表 run_audit：运行决策链（append-only，不可改/删）。\n"
+        "CREATE TABLE IF NOT EXISTS run_audit ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"  # 主键
+        " run_id TEXT NOT NULL,"  # 运行 id
+        " seq INTEGER NOT NULL,"  # run 内序号
+        " node TEXT NOT NULL,"  # 节点
+        " action TEXT NOT NULL,"  # 动作
+        " decision TEXT NOT NULL DEFAULT '',"  # 决策摘要
+        " payload TEXT NOT NULL DEFAULT '{}',"  # 载荷（JSON）
+        " audit_hash TEXT NOT NULL DEFAULT '',"  # 动作哈希（防篡改核对）
+        " created_at REAL NOT NULL"  # 时间戳
+        ");\n"
+        "CREATE INDEX IF NOT EXISTS idx_run_audit_run ON run_audit(run_id, seq);\n"
+        "-- 表 cost_ledger：LLM 成本台账（每次调用一行）。\n"
+        "CREATE TABLE IF NOT EXISTS cost_ledger ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"  # 主键
+        " run_id TEXT NOT NULL,"  # 运行 id
+        " model TEXT NOT NULL DEFAULT '',"  # 模型
+        " tokens_in INTEGER NOT NULL DEFAULT 0,"  # 输入 token
+        " tokens_out INTEGER NOT NULL DEFAULT 0,"  # 输出 token
+        " cost REAL NOT NULL DEFAULT 0,"  # 估算成本
+        " created_at REAL NOT NULL"  # 时间戳
+        ");\n"
+        "CREATE INDEX IF NOT EXISTS idx_cost_ledger_run ON cost_ledger(run_id);\n"
+    )
+
+
 def initialize(conn: sqlite3.Connection) -> int:
     """把一条连接初始化成 v1（幂等）。
 
@@ -469,6 +500,7 @@ def initialize(conn: sqlite3.Connection) -> int:
         _ensure_summaries_table(conn)
         _ensure_messages_columns(conn)
         _ensure_turn_commits_table(conn)
+        _ensure_audit_tables(conn)
         return current
     if current != 0:
         raise ValueError(
@@ -476,6 +508,7 @@ def initialize(conn: sqlite3.Connection) -> int:
             "请先运行 scripts/reset_workspace.py 重置。"
         )
     conn.executescript(DDL_SQL)
+    _ensure_audit_tables(conn)
     conn.execute(
         "INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('schema_version', ?)",
         (str(SCHEMA_VERSION),),
