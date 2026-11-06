@@ -32,6 +32,6 @@ def test_after_rule_reads_route_only() -> None:  # 规则后分支（单一事�
 
 def test_after_semantic_three_states() -> None:  # 语义后三态分支
     assert after_semantic({"semantic_recall": {"decision": "direct"}}) == "dispatch_fixed"  # direct
-    assert after_semantic({"semantic_recall": {"decision": "ambiguous"}}) == "llm_fallback"  # 兜底
+    assert after_semantic({"semantic_recall": {"decision": "ambiguous"}}) == "route_llm"  # LLM 兜底
     assert after_semantic({"semantic_recall": {"decision": "miss"}}) == "clarify_or_end"  # 澄清
     assert after_semantic({}) == "clarify_or_end"  # 缺省 miss

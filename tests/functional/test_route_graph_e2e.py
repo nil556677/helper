@@ -27,7 +27,7 @@ def test_route_graph_direct_e2e(monkeypatch) -> None:  # direct 端到端
     assert str(result.get("answer") or "").startswith("现在是 ")  # 模板回答
 
 
-def test_route_graph_ambiguous_ends_at_fallback(monkeypatch) -> None:  # ambiguous → 兜底子图
+def test_route_graph_ambiguous_degrades_to_clarify(monkeypatch) -> None:  # ambiguous → LLM 兜底 → 无模型降级澄清
     async def noop_finalize(state, config=None):  # 打桩收尾
         del config  # 不用
         return {}  # 不落库
@@ -43,5 +43,5 @@ def test_route_graph_ambiguous_ends_at_fallback(monkeypatch) -> None:  # ambiguo
         graph,
         {"question": "帮我安排一个复杂任务", "conversation_id": "c", "turn_id": "", "turns": [], "attachments": []},  # 输入
     )  # 结束
-    assert result.get("fallback_used") is True  # 进了兜底子图
-    assert result.get("answer")  # 有回答（兜底降级话术）
+    assert result.get("clarify_options")  # 无模型 → LLM 兜底降级 clarify
+    assert result.get("answer")  # 有澄清话术

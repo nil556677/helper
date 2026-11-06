@@ -13,8 +13,9 @@ from app.agent.nodes.fallback.node import llm_fallback_node  # 兜底子图
 from app.agent.nodes.finalize.node import finalize_node  # 收尾
 from app.agent.nodes.preprocess.node import preprocess_node  # L1 预处理
 from app.agent.nodes.route.node import rule_route_node  # 规则层
+from app.agent.nodes.route_llm.node import route_llm_node  # LLM 兜底
 from app.agent.nodes.semantic.node import semantic_node  # 语义层
-from app.agent.routing.edges import after_rule, after_semantic  # 条件边
+from app.agent.routing.edges import after_llm, after_rule, after_semantic  # 条件边
 from app.agent.state import ChatState  # 状态
 
 
@@ -26,6 +27,7 @@ def build_route_graph(*, checkpointer: Any = None) -> Any:  # 意图路由父图
     graph.add_node("preprocess", preprocess_node)  # L1 预处理
     graph.add_node("rule_route", rule_route_node)  # 规则层
     graph.add_node("semantic_router", semantic_node)  # 语义层
+    graph.add_node("route_llm", route_llm_node)  # LLM 兜底分类
     graph.add_node("dispatch_fixed", dispatch_node)  # 固定路径
     graph.add_node("llm_fallback", llm_fallback_node)  # 兜底子图
     graph.add_node("clarify_or_end", clarify_node)  # 澄清/拒绝
@@ -44,8 +46,17 @@ def build_route_graph(*, checkpointer: Any = None) -> Any:  # 意图路由父图
         after_semantic,  # 分支函数
         {  # 映射
             "dispatch_fixed": "dispatch_fixed",  # direct
-            "llm_fallback": "llm_fallback",  # ambiguous
+            "route_llm": "route_llm",  # ambiguous → LLM 兜底
             "clarify_or_end": "clarify_or_end",  # miss
+            "fallback": END,  # 未知键兜底
+        },  # 映射结束
+    )  # 条件边结束
+    graph.add_conditional_edges(  # LLM 兜底后分支
+        "route_llm",  # 来源
+        after_llm,  # 分支函数
+        {  # 映射
+            "llm_fallback": "llm_fallback",  # query/action → 兜底子图
+            "clarify_or_end": "clarify_or_end",  # clarify
             "fallback": END,  # 未知键兜底
         },  # 映射结束
     )  # 条件边结束
