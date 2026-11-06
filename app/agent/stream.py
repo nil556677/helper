@@ -64,6 +64,8 @@ class StreamHandle:  # UI 拿到的句柄
     task: asyncio.Task | None = None  # 后台任务
     approvals: dict[str, asyncio.Future] = field(default_factory=dict)  # 等待审批
     started: bool = False  # 后台任务是否已开始执行（取消时判断能不能 cancel 任务）
+    graph: Any = None  # 被驱动的图（HITL 恢复用）
+    thread_id: str = ""  # 恢复用的线程 id（同 thread_id）
 
     async def request_approval(self, request_id: str, payload: dict[str, Any]) -> bool:  # 请求审批
         """发 approval 事件并等待 UI 决定；默认为拒绝。"""
@@ -86,6 +88,14 @@ class StreamHandle:  # UI 拿到的句柄
         self.ctx.request_cancel()  # 置位（启动前取消靠它）
         if self.started and self.task is not None and not self.task.done():  # 已在跑
             self.task.cancel()  # 任务级取消（阻塞的 await 立即中断）
+
+    async def resume(self, value: Any) -> dict[str, Any]:  # HITL 恢复
+        """在被暂停的图上用同 thread_id 继续；返回恢复后的状态。"""
+        from app.agent.resume import resume as _resume  # 延迟导入
+
+        if self.graph is None or not self.thread_id:  # 没有可恢复的运行
+            raise RuntimeError("该运行未挂载可恢复的图/线程")
+        return await _resume(self.graph, self.thread_id, value)  # 恢复
 
 
 def _graph() -> Any:  # 取父图
@@ -110,13 +120,18 @@ async def _run(handle: StreamHandle) -> None:  # 后台执行
         await owned_db.connect()  # 连接（绑定当前 loop）
         ctx.db = owned_db  # 挂到上下文供节点用
     try:  # 委托驱动器
+        graph = _graph()  # 取图（恢复入口也要用）
+        handle.graph = graph  # 挂到句柄（HITL 恢复）
+        handle.thread_id = str(ctx.conversation_id or ctx.run_id)  # 确定性线程 id
         initial = {  # 初始状态
             "question": ctx.question,  # 问题
             "conversation_id": ctx.conversation_id,  # 会话
             "turns": [],  # 历史由 load_context 填
             "attachments": [attachments.public(item) for item in ctx.attachments],  # 附件公开元数据（正文不入 state）
+            "run_id": ctx.run_id,  # 运行 id（HITL 负载用）
+            "thread_id": handle.thread_id,  # 恢复用线程
         }  # 状态结束
-        await drive(_graph(), ctx, initial_state=initial, emit=ctx.emit)  # 驱动
+        await drive(graph, ctx, initial_state=initial, emit=ctx.emit)  # 驱动
         handle.run_id = ctx.run_id  # 句柄同步真实 run id
     finally:  # 一定结束队列
         if owned_db is not None:  # 本轮开的
