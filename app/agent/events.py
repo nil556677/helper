@@ -39,7 +39,8 @@ def stage(  # 节点/步骤事件
     status: str,  # running/done/skipped/failed
     *,
     title: str = "",  # 显示标题
-    detail: str = "",  # 明细
+    detail: str = "",  # 明细（一行摘要）
+    body: str = "",  # 点击展开后的完整内容
     duration_ms: int | None = None,  # 耗时
     group: str = "",  # 用户级分组（空 = 只埋 trace 不展示）
 ) -> EventEnvelope:  # 事件
@@ -50,6 +51,7 @@ def stage(  # 节点/步骤事件
         status=status,  # 状态
         title=title,  # 标题
         detail=detail,  # 明细
+        body=body,  # 展开正文
         duration_ms=duration_ms,  # 耗时
         group=group,  # 分组
     )  # 事件结束

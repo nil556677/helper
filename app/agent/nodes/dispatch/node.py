@@ -4,6 +4,7 @@ from __future__ import annotations  # 延迟求值注解
 
 from typing import Any, Callable  # 类型
 
+from app.agent.contracts import StageGroup  # 分组（时间线步骤归类）
 from app.agent.context import current_run  # 当前 run（发事件）
 from app.agent.events import basis as basis_event  # 检索依据事件
 from app.agent.events import tool as tool_event  # 工具事件
@@ -159,10 +160,21 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
         tool_event_sent = True  # 标记
     try:  # 直调工具
         if name == "knowledge":  # 检索类走"查找资料"过程步（含计步）
-            with stage("查找资料"):  # 不归组：只进 trace 与工具区
+            with stage("查找资料", name="search", group=StageGroup.SEARCH) as info:  # 过程可点开看详情
                 envelope = await tool.ainvoke(args)  # 执行
+                _data = getattr(envelope, "data", None) or {}  # 结果
+                _frags = list(_data.get("evidence") or [])  # 命中片段
+                info.detail = f"找到 {len(_frags)} 段资料"  # 一行摘要
+                _gate = _data.get("gate") or {}  # 门限判定
+                _lines: list[str] = []  # 正文行
+                _lines.append(f"门限判定：{_gate.get('decision') or '未判定'}")  # gate
+                for _i, _f in enumerate(_frags[:5], 1):  # 前 5 条
+                    _snip = str(_f.get("text") or "").strip().replace("\n", " ")[:120]  # 摘要
+                    _lines.append(f"{_i}. {_f.get('source_name', '资料')}：{_snip}")  # 一条
+                info.body = "\n".join(_lines)  # 点开看到资料+判断
         else:  # 时间/天气直调
-            envelope = await tool.ainvoke(args)  # 执行
+            with stage("调用工具", name="run", group=StageGroup.TOOL):  # 工具过程步（name 区分同函数两支）
+                envelope = await tool.ainvoke(args)  # 执行
     except Exception as exc:  # 工具失败 → 带内 + 升级（让 agentic 再试/降级）
         note = f"{name} 查询失败：{exc}"  # 说明
         if run is not None and tool_event_sent:  # 发失败

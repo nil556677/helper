@@ -67,6 +67,7 @@ def _step_dict(step: Any) -> dict[str, Any]:  # Step(dataclass) 或 dict → 统
         "group": str(getattr(step, "group", "")),  # 分组
         "title": str(getattr(step, "title", "")),  # 标题
         "detail": str(getattr(step, "detail", "")),  # 明细
+        "body": str(getattr(step, "body", "")),  # 展开正文（查到的资料/判断/结论）
         "status": str(getattr(step, "status", "done")),  # 状态
         "ms": int(getattr(step, "ms", 0) or 0),  # 耗时
         "children": [_step_dict(c) for c in getattr(step, "children", [])],  # 子项递归
@@ -85,38 +86,47 @@ def _render_steps_flow(steps: list[Any], *, live: bool = False) -> None:  # 时�
         group = str(step.get("group") or "")  # 分组
         title = str(step.get("title") or "")  # 标题
         detail = str(step.get("detail") or "")  # 明细
+        body = str(step.get("body") or "")  # 展开正文（查到的资料/判断/结论）
         status = str(step.get("status") or "done")  # 状态
         ms = int(step.get("ms") or 0)  # 耗时
         icon = _STEP_ICONS.get(group, "chevron_right")  # 图标
         marks = {"running": "…", "done": "✓", "failed": "✗", "skipped": "·"}  # 状态符号
-        with ui.row().classes("w-full items-stretch gap-2 no-wrap hp-timeline-row"):  # 时间线行
-            with ui.column().classes("hp-timeline-rail").style("width:20px;"):  # 圆点+连线轨
-                with contextlib.suppress(Exception):  # 首行无上连线
-                    if idx > 0:  # 非首行
-                        ui.element("div").classes("hp-timeline-connector").style("flex:1;")  # 上连线
-                ui.label(marks.get(status, "·")).classes("hp-timeline-dot").style(  # 状态点
-                    "color:%s;" % ("var(--hp-accent)" if status == "running" else ("var(--hp-danger)" if status == "failed" else "var(--hp-label-tertiary)"))
-                )  # 点结束
-                with contextlib.suppress(Exception):  # 末行无下连线
-                    if idx < len(entries) - 1:  # 非末行
-                        ui.element("div").classes("hp-timeline-connector").style("flex:1;")  # 下连线
-            with ui.column().classes("w-full gap-0 pt-1"):  # 该步内容
-                with ui.row().classes("w-full items-center gap-2 no-wrap"):  # 该步头
-                    ui.icon(icon).classes("text-sm hp-step-icon")  # 图标
-                    ui.label(title).classes("hp-step-title")  # 标题
-                    if detail:  # 有明细
-                        ui.label(detail).classes("hp-field-help").style("overflow:hidden;text-overflow:ellipsis")  # 一行
-                    children = step.get("children") or []  # 子项
-                    if children:  # 有子项
-                        ui.label(f"{len(children)} 项").classes("hp-hint")  # 数量
-                    ui.space()  # 撑开
-                    if step.get("status") == "failed":  # 失败
-                        ui.icon("error").classes("text-sm hp-step-error")  # 错误图标
-                    if ms:  # 有耗时
-                        ui.label(f"{ms}ms").classes("hp-field-help")  # 耗时
-                if children:  # 子步骤缩排
-                    with ui.column().classes("w-full gap-0 pl-6"):  # 缩进区
-                        _render_steps_flow(children, live=False)  # 递归子项（不再滚）
+        children = step.get("children") or []  # 子项
+        exp = ui.expansion().classes("w-full hp-timeline-step")  # 可点开的一步（原生折叠+箭头）
+        exp.props("dense")  # 紧凑
+        with exp.add_slot("header"):  # 头行 = 时间线行
+            with ui.row().classes("w-full items-stretch gap-2 no-wrap hp-timeline-row"):  # 行
+                with ui.column().classes("hp-timeline-rail").style("width:20px;"):  # 圆点+连线轨
+                    with contextlib.suppress(Exception):  # 首行无上连线
+                        if idx > 0:  # 非首行
+                            ui.element("div").classes("hp-timeline-connector").style("height:16px;")  # 上连线
+                    ui.label(marks.get(status, "·")).classes("hp-timeline-dot").style(  # 状态点
+                        "color:%s;" % ("var(--hp-accent)" if status == "running" else ("var(--hp-danger)" if status == "failed" else "var(--hp-label-tertiary)"))
+                    )  # 点结束
+                    with contextlib.suppress(Exception):  # 末行无下连线
+                        if idx < len(entries) - 1:  # 非末行
+                            ui.element("div").classes("hp-timeline-connector").style("height:16px;")  # 下连线
+                with ui.column().classes("w-full gap-0 pt-1"):  # 该步内容
+                    with ui.row().classes("w-full items-center gap-2 no-wrap"):  # 该步头
+                        ui.icon(icon).classes("text-sm hp-step-icon")  # 图标
+                        ui.label(title).classes("hp-step-title")  # 标题
+                        if detail:  # 有明细
+                            ui.label(detail).classes("hp-field-help").style("overflow:hidden;text-overflow:ellipsis")  # 一行
+                        if children:  # 有子项
+                            ui.label(f"{len(children)} 项").classes("hp-hint")  # 数量
+                        ui.space()  # 撑开
+                        if status == "failed":  # 失败
+                            ui.icon("error").classes("text-sm hp-step-error")  # 错误图标
+                        if ms:  # 有耗时
+                            ui.label(f"{ms}ms").classes("hp-field-help")  # 耗时
+        with exp:  # 展开正文
+            if body:  # 有正文（查到的资料/判断/结论））
+                ui.markdown(body).classes("hp-md-compact hp-timeline-body")  # 完整内容
+            elif not children and not detail:  # 啥都没有
+                ui.label("（无明细）").classes("hp-hint")  # 占位
+            if children:  # 子项缩排
+                with ui.column().classes("w-full gap-0 pl-6"):  # 缩进区
+                    _render_steps_flow(children, live=False)  # 递归子项（不再滚）
 
 
 def _preview_text(text: str, limit: int = 400) -> str:  # 长答案的预览

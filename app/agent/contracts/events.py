@@ -46,7 +46,8 @@ class StagePayload(_Payload):  # 节点/步骤事件
     stage_id: str  # 步骤 id（自动派生）
     status: str  # running/done/skipped/failed
     title: str = ""  # 显示标题
-    detail: str = ""  # 明细
+    detail: str = ""  # 明细（一行摘要）
+    body: str = ""  # 点击展开后的完整内容（查到的资料/门限判断/校验结论等）
     duration_ms: int | None = None  # 耗时
     group: str = ""  # 用户级分组（prepare/search/filter/tool/generate；空 = 只埋 trace 不展示）
     agent_id: str = ""  # 归属哪个 Agent（多 Agent 委派；空 = 主链路）

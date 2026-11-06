@@ -111,7 +111,8 @@ def _apply_live_event(view: dict[str, Any], event: EventEnvelope) -> None:  # �
             group=payload.group,  # 分组（仅选图标，所有步骤都展示）
             title=payload.title or payload.stage_id,  # 人话标题
             status=payload.status,  # 状态
-            detail=payload.detail,  # 明细
+            detail=payload.detail,  # 明细（一行摘要）
+            body=payload.body,  # 展开正文（资料/判断/校验结论）
             ms=payload.duration_ms,  # 耗时
         )  # 更新结束
         return  # 结束
@@ -140,6 +141,7 @@ def _apply_live_event(view: dict[str, Any], event: EventEnvelope) -> None:  # �
             title=f"{kind_label} · {payload.tool_name}" if payload.variant in _TOOL_TITLES else str(payload.tool_name or kind_label),  # 标题
             status=payload.status,  # 状态
             detail=payload.detail,  # 明细
+            body=payload.diff or "",  # 展开正文（改动/输出）
             children=children,  # 子项
         )  # 更新结束
         return  # 结束
@@ -284,6 +286,7 @@ def _turn_from_live(view: dict[str, Any]) -> Turn:  # 实时视图转 Turn
                 group=str(item.get("group") or ""),  # 分组
                 title=str(item.get("title") or ""),  # 标题
                 detail=str(item.get("detail") or ""),  # 明细
+                body=str(item.get("body") or ""),  # 展开正文
                 status=str(item.get("status") or "done"),  # 状态
                 ms=int(item.get("ms") or 0),  # 耗时
                 children=[  # 子项（递归映射））

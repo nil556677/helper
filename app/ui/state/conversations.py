@@ -137,6 +137,7 @@ def _turn_from_json(content: str, raw: object) -> object:  # 还原一轮
                     group=str(item.get("group") or item.get("kind") or "search"),  # 分组（旧数据是 kind）
                     title=title,  # 标题
                     detail=str(item.get("detail") or ""),  # 明细
+                    body=str(item.get("body") or ""),  # 展开正文
                     status=str(item.get("status") or "done"),  # 状态
                     ms=int(item.get("ms") or 0),  # 耗时
                     children=[  # 子项（工具参数/结果，递归还原）

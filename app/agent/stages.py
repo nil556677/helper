@@ -27,10 +27,11 @@ _REGISTRY = IdRegistry()  # 步骤 id 注册表（两处撞车时第一次跑到
 
 @dataclass
 class StageInfo:  # 步骤附加信息
-    """节点可在退出前补 detail，供 UI 显示“找到 N 段”；stage_id 供测试断言派生结果。"""
+    """节点可在退出前补 detail/body，供 UI 展示；stage_id 供测试断言派生结果。"""
 
     stage_id: str  # 自动派生的步骤 id
-    detail: str = ""  # 明细
+    detail: str = ""  # 明细（一行摘要）
+    body: str = ""  # 展开正文（查到的资料/门限判断等）
 
 
 def stage(  # 步骤（在调用处声明 label 与 group）
@@ -65,7 +66,7 @@ def _run_stage(  # 真正发事件 / 建 span 的生成器
     group_key = group.value if group is not None else ""  # 事件里用字符串
     if ctx is not None:  # 有 run 才发
         ctx.check_cancelled()  # 开始前检查取消
-        ctx.emit(events.stage(stage_id, "running", title=label, detail=detail, group=group_key))  # running
+        ctx.emit(events.stage(stage_id, "running", title=label, detail=detail, body=info.body, group=group_key))  # running
     try:  # 包住真实步骤
         with trace_span(stage_id, "node", input={"detail": detail}):  # trace span
             yield info  # 执行
@@ -78,11 +79,12 @@ def _run_stage(  # 真正发事件 / 建 span 的生成器
                     "failed",  # 状态
                     title=label,  # 标题
                     detail=str(exc)[:200],  # 明细（截断）
+                    body=info.body,  # 展开正文
                     duration_ms=ms,  # 耗时
                     group=group_key,  # 分组
                 )  # 构造结束
             )  # emit 结束
-            _record(ctx, stage_id, group_key, label, str(exc)[:200], "failed", ms)  # 记步骤
+            _record(ctx, stage_id, group_key, label, str(exc)[:200], "failed", ms, info.body)  # 记步骤
         raise  # 继续抛
     else:  # 成功
         ms = int((time.perf_counter() - started) * 1000)  # 耗时
@@ -94,11 +96,12 @@ def _run_stage(  # 真正发事件 / 建 span 的生成器
                     "done",  # 状态
                     title=label,  # 标题
                     detail=info.detail,  # 明细
+                    body=info.body,  # 展开正文
                     duration_ms=ms,  # 耗时
                     group=group_key,  # 分组
                 )  # 构造结束
             )  # emit 结束
-            _record(ctx, stage_id, group_key, label, info.detail, "done", ms)  # 记步骤
+            _record(ctx, stage_id, group_key, label, info.detail, "done", ms, info.body)  # 记步骤
 
 
 def _record(  # 记一条用户级步骤
@@ -109,6 +112,7 @@ def _record(  # 记一条用户级步骤
     detail: str,  # 明细
     status: str,  # done/failed
     ms: int,  # 耗时
+    body: str = "",  # 展开正文
 ) -> None:  # 无返回
     """没有分组的步骤（如 finalize）只埋 trace，不进用户能看到的步骤列表。"""
     if not group:  # 纯埋点步骤
@@ -119,6 +123,7 @@ def _record(  # 记一条用户级步骤
             "group": group,  # 分组
             "title": label,  # 标题
             "detail": detail,  # 明细
+            "body": body,  # 展开正文
             "status": status,  # 状态
             "ms": ms,  # 耗时
         }  # 步骤结束

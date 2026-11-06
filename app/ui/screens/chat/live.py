@@ -166,7 +166,8 @@ def _upsert_step(  # 新增/更新一个时间线步骤（单一事实源）
     group: str,  # 分组（决定图标）
     title: str,  # 人话标题
     status: str,  # 状态
-    detail: str = "",  # 明细
+    detail: str = "",  # 明细（一行摘要）
+    body: str = "",  # 点击展开后的完整内容
     ms: int | None = None,  # 耗时
     children: list[dict] | None = None,  # 子步骤（工具参数/结果）
 ) -> None:  # 无返回
@@ -180,6 +181,7 @@ def _upsert_step(  # 新增/更新一个时间线步骤（单一事实源）
             "title": title,  # 标题
             "status": status,  # 状态
             "detail": detail,  # 明细
+            "body": body,  # 展开正文
             "ms": int(ms or 0),  # 耗时
             "children": children or [],  # 子项
         })  # 追加结束
@@ -192,6 +194,8 @@ def _upsert_step(  # 新增/更新一个时间线步骤（单一事实源）
             status=status,  # 状态
             detail=detail,  # 明细
         )  # 合并结束
+        if body:  # 有正文才覆盖（running 帧可能空）
+            item["body"] = body  # 展开正文
         if ms is not None:  # 只给就更新（不改"未知"）
             item["ms"] = int(ms)  # 耗时
         if children:  # 有子项
