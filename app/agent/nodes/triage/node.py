@@ -56,7 +56,12 @@ def triage_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  #
                 reason="param_filled",  # 依据
                 decided_by="config",  # 用户输入
             )  # 结束
-            return {"triage": decision.model_dump(mode="json"), "route": resolved.model_dump(mode="json"), "pending_param": param_value}  # 短路
+            return {  # 短路写回（值 + 对应参数名，供 dispatch 精确填入）
+                "triage": decision.model_dump(mode="json"),  # 分诊
+                "route": resolved.model_dump(mode="json"),  # 路由
+                "pending_param": param_value,  # 用户补的值
+                "pending_param_name": str(pending.get("param") or ""),  # 对应参数名
+            }  # 结束
         choices = pending.get("choices") if isinstance(pending.get("choices"), dict) else {}  # 选项映射
         for label, route_name in choices.items():  # 逐项
             if label and label in query:  # 命中

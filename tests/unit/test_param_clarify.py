@@ -7,7 +7,7 @@ import asyncio  # 跑 async
 import pytest  # 框架
 
 import app.agent.agent as agent_mod  # 图
-from app.agent.nodes.dispatch.node import _args_complete, _missing_param, _param_override  # 纯函数
+from app.agent.nodes.dispatch.node import _args_complete, _fill_param, _missing_param, _weather_args  # 纯函数
 from app.agent.nodes.triage.node import triage_node  # 分诊
 from app.agent.routing.rules.loader import load_routes  # 路由
 
@@ -16,17 +16,19 @@ def _spec():  # weather 路由定义
     return {spec.route_id: spec for spec in load_routes()}["weather"]  # 取
 
 
-def test_missing_param_detected() -> None:  # 缺参判定
+def test_missing_param_detected() -> None:  # 缺参判定（城市=开放填）
     name, ask, options = _missing_param(_spec(), "天气怎么样")  # 缺城市
-    assert name == "city" and "哪个城市" in ask and options  # 追问话术+快捷项
+    assert name == "city" and "哪个城市" in ask and options == ()  # 追问话术，开放填（无选项）
     ok_name, ok_ask, _ok = _missing_param(_spec(), "广州天气怎么样")  # 抽到
     assert ok_name == ""  # 不缺
 
 
-def test_param_override_and_complete() -> None:  # 覆盖/完整性
-    assert _param_override("weather", "广州") == {"city": "广州"}  # 覆盖
-    assert _args_complete("weather", {"city": "广州"}) is True  # 齐
-    assert _args_complete("weather", {"city": ""}) is False  # 缺
+def test_param_override_and_complete() -> None:  # 参数完整性（按参数名填）
+    from app.agent.nodes.dispatch.node import _fill_param  # 被测
+
+    assert _fill_param({"city": ""}, "city", "广州") == {"city": "广州"}  # 填入
+    assert _args_complete("weather", {"city": "广州", "date": "2026-11-07"}) is True  # 齐
+    assert _args_complete("weather", {"city": "", "date": "2026-11-07"}) is False  # 缺 city
     assert _args_complete("time", {}) is True  # 无必需参数
 
 
@@ -51,6 +53,5 @@ def test_triage_catches_typed_param() -> None:  # 下轮打字接住
 
 
 def test_weather_args_no_silent_default() -> None:  # 不再静默默认北京
-    from app.agent.nodes.dispatch.node import _weather_args  # 被测
-
     assert _weather_args("天气怎么样")["city"] == ""  # 抽不到就空（由追问兜住）
+    assert _weather_args("明天广州天气")["date"]  # 日期给到 ISO（有默认）

@@ -15,26 +15,38 @@ from app.rag.answer import extractive  # 原文回退（无模型时也能给证
 ArgsBuilder = Callable[[str], dict[str, Any]]  # question → 工具参数
 
 
-def _weather_args(question: str) -> dict[str, Any]:  # 从问题里抠城市
+def _weather_args(question: str) -> dict[str, Any]:  # 从问题里抠城市/日期
+    """``city`` 可能为空（由必需参数检查兜住）；``date`` 相对词→ISO 日期。"""
+    import re  # 正则
+    from datetime import date, timedelta  # 日期
+
     text = str(question or "")  # 原文
-    for word in ("的天气", "天气", "怎么样", "气温", "多少", "会不会下雨", "会下雨吗", "吧", "？", "?"):  # 去噪声
-        text = text.replace(word, "")  # 去
-    return {"city": text.strip()}  # 剩余当城市（可能为空 → 由必需参数检查兜住）
+    city_match = re.search(r"([\u4e00-\u9fa5]{2,6}?)(?:的)?(?:天气|气温|温度|下不下雨|下雨)", text)  # 城市
+    city = city_match.group(1).strip() if city_match else ""  # 城市（可能空）
+    base = date.today()  # 今天
+    offset = 0  # 偏移
+    for token, off in (("前天", -2), ("明天", 1), ("后天", 2)):  # 相对词
+        if token in text:  # 命中
+            offset = off  # 设偏移
+            break  # 取第一个
+    day = base + timedelta(days=offset)  # 目标日
+    return {"city": city, "date": day.isoformat()}  # ISO 日期（今天即当天）
 
 
-def _param_override(route_name: str, value: str) -> dict[str, Any]:  # 参数名 → 工具参数覆盖
-    """pending_param / resume 值注入到对应工具参数。"""
+def _fill_param(args: dict[str, Any], param_name: str, value: str) -> dict[str, Any]:  # 按参数名填值
+    """用户补的参数值写入工具参数(参数名 city/date 与工具字段同名)。"""
     if not value:  # 空
-        return {}  # 不覆盖
-    if route_name == "weather":  # 天气 → city
-        return {"city": value}  # 覆盖
-    return {}  # 其他路径暂无必需参数
+        return args  # 不改
+    args[str(param_name)] = value  # 写入
+    return args  # 返回
 
 
 def _args_complete(route_name: str, args: dict[str, Any]) -> bool:  # 参数是否已齐
-    """weather 需要 city 非空；其他路径恒齐。"""
+    """weather 需 city 非空；other 需其它必需参数。"""
     if route_name == "weather":  # 天气
-        return bool(str(args.get("city") or "").strip())  # 城市非空
+        city = str(args.get("city") or "").strip()  # 城市
+        date = str(args.get("date") or "").strip()  # 日期（可空：默认当天）
+        return bool(city) and (not date or True)  # 城市必填，日期可空
     return True  # 其余齐
 
 
@@ -104,10 +116,15 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
     # —— 必需参数检查：缺 → HITL 中断追问 或 模板追问（绝不静默兜底）——
     spec = route_specs().get(name)  # 路径定义
     pending_param = str(state.get("pending_param") or "")  # 上轮接住/恢复的参数值
-    args = ({**args_builder(question), **_param_override(name, pending_param)} if pending_param else args_builder(question))  # 基础参数
+    pending_name = str(state.get("pending_param_name") or "")  # 该值对应哪个必需参数
+    args = (_fill_param({**args_builder(question)}, pending_name, pending_param) if pending_name else args_builder(question))  # 基础参数
     if spec is not None and spec.required_params and not pending_param:  # 声明了必需参数且本轮没带
         param_name, ask_text, ask_options = _missing_param(spec, question)  # 检查
         if param_name and not _args_complete(name, args):  # 仍缺（args 里没有兜底值才算缺）
+            # 参数交互按能否枚举决定：可枚举(options 非空)→让选 choose；开放(空)→让填 input
+            enum = bool(ask_options)  # 能否枚举完
+            kind = "choose" if enum else "input"  # 选 or 填
+            payload_options = [{"value": item, "label": item} for item in ask_options] if enum else []  # 枚举才有选项
             if state.get("hitl_enabled"):  # 生产：暂停等用户（重放后 resume 值进 pending_param）
                 from langgraph.types import interrupt  # 原生暂停
                 from app.agent.contracts.routing import InterruptPayload  # 负载
@@ -116,14 +133,14 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
                     run_id=str(state.get("run_id") or ""),  # run
                     thread_id=str(state.get("thread_id") or ""),  # 线程
                     node="dispatch_fixed",  # 节点
-                    kind="input",  # 需要补充信息（纯输入，让用户填，不列选项）
+                    kind=kind,  # choose=可枚举选 / input=开放填
                     title="需要补充信息",  # 标题
                     description=ask_text,  # 追问话术
-                    options=[],  # ★ 缺参是"让我填"，不是"让我选"：不给选项按钮
+                    options=payload_options,  # 可枚举才带选项
                     risk="low",  # 低风险
                 ).model_dump(mode="json")  # 序列化
-                answer_value = str(interrupt(payload) or "")  # 恢复值 = 用户输入（填的城市）
-                args = {**args_builder(question), **_param_override(name, answer_value)}  # 用恢复值构建
+                answer_value = str(interrupt(payload) or "")  # 恢复值 = 用户选择/输入
+                args = _fill_param({**args_builder(question)}, param_name, answer_value)  # 用恢复值精确填入
             else:  # 测试/未启用：模板追问 + pending_clarify（下轮打字接住）
                 return {  # 追问
                     "answer": ask_text,  # 话术
