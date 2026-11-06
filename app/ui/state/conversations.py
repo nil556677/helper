@@ -86,6 +86,13 @@ def new(*, title: str = DEFAULT_TITLE, note: str = "", select_it: bool = True) -
     )
     _conversations[conversation.id] = conversation
     _order.insert(0, conversation.id)  # 新会话永远排最前
+    # 新建即落库：前端有、后端也必须有（否则重启后空会话丢失、前后端不对应）。
+    try:
+        from app.services import conversations as service  # 延迟导入
+
+        service.ensure_conversation(conversation.id, title=title)  # 建行
+    except Exception:  # 库异常不阻断界面
+        pass  # 静默（首条消息仍会补建）
     # 路径 1：select_it=True → 切到新会话，并通知"当前会话变了"（聊天页重画）。
     if select_it:
         _current_id = conversation.id
@@ -303,6 +310,10 @@ def append_to(conversation_id: str, entry: Entry) -> None:
         return
     # 路径 2：正常追加。
     conversation.entries.append(entry)
+    # 有新一轮 → 该会话在左栏提到最前（与后端 updated_at DESC 对齐，否则顺序会"乱"）。
+    if conversation_id in _order:
+        _order.remove(conversation_id)  # 先摘
+        _order.insert(0, conversation_id)  # 再置顶
     # 自动命名：仍是默认标题，且这一轮问题非空 → 用问题前 18 字当标题。
     # 路径 2a：标题已改过 / 问题为空 → 不改名。
     if conversation.title == DEFAULT_TITLE and entry.question.strip():

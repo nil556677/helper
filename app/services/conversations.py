@@ -14,7 +14,17 @@ DEFAULT_TITLE = "新对话"
 RENAME_MAX_CHARS = 40
 
 
+def tombstoned(conversation_id: str) -> bool:
+    """该会话是否已被删除（墓碑）：是则禁止重建/写入，防进行中的 run 复活会话。"""
+    row = get_connection().execute(
+        "SELECT 1 FROM conversation_tombstones WHERE id = ?", (conversation_id,)
+    ).fetchone()
+    return row is not None
+
+
 def ensure_conversation(conversation_id: str, *, title: str = DEFAULT_TITLE) -> None:
+    if tombstoned(conversation_id):  # 已删会话：不重建（墓碑优先）
+        return
     with transaction() as conn:
         conn.execute(
             "INSERT OR IGNORE INTO conversations(id, title, created_at, updated_at)"
@@ -39,6 +49,8 @@ def append_message(
     turn_json: dict[str, Any] | None = None,
     title: str = DEFAULT_TITLE,
 ) -> None:
+    if tombstoned(conversation_id):  # 已删会话：不写（防复活）
+        return
     ensure_conversation(conversation_id, title=title)
     stamp = time.time()
     with transaction() as conn:
@@ -84,6 +96,8 @@ def append_turn(
     """
     if title == DEFAULT_TITLE and question:  # 没显式给标题
         title = question[:18]  # 用问题前 18 字（与 append_message 的自动命名一致）
+    if tombstoned(conversation_id):  # 已删会话：不写（防止进行中的 run 复活它）
+        return (-1, -1)  # 跳过
     ensure_conversation(conversation_id, title=title)  # 先保证会话存在
     stamp = time.time()  # 同一时刻写入
     payload = json.dumps(turn_json, ensure_ascii=False) if turn_json else None  # 序列化一次
@@ -144,6 +158,8 @@ def append_turn_existing_user(
 
     返回：``(user_id, assistant_id)``。同样原子写（在一个事务里）。
     """
+    if tombstoned(conversation_id):  # 已删会话：不补写 assistant（防复活）
+        return (-1, -1)  # 跳过
     ensure_conversation(conversation_id, title=title)  # 保证会话存在
     stamp = time.time()  # 时间戳
     payload = json.dumps(turn_json, ensure_ascii=False) if turn_json else None  # 序列化
@@ -220,6 +236,10 @@ def save_summary(conversation_id: str, until_message_id: int, summary: str) -> N
 def delete_conversation(conversation_id: str) -> None:
     with transaction() as conn:
         conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+        conn.execute(  # 立墓碑：禁止进行中的 run 通过 ensure 重建
+            "INSERT OR REPLACE INTO conversation_tombstones(id, deleted_at) VALUES (?, ?)",
+            (conversation_id, time.time()),
+        )
 
 
 def rename_conversation(conversation_id: str, title: str) -> str:

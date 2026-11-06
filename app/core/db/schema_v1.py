@@ -486,6 +486,17 @@ def _ensure_audit_tables(conn: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_conversation_tombstones(conn: sqlite3.Connection) -> None:
+    """幂等补"会话墓碑"表：删掉的会话不许被进行中的 run 重建（防复活）。"""
+    conn.executescript(  # 幂等建表
+        "-- 表 conversation_tombstones：已删会话的墓碑（禁止 ensure 重建）。\n"
+        "CREATE TABLE IF NOT EXISTS conversation_tombstones ("
+        " id TEXT PRIMARY KEY,"  # 会话 id
+        " deleted_at REAL NOT NULL"  # 删除时间戳
+        ");\n"
+    )
+
+
 def initialize(conn: sqlite3.Connection) -> int:
     """把一条连接初始化成 v1（幂等）。
 
@@ -501,6 +512,7 @@ def initialize(conn: sqlite3.Connection) -> int:
         _ensure_messages_columns(conn)
         _ensure_turn_commits_table(conn)
         _ensure_audit_tables(conn)
+        _ensure_conversation_tombstones(conn)
         return current
     if current != 0:
         raise ValueError(
@@ -509,6 +521,7 @@ def initialize(conn: sqlite3.Connection) -> int:
         )
     conn.executescript(DDL_SQL)
     _ensure_audit_tables(conn)
+    _ensure_conversation_tombstones(conn)
     conn.execute(
         "INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('schema_version', ?)",
         (str(SCHEMA_VERSION),),
