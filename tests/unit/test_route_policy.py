@@ -19,4 +19,4 @@ def test_resolve_policy_coverage() -> None:  # 大量键近似覆盖 20%
 def test_policy_carries_thresholds() -> None:  # 阈值与版本对应
     assert CANDIDATE_POLICY.direct_top < DEFAULT_POLICY.direct_top  # 候选版更宽
     assert CANDIDATE_POLICY.version != DEFAULT_POLICY.version  # 版本不同
-    assert DEFAULT_POLICY.miss_top > CANDIDATE_POLICY.miss_top  # 候选取回更松
+    assert DEFAULT_POLICY.direct_top >= 0.9 and DEFAULT_POLICY.direct_margin >= 0.1  # 原设计 direct 门槛

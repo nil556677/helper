@@ -30,19 +30,33 @@ def degrade(reason: str = "llm_error") -> IntentDecision:  # 降级决策
     return IntentDecision(intent="query", confidence=0.0, source="llm", reason=reason)  # 进 agentic 搜索
 
 
+def _candidate_text(candidates: Sequence[dict[str, Any]]) -> str:  # 候选清单（含内容摘要）
+    """把候选整理成给 LLM 的分行清单；带内容(txt/snippet)就一并附上，供它据实裁决。"""
+    lines: list[str] = []  # 行
+    for idx, item in enumerate(candidates or [], 1):  # 逐候选
+        route = str(item.get("route") or "?")  # 路由
+        score = float(item.get("score") or 0.0)  # 分数
+        snippet = str(item.get("snippet") or item.get("text") or "")[:200]  # 内容摘要
+        lines.append(f"{idx}. {route}（相似度 {score:.2f}）{('：' + snippet) if snippet else ''}")  # 行
+    return "\n".join(lines) if lines else "（无候选）"  # 返回
+
+
 async def classify(  # 轻量分类
     question: str,  # 问题
-    candidates: Sequence[dict[str, Any]],  # 语义候选（帮助模型分域）
+    candidates: Sequence[dict[str, Any]],  # 语义候选（含可选内容摘要）
     model: Any | None = None,  # chat_model（gateway 产出）
 ) -> IntentDecision:  # 意图决策
-    """有模型才分类；无模型/异常降级为 query（派搜索 agent），不降级成澄清。"""
+    """有模型才分类；无模型/异常降级为 query（派搜索 agent），不降级成澄清。
+
+    ambiguous 时把**候选清单(route+score+内容摘要)**一并交给 LLM，让它据实裁决，
+    而不是只看裸 route 名。"""
     if model is None:  # 无模型
         return degrade("no_model")  # 派检索，不弹窗
     try:  # 调模型
         runner = model.with_structured_output(IntentDecision)  # 结构化
-        hints = "、".join(str(item.get("route") or "") for item in candidates if isinstance(item, dict))  # 候选
+        hints = _candidate_text(candidates)  # 候选清单（含内容）
         out = await runner.ainvoke(  # 请求
-            [("system", PROMPT), ("human", f"候选:{hints}\n问题:{question}")]  # 消息
+            [("system", PROMPT), ("human", f"候选如下:\n{hints}\n\n问题:{question}")]  # 消息
         )  # 结束
         if isinstance(out, IntentDecision):  # 直接对象
             return out  # 返回
