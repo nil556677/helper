@@ -274,7 +274,7 @@ def _render_clarify(view: dict[str, Any], data: dict[str, Any]) -> None:  # 澄�
             ui.label(str(data.get("title") or "需要确认")).classes("hp-card-title")  # 标题
         if data.get("description"):  # 追问/说明（补参数时这就是问题本身）
             ui.label(str(data["description"])).classes("text-sm opacity-80")  # 轻量正文
-        if options:  # 快捷 chips：横向换行，轻量描边（不像表单）
+        if options and kind != "input":  # 快捷 chips：仅"选路由"场景；补参数=让用户填，不列选项
             with ui.row().classes("w-full flex-wrap gap-2"):  # chips 区
                 for item in options:  # 逐项
                     value = str(item.get("value") or "")  # 值
@@ -283,11 +283,16 @@ def _render_clarify(view: dict[str, Any], data: dict[str, Any]) -> None:  # 澄�
                         label,  # 文案
                         on_click=lambda v=value: _choose(view, v),  # 点选即回
                     ).props("outline no-caps size=md unelevated").classes("rounded-full border-2")  # 圆角描边
+        if kind == "input":  # 补参数：让用户"填"，内嵌一个输入框+确定（回车也行）
+            with ui.row().classes("w-full items-center gap-2"):  # 输入区
+                field = ui.input(placeholder="请在这里填写，例如：成都").props("outlined dense").classes("flex-1")  # 输入框
+                field.on("keydown.enter", lambda: _choose(view, field.value))  # 回车提交
+                ui.button("确定", on_click=lambda: _choose(view, field.value)).props("unelevated dense")  # 确定
         with ui.row().classes("w-full items-center justify-between"):  # 底部
             hint = (  # 引导语按类型
-                "点上面的选项，或直接在输入框回复（如城市名）。"  # 补参数
+                "填写后点确定或回车。"  # 补参数：填
                 if kind == "input"  # 输入型
-                else "点上面的选项继续；也可以直接输入新的描述。"  # 选路由
+                else "点上面的选项继续；也可以直接在下方输入新的描述。"  # 选路由
             )  # 结束
             ui.label(hint).classes("hp-hint")  # 引导
             ui.button("取消本轮", on_click=lambda: _dismiss(view)).props("flat dense").classes("opacity-60")  # 取消（弱化）

@@ -116,13 +116,13 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
                     run_id=str(state.get("run_id") or ""),  # run
                     thread_id=str(state.get("thread_id") or ""),  # 线程
                     node="dispatch_fixed",  # 节点
-                    kind="input",  # 需要补充信息
+                    kind="input",  # 需要补充信息（纯输入，让用户填，不列选项）
                     title="需要补充信息",  # 标题
                     description=ask_text,  # 追问话术
-                    options=[{"value": item, "label": item} for item in ask_options],  # 快捷城市
+                    options=[],  # ★ 缺参是"让我填"，不是"让我选"：不给选项按钮
                     risk="low",  # 低风险
                 ).model_dump(mode="json")  # 序列化
-                answer_value = str(interrupt(payload) or "")  # 恢复值 = 用户选择/输入
+                answer_value = str(interrupt(payload) or "")  # 恢复值 = 用户输入（填的城市）
                 args = {**args_builder(question), **_param_override(name, answer_value)}  # 用恢复值构建
             else:  # 测试/未启用：模板追问 + pending_clarify（下轮打字接住）
                 return {  # 追问
