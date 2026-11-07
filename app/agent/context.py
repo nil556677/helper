@@ -21,6 +21,8 @@ class RunCancelled(RuntimeError):  # 取消异常
 
 
 _CURRENT: ContextVar[RunContext | None] = ContextVar("agent_run_context", default=None)  # 当前 run
+#: thread_id → RunContext（driver 图执行期间注册；LangGraph 会剥掉 config 里的非序列化对象）。
+_RUNS: dict[str, "RunContext"] = {}
 
 
 def current_run() -> RunContext | None:  # 取当前 run
@@ -121,7 +123,77 @@ class RunContext:  # 一轮运行的运行时上下文
 
 
 def ctx_from_config(config: Any) -> RunContext | None:  # 从图配置取上下文
-    """config 里没有 run_ctx 时返回 None（单测/旧路径）。"""
+    """按 config 里的 thread_id 找 driver 注册的 run；没有则回退 contextvar。
+
+    LangGraph 的 configurable 必须可序列化，直接塞 RunContext 会被剥掉，
+    所以 driver 用 ``thread_id`` 注册进 :data:`_RUNS`，节点再按 thread_id 取回。
+    """
     if not config:  # 空配置
         return None  # 没有
-    return (config.get("configurable") or {}).get("run_ctx")  # 取上下文
+    thread_id = str((config.get("configurable") or {}).get("thread_id") or "")  # 线程
+    if thread_id:  # 有线程 → 查注册表
+        run = _RUNS.get(thread_id)  # 取
+        if run is not None:  # 找到
+            return run  # 返回
+    return current_run()  # 回退 contextvar
+
+
+def bind_run(thread_id: str, ctx: RunContext) -> None:  # 注册当前 run（driver 图执行前调）
+    """执行期间按 thread_id 挂到注册表，供各节点 ``ctx_from_config`` 取回。"""
+    _RUNS[thread_id] = ctx  # 写入
+
+
+def unbind_run(thread_id: str) -> None:  # 执行结束释放
+    """图跑完移除，避免残留脏引用。"""
+    _RUNS.pop(thread_id, None)  # 删除
+
+
+def resolve_run(config: Any = None) -> RunContext | None:  # 节点内取 run
+    """优先 config 注入的 run_ctx，回退 contextvar；LangGraph 节点执行会丢 caller 的 contextvar。"""
+    return ctx_from_config(config) or current_run()  # 先 config 再 contextvar
+
+
+def bind_node_run(node_fn: Any) -> Any:  # 装饰器：把 run 绑进 contextvar
+    """LangGraph 节点在独立上下文执行，``current_run()`` 会读不到 driver 绑定的 run。
+
+    用这个装饰器包住节点：进入时按 ``state.conversation_id``（或 config 的线程）查 driver 注册的
+    run，写进 contextvar，节点体内 ``current_run()`` / ``stage()`` 就能发事件了。
+    查不到（单测/旧路径）则原样跑。同步/异步节点都兼容。
+    """
+    import functools  # 包装
+    import inspect  # 协程检查
+
+    def _run_of(state: Any, config: Any) -> RunContext | None:  # 按 state/conversation 取 run
+        cid = str((state or {}).get("conversation_id") or "")  # 会话 id
+        if cid:  # 有会话
+            found = _RUNS.get(cid)  # 查注册表
+            if found is not None:  # 命中
+                return found  # 返回
+        return ctx_from_config(config) or current_run()  # 回退 config/contextvar
+
+    if inspect.iscoroutinefunction(node_fn):  # async 节点
+        @functools.wraps(node_fn)  # 保留元数据
+        async def async_wrapper(state: Any, config: Any = None, **kwargs: Any) -> Any:  # async 包装
+            run = _run_of(state, config)  # 取 run
+            if run is None:  # 没有（单测直调）
+                return await node_fn(state, config, **kwargs)  # 原样
+            token = _CURRENT.set(run)  # 设进 contextvar
+            try:  # 执行
+                return await node_fn(state, config, **kwargs)  # 节点体
+            finally:  # 一定恢复
+                _CURRENT.reset(token)  # 复位
+
+        return async_wrapper  # 返回 async 包装
+
+    @functools.wraps(node_fn)  # 同步节点
+    def sync_wrapper(state: Any, config: Any = None, **kwargs: Any) -> Any:  # 同步包装
+        run = _run_of(state, config)  # 取 run
+        if run is None:  # 没有
+            return node_fn(state, config, **kwargs)  # 原样
+        token = _CURRENT.set(run)  # 设进 contextvar
+        try:  # 执行
+            return node_fn(state, config, **kwargs)  # 节点体
+        finally:  # 一定恢复
+            _CURRENT.reset(token)  # 复位
+
+    return sync_wrapper  # 返回同步包装

@@ -4,13 +4,14 @@ from __future__ import annotations  # 延迟求值注解
 
 from typing import Any  # 任意值
 
-from app.agent.context import current_run  # 当前 run（发事件）
+from app.agent.context import bind_node_run, current_run  # 当前 run（发事件）
 from app.agent.events import verify_report  # 校验结论事件
 from app.agent.routing.verify import mask_pii, strip_invalid, verify  # 校验
 
 __all__ = ["verify_node"]  # 导出
 
 
+@bind_node_run
 def verify_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
     """校验答案；越界角标删除；覆盖不足给一句说明（不静默）。"""
     del config  # 不用图配置

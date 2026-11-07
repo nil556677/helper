@@ -4,6 +4,7 @@ from __future__ import annotations  # 延迟求值注解
 
 from typing import Any  # 任意值
 
+from app.agent.context import bind_node_run  # 绑 run（发 stage 事件）
 from app.agent.llm.provider import get_chat_model  # 统一模型入口
 
 __all__ = ["general_agent_node"]  # 导出
@@ -18,6 +19,7 @@ def _degrade() -> dict[str, Any]:  # 无模型降级
     return {"answer": "我是资料问答助手：可以帮你在本地资料中检索并据资料回答。请描述你想查的资料问题。", "note": ""}  # 模板
 
 
+@bind_node_run
 async def general_agent_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
     """有模型才生成引导话术；无模型/失败用模板，绝不假装有数据。"""
     del config  # 不用图配置

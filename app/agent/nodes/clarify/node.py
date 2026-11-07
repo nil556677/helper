@@ -12,7 +12,7 @@ from typing import Any  # 任意值
 
 from app.agent.contracts.output import Candidate, candidate_id  # 复用澄清候选契约
 from app.agent.contracts.routing import ClarifyOptions  # 澄清契约
-from app.agent.context import current_run  # 当前 run（指标）
+from app.agent.context import bind_node_run, current_run  # 当前 run（指标）
 from app.agent.metrics import bump  # 指标累加
 
 __all__ = ["MAX_CLARIFY_ROUNDS", "DISPLAY_MIN", "build_options", "clarify_node", "clarify_text", "resolve_choice"]  # 导出
@@ -64,6 +64,7 @@ def clarify_text(options: ClarifyOptions) -> str:  # 模板化话术
     return "抱歉，这个问题超出了我能处理的范围，请换个说法或联系人工。"  # 拒绝模板
 
 
+@bind_node_run
 def clarify_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
     """写 clarify_options + 模板 answer；不调模型。"""
     del config  # 不用图配置

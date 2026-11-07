@@ -23,7 +23,7 @@ from langgraph.types import Command  # HITL 恢复命令
 from loguru import logger  # 日志（失败要能查堆栈）
 
 from app.agent import events  # 事件
-from app.agent.context import RunCancelled, RunContext, run_context  # 上下文
+from app.agent.context import RunCancelled, RunContext, bind_run, run_context, unbind_run  # 上下文
 from app.agent.fsm.projection import project_event  # 节点完成 → 迁移事件
 from app.agent.fsm.states import RunEvent, RunState  # 状态
 from app.agent.middleware import default_chain  # 中间件
@@ -317,6 +317,7 @@ async def drive(  # 驱动图
             else:  # 新跑
                 ctx.transition(RunEvent.START)  # 进入上下文
             await _CHAIN.before_run(ctx)  # 中间件（如取消边界）
+            bind_run(ctx.conversation_id, ctx)  # 注册：节点按 thread_id 取回 run
             with run_context(ctx):  # 绑定当前 run
                 state = await _run_graph(  # 跑父图 + 驱动状态机
                     graph,  # 编译父图
@@ -324,6 +325,7 @@ async def drive(  # 驱动图
                     ctx,  # 上下文（投影用）
                     emit,  # 事件出口（driver 收权后发 state/done）
                 )  # 图结束
+            unbind_run(ctx.conversation_id)  # 释放注册
             if ctx.machine.state is RunState.WAITING:  # HITL 暂停
                 status = "waiting"  # 非终态（等用户）
                 _seal_state(ctx, state, status)  # 封业务字段
@@ -363,6 +365,7 @@ async def drive(  # 驱动图
         finally:  # 中间件收尾
             with contextlib.suppress(Exception):  # 收尾失败不阻断
                 await _CHAIN.after_run(ctx)  # 逆序
+            unbind_run(ctx.conversation_id)  # 一定释放 run 注册（含异常路径）
             if getattr(ctx, "db", None) is not None:  # 有异步连接
                 await _update_trace_async(ctx, state)  # 异步补 trace
             else:  # 同步

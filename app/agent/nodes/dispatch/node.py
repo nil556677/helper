@@ -5,7 +5,7 @@ from __future__ import annotations  # 延迟求值注解
 from typing import Any, Callable  # 类型
 
 from app.agent.contracts import StageGroup  # 分组（时间线步骤归类）
-from app.agent.context import current_run  # 当前 run（发事件）
+from app.agent.context import bind_node_run, current_run  # 当前 run（发事件）
 from app.agent.events import basis as basis_event  # 检索依据事件
 from app.agent.events import tool as tool_event  # 工具事件
 from app.agent.stages import stage  # 过程步骤
@@ -101,6 +101,7 @@ def _format(name: str, data: dict[str, Any]) -> str:  # 模板化回复
     return str(data.get("text") or "")  # 兜底
 
 
+@bind_node_run
 async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
     """按 `route` 取白名单工具，直调并模板化；越界/失败给带内说明。"""
     del config  # 不用图配置

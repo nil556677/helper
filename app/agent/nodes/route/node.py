@@ -5,7 +5,7 @@ from __future__ import annotations  # 延迟求值注解
 from typing import Any  # 任意值
 
 from app.agent.contracts.output import DecisionTarget, RouteDecision  # 复用单一决策契约
-from app.agent.context import current_run  # 当前 run（指标）
+from app.agent.context import bind_node_run, current_run  # 当前 run（指标）
 from app.agent.metrics import bump  # 指标累加
 from app.agent.routing.rules.loader import match  # 匹配
 
@@ -21,6 +21,7 @@ def _default_rules():  # 懒加载内置规则
     return _rules  # 返回
 
 
+@bind_node_run
 def rule_route_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
     """命中唯一且 exact → 写 `route`（direct）+ rule_hits；否则 route=None（走语义层）。"""
     del config  # 不用图配置

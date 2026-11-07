@@ -9,7 +9,7 @@ from typing import Any, Sequence  # 类型
 
 from app.agent.contracts.output import DecisionTarget, RouteDecision  # 复用单一决策契约
 from app.agent.contracts.routing import RouteCandidate, RouteSpec, SemanticRecall  # 契约
-from app.agent.context import current_run  # 当前 run（指标）
+from app.agent.context import bind_node_run, current_run  # 当前 run（指标）
 from app.agent.metrics import bump  # 指标累加
 from app.agent.routing.embeddings import RouteIndex, default_embed, default_route_index  # 索引
 from app.agent.routing.policy import resolve_policy  # 灰度分桶
@@ -65,6 +65,7 @@ def decide(  # 纯函数：向量 → 三态
     return SemanticRecall(candidates=candidates, top1=top1, margin=margin, decision=decision)  # 返回
 
 
+@bind_node_run
 async def semantic_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
     """写 `semantic_recall`；若判定 direct，同时写 `route` 供 dispatch_fixed 使用。"""
     del config  # 不用图配置
