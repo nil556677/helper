@@ -1,46 +1,26 @@
-"""父图 wrapper：把 `ambiguous` 请求交给兜底子图（黑盒），再把结果写回父图 State。"""
+"""父图 wrapper：把不确定请求交给兜底单一 ReAct（可调 3 工具），再把结果写回父图 State。"""
 
 from __future__ import annotations  # 延迟求值注解
 
 from typing import Any  # 任意值
 
-from app.agent.fallback import run_fallback  # 子图主循环
+from app.agent.fallback import run_react  # 单一 ReAct 兜底
+from app.agent.llm.provider import get_chat_model  # 统一模型入口
 
 
 async def call_fallback_subgraph(  # 父图 wrapper 节点
     state: dict[str, Any],  # 父图 State
     *,
-    model: Any | None = None,  # 模型实例（可注入；缺省走降级）
-    experts: dict[str, Any] | None = None,  # 已发现专家
-    max_replans: int = 2,  # 止损
+    model: Any | None = None,  # 模型实例（可注入；缺省取统一提供者）
+    **_: Any,  # 兼容旧签名（experts/max_replans 不再需要）
 ) -> dict[str, Any]:  # 写回父图的更新
-    """三步：父图 State → 子图输入 → run_fallback → 输出转回父图。"""
-    from app.agent.fallback.factory import make_planner, make_replanner, make_run_expert  # 工厂
-
-    if experts is None:  # 未显式传入 → 用自动发现的专家注册表
-        from app.agent.agents.experts import EXPERTS  # 单一注册表
-
-        experts = EXPERTS  # 注入
-    planner = make_planner(model)  # 规划器
-    replanner = make_replanner(model)  # 重规划器
-    run_expert = await make_run_expert(model, experts)  # 专家执行器
-    recall = state.get("semantic_recall") or {}  # 语义召回
-    candidates = recall.get("candidates") if isinstance(recall, dict) else []  # 候选
-    sub_state = {  # 子图输入
-        "query": str(state.get("question") or ""),  # 问题
-        "semantic_candidates": list(candidates),  # 候选
-        "thread_id": str(state.get("conversation_id") or "default"),  # 共享 thread_id
-    }  # 输入结束
-    result = await run_fallback(  # 跑子图
-        sub_state,  # 输入
-        planner=planner,  # 规划
-        replanner=replanner,  # 重规划
-        run_expert=run_expert,  # 专家
-        max_replans=max_replans,  # 止损
-    )  # 结束
-    return {  # 转回父图
-        "answer": str(result.get("final_response") or ""),  # 最终回答
-        "fallback_used": True,  # 只进一次
-        "fragments": [],  # 兜底不产引用
-        "note": "未完全匹配到合适路径，已尽力完成。" if result.get("unsupported_steps") else "",  # 说明
-    }  # 返回
+    """单一 ReAct：父图 State → run_react → 输出转回父图。"""
+    model = model if model is not None else get_chat_model()  # 缺省取统一入口
+    if model is None:  # 无模型
+        return {  # 降级
+            "answer": "已尝试，但未能完成，请换一种方式描述。",  # 兜底话术
+            "fallback_used": True,  # 标记
+            "fragments": [],  # 无引用
+            "note": "未完全匹配到合适路径，已尽力完成。",  # 说明
+        }  # 返回
+    return await run_react(state, model=model)  # 单一 ReAct

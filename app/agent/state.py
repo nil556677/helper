@@ -39,6 +39,10 @@ class ChatState(TypedDict, total=False):  # 图状态（字段都可缺省）
     rule_hits: list[dict[str, Any]]  # 规则层命中明细（可观测）
     semantic_recall: dict[str, Any]  # SemanticRecall 的 JSON 形态（语义层只写）
 
+    # 防循环追问（兜底 ReAct 护栏）
+    intent_confirmed: bool  # 意图是否已确认（真 → 不再"信息不足→追问"）
+    clarify_count: int  # 本会话 agent 追问次数（超上限即熔断）
+
     # 澄清（semantic_miss 出口，收敛闭环）
     clarify_options: dict[str, Any]  # ClarifyOptions 的 JSON 形态
     clarify_attempted: bool  # 是否尝试过澄清（限轮次用）

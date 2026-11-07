@@ -1,0 +1,172 @@
+"""兜底单一 ReAct agent：可调 天气/时间/本地资料检索 3 个工具。
+
+替代原「计划→执行」子图：不再 planner/replanner 多步规划，直接用 `create_agent`（React）
+带完整记忆 + 候选线索 决策。带去人所有不确定（代指/含糊/未命中/多轮）。
+
+护栏（防追问循环）：
+- `intent_confirmed`：意图已确认 → 不再进"信息不足→追问"，直接执行；
+- `clarify_count`：最多追问 1 次；超过 → 强制按已有信息作答或诚实说明；
+- 全程消息列表保留，工具结果如实回填，失败如实降级（不编造）。
+"""
+
+from __future__ import annotations  # 延迟求值注解
+
+from functools import lru_cache  # 进程级缓存（graph 构建只做一次）
+from typing import Any  # 任意值
+
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # 消息类型
+
+from app.agent.agent_builder import build_react_agent  # 官方 ReAct 构造
+from app.agent.context import current_run  # 当前 run（发 TOOL 事件）
+from app.agent.events import tool as tool_event  # 工具事件
+from app.agent.tools.catalog import tool_catalog  # 工具目录（单一来源）
+
+#: 兜底 agent 可调的工具名（天气/时间/本地资料检索）。
+TOOL_NAMES: tuple[str, ...] = ("current_time", "query_weather", "search_knowledge_base")  # 3 工具
+
+#: 工具名 → UI variant（时间线图标归类）。
+_VARIANT: dict[str, str] = {"current_time": "time", "query_weather": "weather", "search_knowledge_base": "search"}  # 变体
+
+#: 说话者标签（多轮记忆格式化用）。
+_MAX_TURNS = 6  # 最多带最近 6 轮记忆
+
+
+def _build_graph(model: Any, prompt: str) -> Any:  # 构造 ReAct 图
+    """模型实例 + 系统提示 → 编译好的 ReAct 图。模型可能不可哈希，不缓存。"""
+    catalog = tool_catalog()  # 工具目录
+    tools = [catalog[name] for name in TOOL_NAMES if name in catalog]  # 取 3 工具
+    return build_react_agent(  # 官方构造（含取消/PII/限额中间件）
+        model,  # 模型
+        tools,  # 工具
+        prompt,  # 系统提示
+        run_limit=6,  # 步数上限（防死循环）
+        name="fallback_react",  # 名称
+    )  # 返回图
+
+
+def _format_memory(state: dict[str, Any]) -> str:  # 把对话历史格式成文本
+    """只带最近几轮的用户/助手问答（简要）——agent 的"完整记忆"。"""
+    turns = list(state.get("turns") or [])[-_MAX_TURNS:]  # 最近几轮
+    lines: list[str] = []  # 行
+    for turn in turns:  # 逐轮
+        if not isinstance(turn, dict):  # 坏数据
+            continue  # 跳过
+        q = str(turn.get("question") or "")  # 用户问题
+        a = str(turn.get("answer") or "")  # 助手回答
+        if q:  # 有问题
+            lines.append(f"用户：{q}")  # 用户行
+        if a:  # 有答
+            lines.append(f"助手：{a[:120]}")  # 助手行（截断）
+    return "\n".join(lines) if lines else "（无历史对话）"  # 返回
+
+
+def _candidate_hint(state: dict[str, Any]) -> str:  # 语义候选线索
+    """语义层找出的候选方向（route+score），给 agent 参考，不盲从。"""
+    recall = state.get("semantic_recall") or {}  # 语义召回
+    candidates = recall.get("candidates") if isinstance(recall, dict) else []  # 候选
+    if not candidates:  # 无候选
+        return "（语义层未匹配到明确功能）"  # miss 标记
+    parts = [f"{c.get('route')}({c.get('score', 0):.2f})" for c in candidates if isinstance(c, dict)]  # 候选串
+    return "、".join(parts) or "（无候选）"  # 返回候选串
+
+
+def _system_prompt(state: dict[str, Any]) -> str:  # 系统提示（含预算/防循环）
+    """可控的兜底 agent 规则。"""
+    return (  # 提示
+        "你是通用助手。可用三个工具："
+        "current_time（查当前时间）、query_weather（查某城市天气）、"
+        "search_knowledge_base（本地资料检索，多用途）。\n"
+        "会根据系统给的『候选方向』和对话记忆判断该用哪个工具，或直接作答。\n"
+        "规则：\n"
+        "1. 信息不足确实无法判断时，**最多问用户一次**补充（工具之外直接提问）。\n"
+        "2. 问过一次并得到答复后，**必须据此作答或调工具，不得重复追问同一件事**。\n"
+        "3. 若已确认意图（系统标注『意图已确认』），直接执行，不要再确认。\n"
+        "4. 找不到/库里没有时，**诚实说明**，可提示可用方向（时间/天气/本地资料）；绝不编造。\n"
+        "5. 工具失败就如实说明，不假装成功。"
+    )  # 提示结束
+
+
+def _user_message(state: dict[str, Any]) -> str:  # 组装单条 human（记忆+候选+预算）
+    """把候选线索、对话记忆、意图确认状态、追问预算一起给 agent。"""
+    question = str(state.get("question") or "")  # 当前问题
+    confirmed = bool(state.get("intent_confirmed"))  # 意图是否已确认
+    clarify_count = int(state.get("clarify_count") or 0)  # 已追问次数
+    seg: list[str] = []  # 段
+    seg.append(f"候选方向（仅供参考，不盲从）：{_candidate_hint(state)}")  # 候选
+    seg.append(f"对话记忆：\n{_format_memory(state)}")  # 记忆
+    seg.append(f"意图已确认：{confirmed}；已追问次数：{clarify_count}（>1 严禁再追问）")  # 预算
+    if clarify_count >= 1:  # 已问过一次 → 强约束禁止再问
+        seg.append("⚠ 你已追问过用户；这次必须直接作答或诚实说明，严禁再次提问。")  # 强约束
+    if confirmed:  # 意图已确认 → 直接执行
+        seg.append("意图已确认：直接执行请求，不要进行任何二次确认。")  # 强约束
+    seg.append(f"当前问题：{question}")  # 问题
+    return "\n\n".join(seg)  # 返回
+
+
+def _message_text(msg: Any) -> str:  # 取消息文本
+    """AIMessage/ToolMessage 的 content 转字符串。"""
+    try:  # 兼容不同 content 形态
+        content = getattr(msg, "content", "")  # 内容
+        if isinstance(content, (list, tuple)):  # 多段
+            return " ".join(str(c.get("text") or "") for c in content if isinstance(c, dict))  # 拼
+        return str(content or "")  # 字符串
+    except Exception:  # 坏内容
+        return ""  # 空
+
+
+def _is_question(text: str) -> bool:  # 判定终答是否像"提问"（用于防循环计数）
+    """短句子以 ？/? 结尾 → 视为追问，递增 clarify_count。"""
+    t = str(text or "").strip()  # 去空白
+    if not t:  # 空
+        return False  # 非提问
+    if not t.endswith(("？", "?")):  # 无问号
+        return False  # 非提问
+    return len(t) <= 60  # 短句才算（长句带问号是回答）
+
+
+async def run_react(  # 跑单一 ReAct 兜底
+    state: dict[str, Any],  # 父图 State
+    *,
+    model: Any | None = None,  # chat_model
+) -> dict[str, Any]:  # 写回父图的更新
+    """构造（缓存）ReAct → astream 跑 → 回填答案；工具调用发 TOOL 事件。"""
+    assert model is not None, "兜底 ReAct 需要可用模型"  # 无模型不兜底（走 general/降级））
+    graph = _build_graph(model, _system_prompt(state))  # 图（缓存）
+    messages = [HumanMessage(content=_user_message(state))]  # 单条 human（含全部上下文））
+    run = current_run()  # 事件出口
+    result = await graph.ainvoke({"messages": messages})  # 跑一轮（到终态））
+    # —— 后置：从最终消息里回放工具调用 → TOOL 事件（时间线可见）——
+    if run is not None:  # 有事件出口
+        for msg in result.get("messages", []):  # 逐条（保持顺序））
+            if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):  # 模型要调工具
+                for tc in msg.tool_calls:  # 逐个调用
+                    tname = str(tc.get("name") or "")  # 工具名
+                    run.emit(tool_event(name=tname, status="running", variant=_VARIANT.get(tname, "")))  # 运行中
+            elif isinstance(msg, ToolMessage):  # 工具结果
+                tname = str(msg.name or "")  # 工具名
+                out = _message_text(msg)[:200]  # 输出摘要
+                failed = bool(msg.status and msg.status != "success")  # 是否失败
+                run.emit(tool_event(  # 结果事件
+                    name=tname,  # 工具名
+                    status="failed" if failed else "done",  # 状态
+                    detail=out[:120],  # 摘要
+                    variant=_VARIANT.get(tname, ""),  # 变体
+                    output=out,  # 输出
+                ))  # 发送结束
+    answer = ""  # 最终答案
+    for msg in reversed(result.get("messages", [])):  # 从后往前找助手最终文本
+        if isinstance(msg, AIMessage) and not getattr(msg, "tool_calls", None):  # 无工具调用的 AIMessage
+            answer = _message_text(msg)  # 即最终答复
+            break  # 停
+    # —— 防循环：终答是"提问"则记一次追问（下一轮 encode_count+1 → 熔断）——
+    new_clarify = int(state.get("clarify_count") or 0)  # 当前计数
+    if _is_question(answer) and not bool(state.get("intent_confirmed")):  # 追问且未确认意图
+        new_clarify += 1  # 追问次数 +1
+    return {  # 写回父图
+        "answer": answer or "已尝试，但未能完成，请换一种方式描述。",  # 兜底话术
+        "fallback_used": True,  # 标记
+        "clarify_count": new_clarify,  # 喂追计数（供下一轮熔断）
+        "intent_confirmed": bool(state.get("intent_confirmed")),  # 保留意图确认态
+        "fragments": [],  # 兜底不产引用（检索工具结果在答案里）
+        "note": "",  # 说明
+    }  # 返回
