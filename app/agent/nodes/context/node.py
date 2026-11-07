@@ -93,4 +93,13 @@ async def load_context(state: dict[str, Any], config: RunnableConfig) -> dict[st
             )  # emit 结束
         kept_ids = {int(item["id"]) for item in messages if "id" in item}  # 裁剪后保留的轮次 id
         turns = [t for t in turns if t.status is TurnStatus.DONE and int(t.turn_id) in kept_ids]  # 只留保留轮次
-    return {"turns": [t.model_dump(mode="json") for t in turns], "summary": summary_text}  # 写回
+    steps = [t for t in turns]  # 候选（内存循环反推用）
+    from app.agent.fallback.agent import guard_from_memory  # 跨轮护栏反推
+
+    clarify_count, confirmed = guard_from_memory(steps)  # 从记忆反推(追问数/是否已确认)
+    return {  # 写回（含跨轮护栏）
+        "turns": [t.model_dump(mode="json") for t in turns],  # 轮次
+        "summary": summary_text,  # 摘要
+        "clarify_count": int(state.get("clarify_count") or 0) or clarify_count,  # 追问计数（记忆反推，取大）
+        "intent_confirmed": bool(state.get("intent_confirmed")) or confirmed,  # 意图确认（记忆反推）
+    }  # 返回

@@ -201,3 +201,27 @@ def test_empty_answer_falls_back() -> None:  # 空终答 → 兜底话术
     finally:
         monkeypatch.undo()
     assert out["answer"]  # 非空兜底话术
+
+
+def test_guard_derive_from_memory() -> None:  # 跨轮护栏：记忆反推追问数/确认态
+    from langchain_core.messages import AIMessage as _A  # 复用消息（构造 Turn 用）
+
+    class _T:  # 假 Turn
+        def __init__(self, question, answer):  # 字段
+            self.question = question  # 问题
+            self.answer = answer  # 回答
+
+    # 场景1：agent 问过一次，用户补充 → 已确认、追问=1
+    turns = [_T("什么", "您想查天气还是资料？"), _T("查天气", "好，成都天气多云。")]  # 追问后用户答复
+    count, confirmed = agent_mod.guard_from_memory(turns)
+    assert count == 1  # 一次追问
+    assert confirmed is True  # 已确认
+
+    # 场景2：只有一次追问，还没答复 → 未确认，追问=1
+    turns2 = [_T("什么", "您想查哪方面？")]  # 仅追问
+    c2, f2 = agent_mod.guard_from_memory(turns2)
+    assert c2 == 1 and f2 is False  # 未确认
+
+    # 场景3：正常运行（无追问）→ 0/False
+    c3, f3 = agent_mod.guard_from_memory([_T("年假怎么算", "年假按累计工龄折算。")])
+    assert c3 == 0 and f3 is False  # 未追问未确认

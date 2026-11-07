@@ -124,6 +124,26 @@ def _is_question(text: str) -> bool:  # 判定终答是否像"提问"（用于�
     return len(t) <= 60  # 短句才算（长句带问号是回答）
 
 
+def guard_from_memory(turns: list[Any]) -> tuple[int, bool]:  # 从对话记忆反推护栏
+    """跨轮次防循环：从历史（Turn 列表）推出 clarify_count / intent_confirmed。
+
+    记忆里每一条"短句提问"式助手回答 = 一次追问；一旦某轮被追问、后面又有新的用户轮，
+    说明用户已答复 → 意图已确认 → 后续不得再重复询问。
+    """
+    count = 0  # 追问次数
+    confirmed = False  # 是否已确认
+    asked_before = False  # 上一轮是否追问
+    for turn in turns or []:  # 逐轮
+        answer = str(getattr(turn, "answer", "") or "") if not isinstance(turn, dict) else str(turn.get("answer") or "")  # 助手回答
+        if _is_question(answer):  # 本轮是追问
+            count += 1  # 计数
+            asked_before = True  # 记录
+        elif asked_before:  # 被问过一次、这轮是用户在补信息
+            confirmed = True  # 意图确认
+            asked_before = False  # 复位
+    return count, confirmed  # 返回
+
+
 async def run_react(  # 跑单一 ReAct 兜底
     state: dict[str, Any],  # 父图 State
     *,
