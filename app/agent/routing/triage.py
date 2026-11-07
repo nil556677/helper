@@ -67,8 +67,8 @@ def decide_triage(  # 纯函数：产出统一执行计划
     # 2) 意图判定
     if kind == "action":  # 操作意图（本期无写工具）
         return TriageDecision(intent="action", domain=domain, path_type="unsupported", escalate_reason="no_action_capability", **extras)  # 显式不支持
-    if kind == "clarify":  # 已判定需澄清
-        return TriageDecision(intent="clarify", domain=domain, path_type="clarify", **extras)  # 澄清
+    if kind == "clarify":  # 需澄清 → 交给兜底 ReAct（由 agent 追问或诚实说明），不再弹窗
+        return TriageDecision(intent="query", domain=domain, path_type="agentic", agent="knowledge_agent", escalate_reason="clarify_by_agent", **extras)  # agent 承担澄清
     # query
     if not has_route and not escalated:  # 没有固定路径可直连 → 交给 agentic 专家
         return TriageDecision(intent="query", domain=domain, path_type="agentic", agent="knowledge_agent", escalate_reason="no_fixed_path", **extras)  # 专家子图

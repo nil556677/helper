@@ -22,7 +22,8 @@ def test_query_paths() -> None:  # 查询分诊
 
 def test_action_and_clarify() -> None:  # 操作/澄清
     assert decide_triage("退款", _intent("action"), {}).path_type == "unsupported"  # 本期无写工具
-    assert decide_triage("帮我", _intent("clarify"), {}).path_type == "clarify"  # 澄清
+    decided = decide_triage("帮我", _intent("clarify"), {})  # 需澄清
+    assert decided.path_type == "agentic"  # 澄清交给兜底 ReAct（agent 追问/诚实），不再弹窗
 
 
 def test_flags_short_circuit() -> None:  # flags 硬约束
@@ -61,4 +62,4 @@ def test_triage_node_and_edge() -> None:  # 节点 + 边
     assert out["triage"]["path_type"] == "agentic"  # 路径
     assert after_triage(out) == "llm_fallback"  # 边
     empty = triage_node({"question": "x"})  # 无意图
-    assert empty["triage"]["path_type"] == "clarify"  # 默认澄清
+    assert empty["triage"]["path_type"] == "agentic"  # 默认交给 agent（澄清由 agent 承担）
