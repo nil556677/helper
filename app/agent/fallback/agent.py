@@ -129,9 +129,13 @@ async def run_react(  # 跑单一 ReAct 兜底
     *,
     model: Any | None = None,  # chat_model
 ) -> dict[str, Any]:  # 写回父图的更新
-    """构造（缓存）ReAct → astream 跑 → 回填答案；工具调用发 TOOL 事件。"""
-    assert model is not None, "兜底 ReAct 需要可用模型"  # 无模型不兜底（走 general/降级））
-    graph = _build_graph(model, _system_prompt(state))  # 图（缓存）
+    """构造 ReAct → 跑 → 回填答案；工具调用发 TOOL 事件；防循环追问。"""
+    assert model is not None, "兜底 ReAct 需要可用模型"  # 无模型不兜底（走 general/降级）
+    # 跟进轮：只要此前已追问过（clarify_count>0）→ 本轮就是用户答复 → 意图已确认，直接执行
+    prior_asked = int(state.get("clarify_count") or 0) > 0  # 之前是否问过
+    confirmed = bool(state.get("intent_confirmed")) or prior_asked  # 已确认（含"正在答复追问"）
+    state = {**state, "intent_confirmed": confirmed}  # 覆盖意图确认态
+    graph = _build_graph(model, _system_prompt(state))  # 图（不缓存））
     messages = [HumanMessage(content=_user_message(state))]  # 单条 human（含全部上下文））
     run = current_run()  # 事件出口
     result = await graph.ainvoke({"messages": messages})  # 跑一轮（到终态））
@@ -158,15 +162,18 @@ async def run_react(  # 跑单一 ReAct 兜底
         if isinstance(msg, AIMessage) and not getattr(msg, "tool_calls", None):  # 无工具调用的 AIMessage
             answer = _message_text(msg)  # 即最终答复
             break  # 停
-    # —— 防循环：终答是"提问"则记一次追问（下一轮 encode_count+1 → 熔断）——
+    # —— 防循环：终答是"提问"则记一次追问；已确认还问 → 改写为诚实收尾，避免死循环 ——
     new_clarify = int(state.get("clarify_count") or 0)  # 当前计数
-    if _is_question(answer) and not bool(state.get("intent_confirmed")):  # 追问且未确认意图
-        new_clarify += 1  # 追问次数 +1
+    if _is_question(answer):  # 是提问
+        if confirmed:  # 已确认还问（第二轮再问）→ 强制收尾，不许再循环
+            answer = "信息仍不够具体，请换一种更明确的说法再试。"  # 诚实收尾
+        else:  # 首次追问
+            new_clarify += 1  # 记一次（下一轮 confirmed → 熔断）
     return {  # 写回父图
         "answer": answer or "已尝试，但未能完成，请换一种方式描述。",  # 兜底话术
         "fallback_used": True,  # 标记
         "clarify_count": new_clarify,  # 喂追计数（供下一轮熔断）
-        "intent_confirmed": bool(state.get("intent_confirmed")),  # 保留意图确认态
+        "intent_confirmed": confirmed,  # 意图确认态（跟进轮置真）
         "fragments": [],  # 兜底不产引用（检索工具结果在答案里）
         "note": "",  # 说明
     }  # 返回

@@ -104,6 +104,19 @@ def test_intent_confirmed_no_increment() -> None:  # 防循环：已确认意图
     assert out["clarify_count"] == 0  # 已确认不递增
 
 
+def test_confirmed_reask_overridden() -> None:  # 防循环：已确认还追问 → 强制诚实收尾，不再循环
+    msg = AIMessage(content="那你到底要查哪个？")  # 第二次还问
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(agent_mod, "_build_graph", lambda m, p: _fake_graph([msg]))
+    try:
+        out = asyncio.run(agent_mod.run_react({"question": "q", "clarify_count": 1}, model=object()))  # 上一轮已追问 → confirmed
+    finally:
+        monkeypatch.undo()
+    assert not out["answer"].endswith(("？", "?"))  # 不再以提问收尾
+    assert "换一种" in out["answer"]  # 诚实收尾话术
+    assert out["clarify_count"] == 1  # 不无限累加
+
+
 def test_user_message_contains_candidate() -> None:  # 候选带过去
     captured = {}  # 捕获输入
 
