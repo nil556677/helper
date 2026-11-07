@@ -26,7 +26,7 @@ from app.rag import hard  # 硬要素（校验"有没有改丢"）
 from app.rag.normalize import normalize  # 规则归一化
 
 #: 提示词版本：改提示词必须改它（进缓存键）。
-PROMPT_VERSION = "rewrite-v1"  # 版本号
+PROMPT_VERSION = "rewrite-v2"  # 版本号
 
 #: 最多产出几条（含原句）。
 MAX_QUERIES = 3  # 上限
@@ -51,6 +51,31 @@ _VAGUE = ("怎么办", "怎么弄", "如何", "什么要求", "有哪些", "需�
 
 #: 实体线索：数字、引号、书名号。
 _ENTITY = re.compile(r"\d|「|」|“|”|\"|《|》")  # 实体线索
+
+#: 业务英文术语 → 中文（简单改写用规则，不进 LLM；只放高置信映射）。
+_TERMS: dict[str, str] = {  # 术语词典
+    "annual leave": "年假",  # 年假
+    "sick leave": "病假",  # 病假
+    "overtime": "加班",  # 加班
+    "salary": "薪资",  # 薪资
+    "bonus": "奖金",  # 奖金
+    "probation": "试用期",  # 试用期
+    "paternity leave": "陪产假",  # 陪产假
+    "maternity leave": "产假",  # 产假
+    "salary advance": "预支工资",  # 预支
+}  # 词典结束
+
+#: 拉丁字母词检测：跨语言/术语判定用。
+_LATIN = re.compile(r"[A-Za-z]{2,}")  # 拉丁词
+
+#: 含糊动词（意图不明）：怎么+动作动词 / 如何 / 能不能 / 要不要。
+#: 排除"怎么样"这类疑问语气（目标明确时不写改）。
+_VAGUE_RE = re.compile(r"怎么(?=办|做|清|弄|搞|算|处理|申请|重置|设置|结|续|查|标记)|如何|能不能|要不要")  # 含糊
+
+
+def _latin_tokens(text: str) -> list[str]:  # 取拉丁词（小写去重）
+    """抽出 query 里的英文词，用于跨语言判定。"""
+    return list({word.lower() for word in _LATIN.findall(text)})  # 小写去重
 
 SYSTEM_PROMPT = get(REWRITE_SYSTEM_UID).render()  # 渲染统一改写提示
 
@@ -84,17 +109,38 @@ class RewriteResult:
 
 
 def trigger(question: str, history: list[dict[str, Any]] | None) -> str:  # 是否要改写
-    """返回触发原因；空串表示不需要改写（省一次模型调用）。"""
+    """返回触发原因；空串表示不需要改写（省一次模型调用）。
+
+    生产分层（简单→规则，复杂→LLM）：
+    - term：含业务英文术语 → 规则直接补中文等价，不进 LLM
+    - cross_lang：整句以外文为主 → LLM 双语/翻译
+    - pronoun / vague / multi_turn：意图含糊或代指 → LLM 消歧/补全
+    """
     text = str(question or "").strip()  # 原问题
     if not text:  # 空
         return ""  # 不改
+    tokens = _latin_tokens(text)  # 英文词
+    known_term = [eng for eng in _TERMS if re.search(rf"\b{re.escape(eng)}\b", text, re.IGNORECASE)]  # 命中术语(含多词)
+    if known_term:  # 业务术语命中
+        return "term"  # 规则改
+    if tokens and sum(len(w) for w in tokens) >= 4:  # 拉丁字母占主体（整句外文/夹杂）
+        return "cross_lang"  # LLM 双语
+    if any(word in text for word in _PRONOUNS) and not _ENTITY.search(text):  # 有指代且无实体
+        return "pronoun"  # LLM 补全
+    if _VAGUE_RE.search(text) and not _ENTITY.search(text):  # 含糊动词（排除"怎么样"）
+        return "vague"  # LLM 消歧
     if history:  # 多轮
-        return "multi_turn"  # 需要补主语
-    if any(word in text for word in _PRONOUNS):  # 有指代词
-        return "pronoun"  # 需要补
-    if any(word in text for word in _VAGUE) and not _ENTITY.search(text):  # 含糊且无实体
-        return "vague"  # 需要补成要素式
+        return "multi_turn"  # LLM 补主语
     return ""  # 不改
+
+
+def _term_replace(text: str) -> str:  # 规则：术语→中文等价
+    """把 query 里命中的英文术语替换成中文；无命中原样返回。"""
+    out = text  # 逐步替换
+    for eng, zh in sorted(_TERMS.items(), key=lambda kv: -len(kv[0])):  # 长词优先
+        pattern = re.compile(rf"\b{re.escape(eng)}\b", re.IGNORECASE)  # 词边界
+        out = pattern.sub(zh, out)  # 替换
+    return out  # 返回
 
 
 def _cache_key(question: str, history: list[dict[str, Any]] | None, model: str) -> str:  # 缓存键
@@ -168,12 +214,17 @@ async def rewrite(  # 主入口（异步，走统一网关）
     *,
     history: list[dict[str, Any]] | None = None,
 ) -> RewriteResult:
-    """归一化 → 触发判断 → 网关(model) → 校验 → 缓存；任何失败都回退原句。"""
+    """归一化 → 触发判断 → 规则(术语) 或 网关(model) → 校验 → 缓存；任何失败都回退原句。"""
     original = normalize(question)  # 规则归一化（不花模型）
     reason = trigger(original, history)  # 要不要改
     if not reason:  # 不需要
         return RewriteResult([original], "skipped")  # 原句
     name = "llm"  # 槽位名（网关走 llm 槽）
+    # —— 规则层：业务术语 → 直接补中文等价，不进 LLM（简单改写）——
+    if reason == "term":  # 规则能确定等价
+        replaced = _term_replace(original)  # 替换
+        if replaced and replaced != original:  # 确实变了
+            return RewriteResult([original, replaced], "term_map", "rule")  # 规则改（省一次模型）
     key = _cache_key(original, history, name)  # 缓存键
     cached = _read_cache(key)  # 读缓存
     if cached:  # 命中
