@@ -75,10 +75,13 @@ def _hit_to_doc(hit: dict[str, Any]) -> Document:  # 字典转文档
 
 
 def embed_query(text: str) -> list[float]:  # 查询向量
-    """bge-m3 单条嵌入（复用单例嵌入器）。"""
+    """bge-m3 单条嵌入（统一归一后；与入库侧同源）。
+    """
+    from app.rag.normalize import normalize  # 统一归一（入库/查询一套）
+
     dense, _sparse, _sparse_emb = _stores()  # 取 store
     del dense, _sparse  # 只借嵌入器
-    return [float(value) for value in _EMBED.embed_query(text)]  # 转 list
+    return [float(value) for value in _EMBED.embed_query(normalize(text))]  # 归一后嵌入
 
 
 def dense_search(vector: list[float], k: int = DENSE_CANDIDATES) -> list[dict[str, Any]]:  # 语义召回
@@ -109,7 +112,10 @@ def dense_search(vector: list[float], k: int = DENSE_CANDIDATES) -> list[dict[st
 
 
 def sparse_search(text: str, k: int = SPARSE_CANDIDATES) -> list[dict[str, Any]]:  # 关键词召回
-    """BM25；查询无词直接返回空。"""
+    """BM25；查询无词直接返回空。查询先统一归一（与入库词项同源）。"""
+    from app.rag.normalize import normalize  # 统一归一（入库/查询一套）
+
+    text = normalize(text)  # 归一后检索（才能对齐库内半角词项）
     _dense, sparse, sparse_emb = _stores()  # 取 sparse
     if not sparse_emb.has_terms(text):  # 没有可检索词
         return []  # 空

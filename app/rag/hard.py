@@ -28,8 +28,13 @@ _UNIT = {"亿": 100000000, "亿元": 100000000, "万": 10000, "万元": 10000, "
 
 
 def extract(text: str) -> dict[str, list[str]]:  # 抽取
-    """抽出三类要素（去重保序）：`{"clause": [...], "amount": [...], "date": [...]}`。"""
-    body = str(text or "")  # 原文本
+    """抽出三类要素（去重保序）：`{"clause": [...], "amount": [...], "date": [...]}`。
+
+    统一归一在前（全半角/中文数字/日期/空白），让「五万 / 5万 / 50000」与「2024年3月」对齐。
+    """
+    from app.rag.normalize import normalize  # 统一归一（入库同源）
+
+    body = normalize(text)  # 归一后再抽（与入库侧同一套）
     clauses: list[str] = []  # 条款号
     for pattern in (_CLAUSE, _CLAUSE_BARE):  # 两种写法
         for match in pattern.finditer(body):  # 逐个

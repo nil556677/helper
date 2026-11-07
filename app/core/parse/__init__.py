@@ -199,10 +199,14 @@ def _raw_units(path: Path, suffix: str, name: str | None) -> Iterator[Unit]:
 def _clean_unit(unit: Unit) -> Unit:
     """清洗单元里每个块的文本（行号/bbox 不受影响：清洗不动换行、也不动行结构）。
 
+    顺序：先除不可见噪声，再做**统一归一**（全半角/中文数字/日期/空白）——
+    与查询侧同一套：func:`app.rag.normalize.normalize`，保证库内与查询 token/embedding 一致。
     用 ``replace`` 造新块而不是原地改：:class:`Block` 是 frozen 的，且同一块对象可能
     被上层持有；造新对象能保证"清洗前/后"两份不会互相污染。
     """
-    blocks = [replace(block, text=strip_invisible(block.text)) for block in unit.blocks]
+    from app.rag.normalize import normalize  # 入库侧统一归一（与查询同源）
+
+    blocks = [replace(block, text=normalize(strip_invisible(block.text))) for block in unit.blocks]
     return replace(unit, blocks=blocks)
 
 
