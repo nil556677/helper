@@ -45,8 +45,8 @@ def test_assess_pass() -> None:  # 达标
 
 async def test_fast_search_uses_runner() -> None:  # 编排调用唯一检索源
     class _Runner:  # 假运行器
-        async def run(self, query, *, top_k=6, rerank=True):  # 跑
-            del query, top_k, rerank  # 不用
+        async def run(self, query, *, profile="tool", top_k=6, rerank=True):  # 跑
+            del query, profile, top_k, rerank  # 不用
             return SimpleNamespace(evidence=_ev(0.9, 0.9, 0.9))  # 固定
 
     result = await fast_search(_Runner(), "A 和 B 对比", top_k=3)  # 快捷（单源问多源）

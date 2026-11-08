@@ -77,7 +77,7 @@ def clarify_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  
         bump(run.metrics, "clarify_count")  # 澄清次数
     return {  # 写回
 
-    
+
         "clarify_options": options.model_dump(mode="json"),  # 选项
         "clarify_attempted": True,  # 已澄清
         "clarify_attempt": attempt,  # 次数

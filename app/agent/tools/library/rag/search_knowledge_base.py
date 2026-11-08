@@ -64,7 +64,7 @@ class KnowledgeQuery(BaseModel):  # 参数契约
 )  # 装饰结束
 async def search_knowledge_base(query: str, top_k: int = 6):  # 异步纯函数（返回 data）
     """成功返回 data（含编号文本/证据/门限/依据）；检索失败抛给 tool_spec 转带内可重试。"""
-    result = await _runner().run(query, top_k=int(top_k))  # 跑检索链路（异常冒泡 -> execution.failed）
+    result = await _runner().run(query, profile="tool", top_k=int(top_k))  # 跑检索链路（工具档：轻、零 LLM）
     return _data(result)  # 固定 data 结构
 
 
@@ -100,7 +100,7 @@ class DeepQuery(BaseModel):  # 深度检索参数
 )  # 装饰结束
 async def search_hybrid(query: str, top_k: int = 10):  # 混合检索
     """唯一底层仍是 nodes/rag；这里只是换召回规模/重排。"""
-    result = await _runner().run(query, top_k=int(top_k), rerank=True)  # 同一检索源
+    result = await _runner().run(query, profile="tool", top_k=int(top_k), rerank=True)  # 同一检索源（工具档）
     return _data(result)  # 统一结构
 
 
@@ -111,5 +111,5 @@ async def search_hybrid(query: str, top_k: int = 10):  # 混合检索
 )  # 装饰结束
 async def search_deep(query: str, top_k: int = 20):  # 深度检索
     """唯一底层仍是 nodes/rag；只放大 top_k。"""
-    result = await _runner().run(query, top_k=int(top_k), rerank=True)  # 同一检索源
+    result = await _runner().run(query, profile="deep", top_k=int(top_k), rerank=True)  # 同一检索源（深档）
     return _data(result)  # 统一结构

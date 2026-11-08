@@ -21,3 +21,4 @@ class RagState(TypedDict, total=False):  # RAG 子图状态
     evidence: list[dict]  # 最终证据
     errors: list[dict]  # 非致命错误
     plan: Any  # 检索预算（RetrievalPlan；缺省按 top_k 反推）
+    profile: str  # 检索档位（tool/full/deep；决定装配哪些路）

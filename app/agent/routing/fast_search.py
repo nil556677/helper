@@ -28,7 +28,7 @@ async def fast_search(  # 单次快捷检索
     rerank: bool = True,  # 精排
 ) -> FastSearchResult:  # 结果
     """跑一次检索并判定质量；不做多轮、不调模型。"""
-    result = await runner.run(query, top_k=int(top_k), rerank=bool(rerank))  # 唯一检索源
+    result = await runner.run(query, profile="tool", top_k=int(top_k), rerank=bool(rerank))  # 唯一检索源（工具档）
     evidence = list(getattr(result, "evidence", []) or [])  # 证据
     escalate, reason = assess(evidence, query)  # 判定
     return FastSearchResult(evidence=evidence, escalate=escalate, escalate_reason=reason)  # 返回

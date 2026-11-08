@@ -36,15 +36,21 @@ class RagRunner:  # 子图运行器
         self,  # 实例
         question: str,  # 问题
         *,
+        profile: str = "tool",  # 检索档位：tool(轻)/full(全)/deep(深)，决定装配哪些路
         top_k: int = 6,  # 证据数
         rerank: bool = True,  # 质量优先默认精排
-        plan: Any | None = None,  # 检索预算（缺省按 top_k 反推）
+        plan: Any | None = None,  # 检索预算（缺省按档位/条数反推）
     ) -> RagResult:  # 结果
-        """不挂 checkpointer；中间态不落库。检索结果按问 10 分钟内幂等。"""
-        from app.agent.routing.retrieval_budget import plan_for_top_k  # 反推
+        """不挂 checkpointer；中间态不落库。检索结果按 (问,档位,条数) 10 分钟内幂等。
 
-        budget = plan if plan is not None else plan_for_top_k(int(top_k))  # 预算
-        key = (question, int(top_k), bool(rerank), budget.level)  # 缓存键（含档位）
+        内核唯一的装配点：入口只传 profile，不各自编排检索。
+        """
+        from app.agent.routing.retrieval_budget import plan_for, plan_for_top_k  # 预算
+
+        budget = plan  # 预算
+        if budget is None:  # 未显式给
+            budget = plan_for(question) if profile == "full" else plan_for_top_k(int(top_k))  # 按档位反推
+        key = (question, int(top_k), bool(rerank), budget.level, str(profile))  # 缓存键（含档位）
         cached = _RETRIEVAL_CACHE.get(key)  # 命中检查
         if cached is not None:  # 窗口内命中
             return cached  # 直接返回（幂等）
@@ -53,6 +59,7 @@ class RagRunner:  # 子图运行器
             "top_k": int(top_k),  # 证据数
             "rerank": bool(rerank),  # 精排开关
             "plan": budget,  # 检索预算（驱动各阶段参数与断崖切分）
+            "profile": str(profile),  # 档位（供子图按档装配）
         }  # 初始状态结束
         result = await self._graph.ainvoke(state)  # 跑子图
         evidence = list(result.get("evidence", []))  # 证据
