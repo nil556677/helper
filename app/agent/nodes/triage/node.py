@@ -75,6 +75,14 @@ def triage_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  #
                     decided_by="config",  # 用户选择
                 )  # 结束
                 return {"triage": decision.model_dump(mode="json"), "route": resolved.model_dump(mode="json")}  # 短路
+    # 需澄清且有可展示候选 → 仍走 clarify 弹窗（HITL 选候选）；无候选 → 交给 agent
+    if _intent_of(state).intent == "clarify":  # 澄清意图
+        recall = state.get("semantic_recall") if isinstance(state.get("semantic_recall"), dict) else {}  # 语义召回
+        candidates = recall.get("candidates") or []  # 候选
+        displayable = any(float((item or {}).get("score") or 0.0) >= 0.25 for item in candidates if isinstance(item, dict))  # 可展示
+        if displayable:  # 有候选可让用户选
+            decision = TriageDecision(intent="clarify", path_type="clarify")  # 弹窗澄清
+            return {"triage": _with_approval(decision)}  # 写回
     decision = decide_triage(  # 决策
         query,  # 问题
         _intent_of(state),  # 意图
@@ -84,7 +92,19 @@ def triage_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  #
         time_range=pre.get("time_range") if isinstance(pre, dict) else None,  # 时间范围
         last_failed=str(state.get("last_turn_status") or "") == "failed",  # 上轮失败
         has_route=bool(state.get("route")),  # 是否已有固定路径
+        dependency_agentic=bool(state.get("dependency_agentic")),  # 依赖链 LLM 兜底结论
     )  # 结束
+    # 参数完整性：按目标工具 args_schema 必填字段补 missing_entities（规则/查表）
+    route = state.get("route") if isinstance(state.get("route"), dict) else {}  # 已定路径
+    tools = list(route.get("tools") or [])  # 目标工具
+    if tools:  # 有工具才查
+        from app.agent.routing.args import missing_required  # 必填缺参
+
+        entities = pre.get("entities") if isinstance(pre.get("entities"), dict) else {}  # 实体包
+        merged = {**(entities.get("inherited") or {}), **(entities.get("explicit") or {})}  # 合并
+        extra = missing_required(tools, merged)  # 缺的必填
+        if extra:  # 有缺
+            decision.missing_entities = list(dict.fromkeys([*decision.missing_entities, *extra]))  # 合并去重
     return {"triage": _with_approval(decision)}  # 写回（补审批标记）
 
 

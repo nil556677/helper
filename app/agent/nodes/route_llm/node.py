@@ -26,9 +26,19 @@ def _model() -> Any | None:  # 取模型（统一走 llm.provider，测试注入
 
 
 async def route_llm_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
-    """读语义候选 → 轻量分类 → 写 `intent`；无条件边在此重算。"""
+    """读语义候选 → 轻量分类 → 写 `intent`；依赖链 LLM 兜底仅窄缝触发。"""
     del config  # 不用图配置
+    question = str(state.get("question") or "")  # 问题
     recall = state.get("semantic_recall") or {}  # 语义召回
     candidates = recall.get("candidates") if isinstance(recall, dict) else []  # 候选
-    decision: IntentDecision = await classify(str(state.get("question") or ""), candidates or [], _model())  # 分类
-    return {"intent": decision.model_dump(mode="json")}  # 写回
+    model = _model()  # 模型（可能 None）
+    decision: IntentDecision = await classify(question, candidates or [], model)  # 意图分类
+    # —— 依赖链 LLM 兜底：仅"词表未命中 + 已判 query"时补一次二分类 ——
+    dependency = False  # 默认不走多步
+    if decision.intent == "query":  # 只在查询意图下判依赖
+        from app.agent.routing.dependency import needs_agentic  # 依赖判定
+        from app.agent.routing.triage import AGENTIC_MARKERS, MULTI_MARKERS  # 词表
+
+        if not any(word in question for word in (*AGENTIC_MARKERS, *MULTI_MARKERS)):  # 词表未命中
+            dependency = await needs_agentic(question, model)  # LLM 兜底一次
+    return {"intent": decision.model_dump(mode="json"), "dependency_agentic": dependency}  # 写回

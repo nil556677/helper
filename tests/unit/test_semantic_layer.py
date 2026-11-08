@@ -96,7 +96,7 @@ def test_edges() -> None:  # 边函数
     assert after_rule({}) == "semantic_router"  # 未定
     assert after_semantic({"semantic_recall": {"decision": "direct"}}) == "dispatch_fixed"  # 直接
     assert after_semantic({"semantic_recall": {"decision": "ambiguous"}}) == "route_llm"  # LLM 兜底
-    assert after_semantic({"semantic_recall": {"decision": "miss"}}) == "clarify_or_end"  # 澄清
+    assert after_semantic({"semantic_recall": {"decision": "miss"}}) == "triage"  # miss → 后置分诊
     assert after_triage({"triage": {"path_type": "fast_single"}}) == "dispatch_fixed"  # 快速
     assert after_triage({"triage": {"path_type": "agentic"}}) == "llm_fallback"  # 专家
     assert after_triage({"triage": {"path_type": "clarify"}}) == "clarify_or_end"  # 澄清

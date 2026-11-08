@@ -63,15 +63,15 @@ def build_route_graph(*, checkpointer: Any = None) -> Any:  # 意图路由父图
         {"dispatch_fixed": "dispatch_fixed", "semantic_router": "semantic_router", "fallback": END},  # 映射（含 END 兜底）
     )  # 条件边结束
     graph.add_conditional_edges(  # 语义后分支（三态）
-        "semantic_router",  # 来源
-        after_semantic,  # 分支函数
-        {  # 映射
-            "dispatch_fixed": "dispatch_fixed",  # direct
-            "route_llm": "route_llm",  # ambiguous → LLM 兜底
-            "clarify_or_end": "clarify_or_end",  # miss
-            "fallback": END,  # 未知键兜底
-        },  # 映射结束
-    )  # 条件边结束
+            "semantic_router",  # 源
+            after_semantic,  # 分支函数
+            {  # 映射
+                "dispatch_fixed": "dispatch_fixed",  # direct
+                "route_llm": "route_llm",  # ambiguous → LLM 兜底
+                "triage": "triage",  # miss → 后置执行分诊
+                "fallback": END,  # 未知键兜底
+            },  # 映射结束
+        )  # 条件边结束
     graph.add_edge("route_llm", "triage")  # LLM 兜底后进入分诊
     graph.add_conditional_edges(  # 分诊后分支
         "triage",  # 来源

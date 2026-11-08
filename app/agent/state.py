@@ -27,6 +27,7 @@ class ChatState(TypedDict, total=False):  # 图状态（字段都可缺省）
     escalated_this_session: bool  # 本会话是否已升级过（防乒乓）
     last_turn_status: str  # 上一轮运行状态（done/failed/…，供重试判定）
     last_failed_question: str  # 上一轮失败的问题（前置分诊判"相似→重试"用）
+    dependency_agentic: bool  # 依赖链 LLM 兜底结论（规则词表未命中时上游判定）
     escalate_reason: str  # 快捷搜索质量不足的升级原因（空=不升级）
     verify: dict[str, Any]  # VerifyResult 的 JSON 形态（L5 校验）
     hitl_enabled: bool  # 是否启用 HITL（生产图带 checkpointer 时开）

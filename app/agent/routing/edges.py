@@ -34,7 +34,7 @@ def after_semantic(state: dict[str, Any]) -> str:  # 语义层之后
         return "dispatch_fixed"  # 固定路径
     if decision == "ambiguous":  # 有候选但分不出
         return "route_llm"  # 轻量 LLM 兜底
-    return "clarify_or_end"  # miss → 澄清/拒绝（不进 LLM）
+    return "triage"  # miss → 交后置执行分诊（统一决定 path_type，不直接进澄清）
 
 
 def after_dispatch(state: dict[str, Any]) -> str:  # 固定路径之后
