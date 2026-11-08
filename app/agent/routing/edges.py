@@ -7,7 +7,15 @@ from __future__ import annotations  # 延迟求值注解
 
 from typing import Any  # 任意值
 
-__all__ = ["after_clarify", "after_dispatch", "after_rule", "after_semantic", "after_triage"]  # 导出
+__all__ = ["after_clarify", "after_dispatch", "after_pretriage", "after_rule", "after_semantic", "after_triage"]  # 导出
+
+
+def after_pretriage(state: dict[str, Any]) -> str:  # 前置短路之后
+    """短路命中 → 直接去目标；未命中 → 进入三层路由。"""
+    pre = state.get("pretriage") or {}  # 前置结果
+    if isinstance(pre, dict) and pre.get("short_circuit") and pre.get("target"):  # 已短路
+        return str(pre["target"])  # 直接目标
+    return "rule_route"  # 走路由层
 
 
 def after_rule(state: dict[str, Any]) -> str:  # 规则层之后

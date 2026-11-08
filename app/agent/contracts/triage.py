@@ -103,6 +103,15 @@ class VerifyResult(BaseModel):  # L5 引用校验结果
     reasons: list[str] = Field(default_factory=list)  # 未通过原因
 
 
+class PreTriageResult(BaseModel):  # 前置短路分诊产物（路由之前，纯规则）
+    """有些请求根本不需要路由：结构化字段命中就直接给目标。"""
+
+    short_circuit: bool = False  # 是否已短路（跳过路由）
+    target: str = ""  # 短路目标节点名（dispatch_fixed / llm_fallback / general_agent / clarify_or_end）
+    reason: str = ""  # 短路原因（empty_input / too_long / injection / flag_* / pending_clarify）
+    retry_after_failure: bool = False  # 上一轮失败且相似（不短路，影响后置分诊）
+
+
 __all__ = [  # 对外导出
     "AccessContext",  # 接入上下文
     "EntityBundle",  # 实体包
@@ -110,6 +119,7 @@ __all__ = [  # 对外导出
     "IntentKind",  # 意图枚举
     "PathType",  # 路径枚举
     "Phase",  # 阶段枚举
+    "PreTriageResult",  # 前置短路分诊
     "PreprocessResult",  # 预处理产物
     "TimeRange",  # 时间范围
     "TriageDecision",  # 分诊决策

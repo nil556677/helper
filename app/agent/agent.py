@@ -13,12 +13,13 @@ from app.agent.nodes.fallback.node import llm_fallback_node  # 兜底子图
 from app.agent.nodes.finalize.node import finalize_node  # 收尾
 from app.agent.nodes.general.node import general_agent_node  # L4e 通用兜底
 from app.agent.nodes.preprocess.node import preprocess_node  # L1 预处理
+from app.agent.nodes.pretriage.node import pretriage_node  # 前置短路分诊
 from app.agent.nodes.route.node import rule_route_node  # 规则层
 from app.agent.nodes.route_llm.node import route_llm_node  # LLM 兜底
 from app.agent.nodes.semantic.node import semantic_node  # 语义层
 from app.agent.nodes.triage.node import triage_node  # L3 分诊
 from app.agent.nodes.verify.node import verify_node  # L5 校验
-from app.agent.routing.edges import after_clarify, after_dispatch, after_rule, after_semantic, after_triage  # 条件边
+from app.agent.routing.edges import after_clarify, after_dispatch, after_pretriage, after_rule, after_semantic, after_triage  # 条件边
 from app.agent.state import ChatState  # 状态
 
 
@@ -28,6 +29,7 @@ def build_route_graph(*, checkpointer: Any = None) -> Any:  # 意图路由父图
     graph = StateGraph(ChatState)  # 状态图
     graph.add_node("load_context", load_context)  # 上下文
     graph.add_node("preprocess", preprocess_node)  # L1 预处理
+    graph.add_node("pretriage", pretriage_node)  # 前置短路分诊（纯规则）
     graph.add_node("rule_route", rule_route_node)  # 规则层
     graph.add_node("semantic_router", semantic_node)  # 语义层
     graph.add_node("route_llm", route_llm_node)  # LLM 兜底分类
@@ -41,7 +43,20 @@ def build_route_graph(*, checkpointer: Any = None) -> Any:  # 意图路由父图
 
     graph.add_edge(START, "load_context")  # 入口
     graph.add_edge("load_context", "preprocess")  # 上下文到预处理
-    graph.add_edge("preprocess", "rule_route")  # 预处理到规则
+    graph.add_edge("preprocess", "pretriage")  # 预处理到前置分诊
+    graph.add_conditional_edges(  # 前置分诊：短路命中跳路由，未命中进入规则层
+        "pretriage",  # 来源
+        after_pretriage,  # 分支函数
+        {  # 映射
+            "dispatch_fixed": "dispatch_fixed",  # 命中快捷/补参/选择
+            "llm_fallback": "llm_fallback",  # 命中强 ReAct
+            "general_agent": "general_agent",  # 禁工具
+            "clarify_or_end": "clarify_or_end",  # 澄清/拒绝
+            "finalize": "finalize",  # 空/超长/注入拦截
+            "rule_route": "rule_route",  # 未命中 → 走路由
+            "fallback": END,  # 未知键兜底
+        },  # 映射结束
+    )  # 条件边结束
     graph.add_conditional_edges(  # 规则后分支
         "rule_route",  # 来源
         after_rule,  # 分支函数

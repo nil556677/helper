@@ -25,6 +25,7 @@ SIMPLE_NODE_EVENT: dict[str, RunEvent] = {  # 固定映射
     "rule_route": RunEvent.RETRIEVAL_DONE,  # 路由/检索阶段完成（retrieving → generating）
     "dispatch_fixed": RunEvent.GENERATION_DONE,  # 固定路径回答完成
     "llm_fallback": RunEvent.GENERATION_DONE,  # 兜底子图回答完成
+    "general_agent": RunEvent.GENERATION_DONE,  # 通用兜底回答完成
     "clarify_or_end": RunEvent.GENERATION_DONE,  # 澄清/拒绝（即最终回应）
     "finalize": RunEvent.FINALIZED,  # 收尾完成（finalizing → done）
 }  # 固定映射结束
@@ -42,4 +43,9 @@ def project_event(node: str, update: dict[str, Any] | None) -> RunEvent | None: 
         if str(route.get("next")) == DecisionTarget.ANSWER.value:  # 能生成
             return RunEvent.RETRIEVAL_DONE  # retrieving → generating
         return RunEvent.NO_EVIDENCE  # 无证据：retrieving → finalizing
+    if node == "pretriage":  # 前置短路：拦截类直接定稿，其余进入生成阶段
+        pre: dict[str, Any] = dict((update or {}).get("pretriage") or {})  # 前置结果
+        if pre.get("short_circuit") and str(pre.get("target")) == "finalize":  # 空/超长/注入
+            return RunEvent.NO_EVIDENCE  # retrieving → finalizing
+        return RunEvent.RETRIEVAL_DONE  # retrieving → generating（后续 rule_route 的同类事件会被 can() 挡掉）
     return SIMPLE_NODE_EVENT.get(node)  # 其余固定映射（不存在返回 None）
