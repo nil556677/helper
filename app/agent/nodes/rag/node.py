@@ -29,6 +29,7 @@ class RagResult:  # 子图结果
     selected_count: int = 0  # 证据数
     gate: dict[str, Any] = field(default_factory=dict)  # 门限判决（pass/weak/reject）
     profile: str = "tool"  # 实际使用的档位（观测）
+    paths: list[str] = field(default_factory=lambda: ["baseline"])  # 实际用到的召回/后处理路（观测）
 
 
 class RagRunner:  # 子图运行器
@@ -86,6 +87,7 @@ class RagRunner:  # 子图运行器
             selected_count=len(evidence),  # 证据数
             gate=dict(raw.get("gate") or {}),  # 门限判决
             profile=str(profile),  # 档位
+            paths=["baseline"],  # 基线一路
         )  # 映射结束
 
     async def _enhance(self, question: str, base: RagResult, top_k: int, rerank: bool, budget: Any) -> RagResult:  # full 档增强
@@ -129,6 +131,7 @@ class RagRunner:  # 子图运行器
             selected_count=len(evidence),  # 证据数
             gate=base.gate,  # 门限沿用基线
             profile="full",  # 档位
+            paths=["baseline", "multi_query", "rerank"] + (["hyde"] if hyde_hits else []),  # 实际路径（观测）
         )  # 结束
 
     async def _variants(self, question: str) -> list[str]:  # 改写变体（多路）

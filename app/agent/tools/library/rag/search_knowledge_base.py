@@ -79,6 +79,8 @@ def _data(result: Any) -> dict:  # 检索结果 → 固定 data
             "sparse_count": result.sparse_count,  # 关键词命中数
             "fused_count": result.fused_count,  # 融合数
             "selected_count": result.selected_count,  # 证据数
+            "profile": getattr(result, "profile", "tool"),  # 检索档位（观测）
+            "paths": list(getattr(result, "paths", ["baseline"])),  # 实际路径（观测）
         },  # basis 结束
     }  # 返回
 

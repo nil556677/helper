@@ -199,6 +199,8 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
             "hit_counts": dict(raw_basis) if isinstance(raw_basis, dict) else {},  # 计数
             "sources": sources,  # 来源
             "gate": str(gate.get("decision") or ""),  # 门限
+            "profile": str(((data.get("basis") or {}) if isinstance(data, dict) else {}).get("profile") or "tool"),  # 检索档位（观测）
+            "paths": list(((data.get("basis") or {}) if isinstance(data, dict) else {}).get("paths") or ["baseline"]),  # 实际路径（观测）
         }  # 结束
         run.emit(basis_event(basis_payload["keywords"], basis_payload["hit_counts"], basis_payload["sources"]))  # 事件
     escalate_reason = ""  # 默认不升级
