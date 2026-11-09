@@ -76,16 +76,12 @@ def _state_context(state: dict[str, Any]) -> Any | None:  # 用 ContextBuilder �
 
 
 def _build_graph(model: Any, prompt: str) -> Any:  # 构造 ReAct 图
-    """模型实例 + 系统提示 → 编译好的 ReAct 图。模型可能不可哈希，不缓存。"""
+    """模型实例 + 系统提示 → 编译好的自定义 ReAct 图（agent→审批门→tools）。"""
+    from app.agent.react.graph import build_react  # 自定义图（含审批门）
+
     catalog = tool_catalog()  # 工具目录
     tools = [catalog[name] for name in TOOL_NAMES if name in catalog]  # 取 3 工具
-    return build_react_agent(  # 官方构造（含取消/PII/限额中间件）
-        model,  # 模型
-        tools,  # 工具
-        prompt,  # 系统提示
-        run_limit=6,  # 步数上限（防死循环）
-        name="fallback_react",  # 名称
-    )  # 返回图
+    return build_react(model, tools, prompt)  # 自定义图（审批门内联，当前工具 approval=none 直通）
 
 
 def _format_memory(state: dict[str, Any]) -> str:  # 把对话历史格式成文本
