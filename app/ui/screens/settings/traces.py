@@ -231,16 +231,30 @@ def _detail(run_id: str) -> None:  # 详情弹窗
                     f"查询：{run.normalized_query or run.question}"  # 归一
                     f" → {run.rewritten_query or '（未改写）'}"  # 改写
                 ).classes("hp-field-help")  # 样式
-            try:  # 记忆压缩错误（后台作业失败明细，当前会话的）
-                from app.agent.memory.summarizer import last_errors  # 压缩失败记录
+            try:  # 记忆压缩错误（持久化 history + 本轮即时，合并去重）
+                history = trace_service.compaction_errors(run.conversation_id)  # 历史 trace_events
+                current = {}  # 本轮进程内
+                try:  # 读进程 last_errors（即时，重启前的本轮）
+                    from app.agent.memory.summarizer import last_errors  # 压缩失败记录
 
-                mem_errors = {c: r for c, r in last_errors().items() if c == run.conversation_id}  # 本会话的失败
-                if mem_errors:  # 有
-                    with ui.expansion("记忆压缩错误", icon="memory", value=False).classes("w-full hp-sources"):
-                        for conv, reason in mem_errors.items():  # 逐条
+                    current = {c: r for c, r in last_errors().items() if c == run.conversation_id}  # 本会话
+                except Exception:  # 读失败
+                    current = {}  # 空
+                combined = [  # 合并：历史优先，进程本轮补充且不与历史重复
+                    {"conversation_id": h["conversation_id"], "error": h["error"], "at": h["at"]}
+                    for h in history
+                ]  # 历史
+                known = {h["error"] for h in combined}  # 已含的错误
+                for conv, reason in current.items():  # 进程本轮
+                    if reason not in known:  # 未在历史
+                        combined.append({"conversation_id": conv, "error": reason, "at": 0.0})  # 补
+                if combined:  # 有错误
+                    with ui.expansion(f"记忆压缩错误（{len(combined)}）", icon="memory", value=False).classes("w-full hp-sources"):
+                        for entry in combined:  # 逐条
                             with ui.row().classes("w-full items-start gap-2 no-wrap hp-note-error"):  # 一行
                                 ui.icon("error_outline").classes("text-base")  # 图标
-                                ui.label(f"{conv}：{reason}").classes("hp-note-error").style(  # 会话 + 原因
+                                when = human_time(entry["at"]) if entry["at"] else "本轮"  # 时间或本轮
+                                ui.label(f"{when} · {entry['conversation_id']}：{entry['error']}").classes("hp-note-error").style(  # 详情
                                     "white-space: pre-wrap; word-break: break-word;"
                                 )  # 样式
             except Exception:  # 兜底

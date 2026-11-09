@@ -129,3 +129,35 @@ def export_json(run_id: str) -> dict[str, Any] | None:
         "hits": [asdict(hit) for hit in view.hits],
         "events": [asdict(event) for event in view.events],
     }
+
+
+def compaction_errors(conversation_id: str, *, limit: int = 20) -> list[dict[str, Any]]:
+    """该会话的历史记忆压缩失败（持久化于 trace_events，重启可查）。"""
+    from app.core.db.connection import get_connection  # DB
+
+    if not conversation_id:  # 无会话
+        return []  # 空
+    try:  # 坏库/旧表兜底
+        rows = get_connection().execute(  # 关联 run 过滤会话
+            "SELECT e.at, e.detail_json FROM trace_events e"
+            " JOIN trace_runs r ON r.id = e.run_id"
+            " WHERE r.conversation_id = ? AND e.code = 'compaction_failed'"
+            " ORDER BY e.at DESC LIMIT ?",
+            (conversation_id, int(limit)),
+        ).fetchall()
+    except Exception:  # 无表/坏库
+        return []  # 空
+    import json  # 解析 detail
+
+    result: list[dict[str, Any]] = []  # 结果
+    for item in rows:  # 逐条
+        detail = {}  # 明细
+        try:  # 解析
+            payload = json.loads(item["detail_json"] or "{}")  # JSON
+            detail = payload if isinstance(payload, dict) else {}  # dict
+        except Exception:  # 坏 JSON
+            detail = {}  # 空
+        result.append(  # 追加
+            {"conversation_id": conversation_id, "at": float(item["at"] or 0), "error": str(detail.get("error") or "")}
+        )  # 结束
+    return result  # 返回
