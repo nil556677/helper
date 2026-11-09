@@ -89,3 +89,47 @@ def test_react_graph_approval_intercepts_manual_tool(monkeypatch) -> None:  # ma
     assert calls == []  # 工具未被真正执行
     assert str(result["messages"][-1].content or "")  # 回了模型并给终答
     assert approval_stats()["blocked"] > before_blocked  # 审批拦截计数增长
+
+
+def test_end_to_end_approval_flow(fake_root) -> None:  # ReAct→落表→批准→执行
+    from app.agent.approval import service as approval_service  # 审批服务
+    from app.core.db import schema_v1  # 建表
+    from app.core.db.connection import get_connection  # 连接
+    from app.services.order import repo as order_repo  # 订单仓储
+    from app.services.order.repo import Order  # 订单对象
+
+    schema_v1.initialize(get_connection())  # 建审批表
+
+    class _Repo:  # 假订单库
+        def __init__(self) -> None:  # 初始化
+            self.calls = 0  # 调用次数
+
+        async def get_order(self, order_id: str):  # 按单号
+            self.calls += 1  # 记
+            return Order(order_id=order_id, status="已发货", amount="99.5", pay_method="微信", created_at="x", logistics_no="SF1")  # 单
+
+        async def get_orders_by_phone(self, phone: str):  # 按手机号
+            return [self.get_order("1")]  # 占位
+
+    fake_repo = _Repo()  # 实例
+    order_repo.set_order_repo(fake_repo)  # 注入
+    try:  # 跑
+        tc = {"name": "query_order", "args": {"order_id": "12345"}, "id": "c2", "type": "tool_call"}  # 订单调用
+        model = _Model([AIMessage(content="", tool_calls=[tc]), AIMessage(content="已提交审核")])  # 模型
+        graph = build_react(model, [lib.query_order], "sys")  # 建图
+        asyncio.run(graph.ainvoke({  # 第一遍：触发审批门
+            "messages": [HumanMessage(content="查订单 12345")], "status": "running",
+            "pending_request_ids": [], "approval_checked": False, "thread_id": "t", "tenant_id": "default", "requester_id": "u",
+        }))  # 结束
+    finally:  # 保留注入至执行完成后统一复位
+        pass  # 占位（execute 需用同一仓储）
+    try:  # 执行 + 复位
+        pend = approval_service.pending("default")  # 待审
+        assert any(item["tool_name"] == "query_order" for item in pend)  # 落了一条
+        rid = pend[0]["request_id"]  # 请求 id
+        approval_service.decide(rid, "approved", decided_by="admin")  # 批准
+        out = asyncio.run(approval_service.execute_approved(rid))  # 执行
+        assert out["executed"] is True  # 批准后才执行
+        assert fake_repo.calls == 1  # 工具确实被调用一次（审批通过才放行）
+    finally:  # 复位
+        order_repo.set_order_repo(None)  # 清
