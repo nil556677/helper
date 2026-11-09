@@ -245,7 +245,9 @@ async def run_react(  # 跑单一 ReAct 兜底
     messages = [HumanMessage(content=_user_message(state))]  # 单条 human（含全部上下文））
     system_prompt = _system_prompt(state)  # 系统提示（默认手写规则）
     ctx_view: Any = None  # builder 装配结果（C5 观测用）
-    if _CONTEXT_BUILDER:  # 启用装配（生产接线）
+    from app.agent.contexts.feature import builder_enabled  # 特性开关（生产开/单测关）
+
+    if builder_enabled():  # 生产注入 ContextBuilder
         ctx_view = _state_context(state)  # 装配上下文
         if ctx_view is not None:  # 装配成功
             messages = [HumanMessage(content=str(item.get("content") or "")) for item in ctx_view.messages if item.get("content")]  # 用 builder messages

@@ -13,6 +13,20 @@ from app.ui.state.chat_model import Fragment
 from app.ui.state.layout import layout
 
 
+def _agg(value) -> int:  # dict(按层) 或 int → 聚合计数
+    """把 pruned/dropped 的 dict 值求和，或直接取 int。"""
+    if isinstance(value, dict):  # 按层 dict
+        return sum(int(v) for v in value.values())  # 求和
+    return int(value or 0)  # 直接 int
+
+
+def _fmt_tokens(n: int) -> str:  # token 粗格式
+    """1000+ → '1.2k'，否则原样。"""
+    if n >= 1000:  # 千级
+        return f"{n / 1000:.1f}k"  # 千
+    return str(int(n))  # 原样
+
+
 def _render_block_detail(container: Any, payload: dict[str, Any]) -> None:  # 渲染分块明细
     """把一轮的 `context_usage` 展开成大板块 / 小板块 / 最细一层。"""
     container.clear()  # 清空旧内容
@@ -40,6 +54,16 @@ def _render_block_detail(container: Any, payload: dict[str, Any]) -> None:  # �
             badges.append(f"已压缩 {int(payload['compacted'])} 次")  # 记
         if payload.get("trimmed"):  # 裁剪过
             badges.append(f"裁剪 {int(payload['trimmed'])} 条")  # 记
+        # —— 上下文改造指标：剪枝 / 预算丢弃 / 缓存前缀 ——
+        pruned = payload.get("pruned")  # 剪枝（dict or int）
+        if pruned:  # 有
+            badges.append(f"剪枝 {_agg(pruned)} 条")  # 记
+        dropped = payload.get("dropped")  # 预算丢弃
+        if dropped:  # 有
+            badges.append(f"预算丢 {_agg(dropped)}")  # 记
+        cache_prefix = int(payload.get("cache_prefix_tokens") or 0)  # 缓存前缀
+        if cache_prefix:  # 有
+            badges.append(f"缓存前缀 {_fmt_tokens(cache_prefix)}")  # 记
         if badges:  # 有徽标
             ui.label(" · ".join(badges)).classes("hp-hint")  # 一行
 

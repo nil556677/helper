@@ -16,9 +16,6 @@ from app.rag.answer import extractive  # 原文回退（无模型时也能给证
 
 ArgsBuilder = Callable[[str], dict[str, Any]]  # question → 工具参数
 
-#: 是否启用"上文接入"（近轮并进知识查询，便于连续追问；默认关保持测试兼容，接线时开）。
-_DISPATCH_CONTEXT = False  # 开关
-
 
 def _weather_args(question: str) -> dict[str, Any]:  # 从问题里抠城市/日期
     """``city`` 可能为空（由必需参数检查兜住）；``date`` 相对词→ISO 日期。"""
@@ -159,7 +156,9 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
 
         plan = plan_for(question)  # 动态档位
         args["top_k"] = int(plan.final_max)  # 动态 top_k（简单少/复杂多）
-        if _DISPATCH_CONTEXT:  # 启用上文接入：把上一轮用户问题并进检索，便于连续追问
+        from app.agent.contexts.feature import builder_enabled as context_builder_enabled  # 特性开关
+
+        if context_builder_enabled():  # 启用上文接入：把上一轮用户问题并进检索，便于连续追问
             turns = list(state.get("turns") or [])  # 近轮
             if turns:  # 有历史
                 prev = str((turns[-1] if isinstance(turns[-1], dict) else {}).get("user") or "")  # 上一轮问

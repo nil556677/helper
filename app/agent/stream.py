@@ -185,6 +185,7 @@ def start_stream(  # 启动
         attachments=list(attachments or []),  # 附件
         singleflight_base=singleflight_timeouts(),  # 记录基线，收尾算增量
     )  # 上下文结束
+    ctx.features["context_builder"] = True  # 生产开启 ContextBuilder 注入（ReAct/dispatch）
     sink._run_id = ctx.run_id  # 事件出口预先知道临时 run id
     handle = StreamHandle(run_id=ctx.run_id, ctx=ctx, events=queue)  # 句柄
     handle.task = asyncio.create_task(_run(handle))  # 后台跑
