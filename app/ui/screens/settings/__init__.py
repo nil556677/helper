@@ -27,6 +27,7 @@ from collections.abc import Callable
 
 from nicegui import ui
 
+from app.ui.screens.settings.approvals import render as render_approvals
 from app.ui.screens.settings.data import render as render_data
 from app.ui.screens.settings.general import render as render_general
 from app.ui.screens.settings.knowledge import render as render_knowledge
@@ -42,6 +43,7 @@ SECTIONS: tuple[tuple[str, str, str], ...] = (
     ("terms", "领域词", "sell"),
     ("tasks", "任务", "pending_actions"),
     ("traces", "检索追踪", "query_stats"),
+    ("approvals", "审批", "verified_user"),
     ("models", "模型配置", "smart_toy"),
     ("data", "数据与存储", "folder_open"),
     ("general", "通用", "tune"),
@@ -56,6 +58,7 @@ RENDERERS: dict[str, Callable[[], None]] = {
     "terms": render_terms,
     "tasks": render_tasks,
     "traces": render_traces,
+    "approvals": render_approvals,
 }
 
 
