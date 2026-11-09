@@ -126,6 +126,9 @@ class ContextPayload(_Payload):  # 上下文装载/裁剪/压缩
     compacted_saved: int = 0  # 压缩释放 token
     trimmed_saved: int = 0  # 裁剪释放 token
     prompt_versions: dict[str, int] = Field(default_factory=dict)  # 用到的模板版本
+    pruned: dict[str, int] = Field(default_factory=dict)  # 各层剪枝计数（语境近轮相关度剪枝）
+    dropped: dict[str, int] = Field(default_factory=dict)  # 各层预算丢弃计数
+    cache_prefix_tokens: int = 0  # 稳定前缀(S) token（Prompt Cache 观测）
 
 
 class PiiPayload(_Payload):  # 脱敏统计
