@@ -78,3 +78,14 @@ def test_tools_in_catalog_and_approval() -> None:  # 目录 + 审批契约
     assert describe(catalog["query_order"]).approval == "manual"  # 订单需人工审批
     assert describe(catalog["query_logistics"]).approval == "none"  # 物流不审批
     assert describe(catalog["query_order"]).risk == "medium"  # 中风险
+
+
+def test_tool_selection_descriptions_distinct() -> None:  # 工具选择：描述互指向、可区分
+    catalog = tool_catalog()  # 目录
+    order = str(catalog["query_order"].description or "")  # 订单描述
+    logis = str(catalog["query_logistics"].description or "")  # 物流描述
+    search = str(catalog["search_knowledge_base"].description or "")  # 检索描述
+    assert "query_logistics" in order and "search_knowledge_base" in order  # 订单指认其它
+    assert "query_order" in logis and "search_knowledge_base" in logis  # 物流指认其它
+    assert "订单" not in search  # 检索不查订单
+    assert "物流" not in search or "不查" in search  # 检索不提物流轨迹（或明确排除）
