@@ -68,6 +68,20 @@ class ContextOut:  # 装配结果（可落 RunContext）
     blocks: list[Block]  # 有序块（观测）
     pruned: dict[str, int] = field(default_factory=dict)  # 各层剪掉计数
     dropped: dict[str, int] = field(default_factory=dict)  # 各层预算丢弃
+    cache_prefix_tokens: int = 0  # 稳定前缀(S) token（Prompt Cache 标记用）
+
+    def to_state_dict(self) -> dict[str, Any]:  # 可序列化视图（进 ChatState，供回答节点用）
+        """装进 state：system / messages / usage，供 ReAct/dispatch/general 消费。"""
+        from app.agent.contexts.tokens import count_messages  # 估算
+
+        return {  # 视图
+            "system": self.system,  # system 文本
+            "messages": [dict(m) for m in self.messages],  # 消息
+            "pruned": dict(self.pruned),  # 剪枝
+            "dropped": dict(self.dropped),  # 丢弃
+            "cache_prefix_tokens": self.cache_prefix_tokens,  # 缓存前缀
+            "estimate": int(count_messages(self.messages)),  # 消息 token
+        }  # 结束
 
 
 def _render_working(working: dict[str, Any]) -> str:  # <working> 锚点块
@@ -200,6 +214,7 @@ def build_context(  # 装配一次
 
     # —— Compose ——
     system_out = (str(system or "") + (("\n\n" + working_block) if working_block else "")).strip()  # S + working（缓存前缀+锚点）
+    cache_prefix = len(str(system or "")) // 4  # 稳定前缀(S)估算 token（Prompt Cache）
     non_empty = [b for b in keep_blocks if b.text]  # 去空
     messages: list[dict[str, Any]] = []  # 消息
     if non_empty:  # 有记忆/动态块
@@ -214,4 +229,5 @@ def build_context(  # 装配一次
         blocks=keep_blocks,  # 有序块
         pruned=pruned,  # 剪枝
         dropped=dropped,  # 预算丢弃
+        cache_prefix_tokens=cache_prefix,  # 缓存前缀 token
     )  # 结束
