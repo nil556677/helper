@@ -9,6 +9,8 @@ __all__ = ["maybe_enqueue", "running"]  # 导出
 
 #: 每会话正在跑的压缩任务（单飞锁：防同一会话两段同时压）。
 _running: dict[str, asyncio.Task] = {}
+#: 各会话最近一次压缩失败原因（可观测；until 不动，下轮重试）。
+_last_errors: dict[str, str] = {}
 
 
 def running(conversation_id: str) -> bool:  # 该会话是否有压缩在跑
@@ -27,11 +29,28 @@ def maybe_enqueue(conversation_id: str) -> bool:  # 入队后台压缩
 
 
 async def _run(conversation_id: str) -> None:  # 执行一次压缩
-    """压最老一段并追加分段；失败兜底（不动 until，下轮自然重试）。"""
+    """压最老一段并追加分段；失败记录不致命（不动 until，下轮自然重试）。"""
     try:  # 任何失败都不影响主线
         await _compact_once(conversation_id)  # 真正压缩
+    except Exception as exc:  # 记录失败原因（可观测）
+        _last_errors[conversation_id] = f"{type(exc).__name__}: {exc}"  # 记
     finally:  # 一定释放单飞位
         _running.pop(conversation_id, None)  # 移除
+
+
+def last_errors() -> dict[str, str]:  # 各会话最近一次压缩失败原因（观测）
+    """后台压缩异常会记录在这里（until 不动，下轮重试）。"""
+    return dict(_last_errors)  # 拷贝
+
+
+def _snapshot(conversation_id: str) -> tuple[list[dict[str, Any]], dict[str, Any], int]:  # 同步快照（丢线程跑）
+    """一次性读全部消息 + 最近段头 + 段计数（避免多次锁）。"""
+    from app.services import conversations  # 会话
+
+    rows = conversations.load_messages(conversation_id)  # 全部消息
+    head = conversations.load_summary(conversation_id)  # 段头
+    count = conversations.segment_count(conversation_id)  # 段数
+    return rows, head, count  # 返回
 
 
 async def _compact_once(conversation_id: str) -> None:  # 一次压缩到段
@@ -44,8 +63,7 @@ async def _compact_once(conversation_id: str) -> None:  # 一次压缩到段
     from app.services import conversations  # 会话
 
     budget = Budget()  # 预算（window=1M 推导）
-    rows = conversations.load_messages(conversation_id)  # 读全部消息
-    head = conversations.load_summary(conversation_id)  # 最后段边界
+    rows, head, segcount = await asyncio.to_thread(_snapshot, conversation_id)  # 快照（丢线程，不阻塞事件循环）
     since = int(head.get("until_message_id") or 0)  # 覆盖终点
     turns = turns_from_rows(since, rows)  # 摘要之后成轮
     messages = messages_from(turns, with_ids=True)  # 消息投影（带 id）
@@ -54,7 +72,7 @@ async def _compact_once(conversation_id: str) -> None:  # 一次压缩到段
     if not budget.should_compact(  # 触发判定（预算 + 滞回 + 次数）
         count_messages(messages),  # 历史 token
         turns_since_last=len(turns),  # 距上次约几轮
-        compactions=conversations.segment_count(conversation_id),  # 已有段数
+        compactions=segcount,  # 已有段数
     ):  # 判定结束
         return  # 不压
     compactor = build_summarizer(None)  # 摘要器（默认 llm；不可用返回 None）
@@ -71,12 +89,14 @@ async def _compact_once(conversation_id: str) -> None:  # 一次压缩到段
     refs = [int(item.get("id") or 0) for item in oldest if item.get("id")]  # source_refs
     if not refs:  # 无 id（防御）
         return  # 跳过
-    conversations.append_segment(  # 追加一段（永不重写旧段）
-        conversation_id,  # 会话
-        start_id=min(refs),  # 起始 id
-        end_id=max(refs),  # 终点 id（= until）
-        summary=new_summary,  # 摘要
-        source_refs=refs,  # 可回放引用
+    await asyncio.to_thread(  # 写（丢线程，不阻塞事件循环）
+        lambda: conversations.append_segment(  # 追加一段（永不重写旧段）
+            conversation_id,  # 会话
+            start_id=min(refs),  # 起始 id
+            end_id=max(refs),  # 终点 id（= until）
+            summary=new_summary,  # 摘要
+            source_refs=refs,  # 可回放引用
+        )  # 结束
     )  # 结束
     # —— 写回跟随摘要同一趟：同一段里规则抽 EAV 事实 → 长期知识库（确定性，后台）——
     from app.agent.memory import MemoryStore, confidence_for, extract_eav  # 长期库
@@ -84,10 +104,13 @@ async def _compact_once(conversation_id: str) -> None:  # 一次压缩到段
     store = MemoryStore()  # 长期记忆仓储（sqlite）
     for item in oldest:  # 逐条最老消息
         for fact in extract_eav(str(item.get("content") or "")):  # 规则抽事实
-            store.put(  # 写回（confested/软替代在 reconcile 内处理）
-                fact.key,  # key
-                fact.value,  # value
-                source=fact.source,  # 来源
-                confidence=confidence_for(fact),  # 可信度
-                time_s=fact.time,  # 时间
+            fact_key, fact_value, fact_source = fact.key, fact.value, fact.source  # 取字段（闭包安全）
+            await asyncio.to_thread(  # 写（丢线程）
+                lambda: store.put(  # 写回（confested/软替代在 reconcile 内处理）
+                    fact_key,  # key
+                    fact_value,  # value
+                    source=fact_source,  # 来源
+                    confidence=confidence_for(fact),  # 可信度
+                    time_s=fact.time,  # 时间
+                )  # 结束
             )  # 结束

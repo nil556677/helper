@@ -62,7 +62,11 @@ async def load_context(state: dict[str, Any], config: RunnableConfig) -> dict[st
                 info.detail = f"{len(files)} 个附件，{readable} 个可读"  # 明细
         if ctx is not None:  # 新链路
             budget = Budget()  # 预算（window=1M 推导）
-            compactions = conversations.segment_count(conversation_id) if conversation_id else 0  # 已有段数
+            compactions = 0  # 已有段数（默认 0）
+            try:  # 段计数失败不阻断（旧库未迁移/坏库）
+                compactions = conversations.segment_count(conversation_id) if conversation_id else 0  # 已压次数
+            except Exception:  # 无表/坏库
+                compactions = 0  # 兜底
             turns_since = len(turns)  # 距上次压缩约几轮
             if count_messages(messages) > budget.history_budget:  # 快路径：先看预算（pct 廉价）
                 from app.agent.memory.summarizer import maybe_enqueue  # 后台协调器

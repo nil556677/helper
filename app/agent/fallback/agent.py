@@ -31,9 +31,6 @@ _VARIANT: dict[str, str] = {"current_time": "time", "query_weather": "weather", 
 #: 说话者标签（多轮记忆格式化用）。
 _MAX_TURNS = 6  # 最多带最近 6 轮记忆
 
-#: 是否启用 ContextBuilder 装配（生产接线开关；默认关保持测试兼容，开则走 builder system+messages）。
-_CONTEXT_BUILDER = False  # 开关
-
 
 def _state_context(state: dict[str, Any]) -> Any | None:  # 用 ContextBuilder 装配上下文
     """从 state 取工作记忆/近轮/段/事实/问题 → build_context；失败返回 None（退回手拼）。"""

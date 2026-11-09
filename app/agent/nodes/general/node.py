@@ -35,9 +35,17 @@ async def general_agent_node(state: dict[str, Any], config: Any = None) -> dict[
         from app.agent.memory import embed_text  # 嵌入
 
         set_embed(embed_text)  # 注入嵌入（不可用退保底）
+        facts: list[dict[str, Any]] = []  # 长期事实
+        try:  # 事实取数失败不阻塞
+            from app.agent.memory import MemoryStore  # 长期库
+
+            facts = MemoryStore().search(top_k=6)  # 召回
+        except Exception:  # 无表/坏库
+            facts = []  # 空
         out = build_context(  # 装配（内容错误不阻塞）
             system=_PROMPT,  # S 引导
             working=state.get("working_memory") or {},  # 锚点
+            facts=facts,  # 长期事实
             recent=list(state.get("turns") or []),  # 近轮
             question=question,  # 问题
         )  # 结束
