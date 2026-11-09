@@ -55,8 +55,7 @@ def _db(fake_root):
 
 
 async def _drive(question: str, monkeypatch) -> tuple[Any, _Sink]:  # 跑一轮
-    # 打桩 knowledge 工具（避免真连 qdrant）
-    monkeypatch.setitem(dispatch_mod._ROUTE_TOOLS, "knowledge", (_NoopTool(), lambda q: {"query": q}))  # 打桩
+    del monkeypatch  # 不再打桩 knowledge（检索只在 ReAct）
     graph = agent_mod.build_route_graph()  # 新图
     sink = _Sink()  # 事件
     ctx = RunContext(run_id="r", question=question, conversation_id="c1", emit=sink)  # 上下文
@@ -65,22 +64,22 @@ async def _drive(question: str, monkeypatch) -> tuple[Any, _Sink]:  # 跑一轮
     return result, sink  # 返回
 
 
-async def test_pipeline_invariants_and_knowledge_answer(monkeypatch) -> None:  # 落库/事件/trace + 原文回答
-    async def to_knowledge(state, config):  # 打桩语义：direct → knowledge
+async def test_pipeline_invariants_and_quick_answer(monkeypatch) -> None:  # 落库/事件/trace + 快捷路径
+    async def to_quick(state, config):  # 打桩语义：direct → time（快捷无检索）
         del state, config  # 不用
         return {  # 更新
-            "semantic_recall": {"decision": "direct", "candidates": [{"route": "knowledge", "score": 0.99}], "top1": 0.99, "margin": 0.5},  # 召回
-            "route": {"intent": "direct", "route": "knowledge", "tools": ["search_knowledge_base"], "decided_by": "embedding"},  # 决策
+            "semantic_recall": {"decision": "direct", "candidates": [{"route": "time", "score": 0.99}], "top1": 0.99, "margin": 0.5},  # 召回
+            "route": {"intent": "direct", "route": "time", "tools": ["current_time"], "decided_by": "embedding"},  # 决策
         }  # 返回
 
-    monkeypatch.setattr(agent_mod, "semantic_node", to_knowledge)  # 直达 knowledge
-    result, sink = await _drive("这个怎么规定", monkeypatch)  # 跑
+    monkeypatch.setattr(agent_mod, "semantic_node", to_quick)  # 直达 time
+    result, sink = await _drive("现在几点", monkeypatch)  # 跑
     assert result.status == "done"  # 终态
     types = [event.type for event in sink.events]  # 事件类型
     assert types[0] is EventType.ACK  # 先回执
     assert types[-1] is EventType.DONE  # 终态在最后
     assert sum(1 for item in types if item is EventType.DONE) == 1  # 终态唯一
-    assert "证据正文内容" in str(result.state.get("answer") or "")  # 原文进回答
+    assert str(result.state.get("answer") or "").startswith("现在是 ")  # 快捷作答
 
 
 async def test_pipeline_miss_clarifies(monkeypatch) -> None:  # 无对应 → 澄清

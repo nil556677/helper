@@ -6,13 +6,11 @@ from typing import Any, Callable  # 类型
 
 from app.agent.contracts import StageGroup  # 分组（时间线步骤归类）
 from app.agent.context import bind_node_run, current_run  # 当前 run（发事件）
-from app.agent.events import basis as basis_event  # 检索依据事件
 from app.agent.events import tool as tool_event  # 工具事件
 from app.agent.stages import stage  # 过程步骤
-from app.agent.tools.library import current_time, query_weather, search_knowledge_base  # 内置工具
+from app.agent.tools.library import current_time, query_weather  # 内置快捷工具（检索已在 ReAct）
 from app.agent.tools.wiring import unwrap_tool_output  # 工具出参还原（content+artifact → Result）
 from app.agent.nodes.semantic.node import route_specs  # 路径定义（含必需参数）
-from app.rag.answer import extractive  # 原文回退（无模型时也能给证据原文）
 
 ArgsBuilder = Callable[[str], dict[str, Any]]  # question → 工具参数
 
@@ -79,10 +77,9 @@ def _missing_param(spec: Any, question: str) -> tuple[str, str, tuple[str, ...]]
 
 
 #: route → (工具, 参数生成器)。
-_ROUTE_TOOLS: dict[str, tuple[Any, ArgsBuilder]] = {  # 路由表
+_ROUTE_TOOLS: dict[str, tuple[Any, ArgsBuilder]] = {  # 路由表（仅无检索的快捷工具）
     "time": (current_time, lambda _q: {}),  # 时间（走默认格式）
     "weather": (query_weather, _weather_args),  # 天气（抠城市）
-    "knowledge": (search_knowledge_base, lambda q: {"query": q}),  # 知识库（检索→原文）
 }
 
 
@@ -96,9 +93,6 @@ def _format(name: str, data: dict[str, Any]) -> str:  # 模板化回复
         temp = data.get("temperature_c")  # 温度
         temp_part = f"，{temp}℃" if temp is not None else ""  # 温度片段
         return f"{city}的天气：{weather}{temp_part}。"  # 模板
-    if name == "knowledge":  # 知识库
-        model_view = str(data.get("model_view") or "")  # 编号文本
-        return model_view or extractive(data.get("evidence") or [])  # 编号文本或原文回退
     return str(data.get("text") or "")  # 兜底
 
 
@@ -114,7 +108,6 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
         return {"answer": note, "note": note, "fragments": []}  # 不带内错误
     tool, args_builder = entry  # 拆包
     question = str(state.get("question") or "")  # 问题
-    plan = None  # 检索预算（仅知识走）
     run = current_run()  # 当前 run（过程/工具事件）
     # —— 必需参数检查：缺 → HITL 中断追问 或 模板追问（绝不静默兜底）——
     spec = route_specs().get(name)  # 路径定义
@@ -168,23 +161,9 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
     if run is not None:  # 有 run 才发事件
         run.emit(tool_event(name=str(getattr(tool, "name", "") or name), status="running", detail="开始查询"))  # 工具开始
         tool_event_sent = True  # 标记
-    try:  # 直调工具
-        if name == "knowledge":  # 检索类走"查找资料"过程步（含计步）
-            with stage("查找资料", name="search", group=StageGroup.SEARCH) as info:  # 过程可点开看详情
-                envelope = unwrap_tool_output(await tool.ainvoke(args))  # 执行（还原完整包络）
-                _data = getattr(envelope, "data", None) or {}  # 结果
-                _frags = list(_data.get("evidence") or [])  # 命中片段
-                info.detail = f"找到 {len(_frags)} 段资料"  # 一行摘要
-                _gate = _data.get("gate") or {}  # 门限判定
-                _lines: list[str] = []  # 正文行
-                _lines.append(f"门限判定：{_gate.get('decision') or '未判定'}")  # gate
-                for _i, _f in enumerate(_frags[:5], 1):  # 前 5 条
-                    _snip = str(_f.get("text") or "").strip().replace("\n", " ")[:120]  # 摘要
-                    _lines.append(f"{_i}. {_f.get('source_name', '资料')}：{_snip}")  # 一条
-                info.body = "\n".join(_lines)  # 点开看到资料+判断
-        else:  # 时间/天气直调
-            with stage("调用工具", name="run", group=StageGroup.TOOL):  # 工具过程步（name 区分同函数两支）
-                envelope = unwrap_tool_output(await tool.ainvoke(args))  # 执行（还原完整包络）
+    try:  # 直调快捷工具（时间/天气；检索已在 ReAct）
+        with stage("调用工具", name="run", group=StageGroup.TOOL):  # 工具过程步
+            envelope = unwrap_tool_output(await tool.ainvoke(args))  # 执行（还原完整包络）
     except Exception as exc:  # 工具失败 → 带内 + 升级（让 agentic 再试/降级）
         note = f"{name} 查询失败：{exc}"  # 说明
         if run is not None and tool_event_sent:  # 发失败
@@ -194,45 +173,6 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
         run.emit(tool_event(name=str(getattr(tool, "name", "") or name), status="done", detail=f"{name} 完成"))  # 工具完成
     data = getattr(envelope, "data", None) or {}  # 结果数据
     text = _format(name, data)  # 模板化
-    from app.rag.evidence import CITATION_MAX  # 引用上限（单一来源）
-
-    fragments = list(data.get("evidence") or [])[:CITATION_MAX] if name == "knowledge" else []  # 知识库带引用（限条数）
-    for position, item in enumerate(fragments, start=1):  # 生成层统一编号
-        item["index"] = position  # 单次调用即 1..N
-    basis_payload: dict[str, Any] = {}  # 检索依据（知识路径才有）
-    if name == "knowledge" and run is not None:  # 发检索依据（UI"检索依据"区 + 落库）
-        raw_basis = data.get("basis") or {}  # 工具返回的计数
-        gate = data.get("gate") or {}  # 门限
-        sources = [  # 轻量来源
-            {"index": idx + 1, "source_name": item.get("source_name", "资料"), "origin": item.get("origin", "资料"), "snippet": str(item.get("text") or "")[:80]}
-            for idx, item in enumerate(fragments)
-        ]  # 来源结束
-        basis_payload = {  # 依据
-            "keywords": [str(word) for word in args.get("query", question).split() if word][:8],  # 粗关键词
-            "hit_counts": dict(raw_basis) if isinstance(raw_basis, dict) else {},  # 计数
-            "sources": sources,  # 来源
-            "gate": str(gate.get("decision") or ""),  # 门限
-            "profile": str(((data.get("basis") or {}) if isinstance(data, dict) else {}).get("profile") or "tool"),  # 检索档位（观测）
-            "paths": list(((data.get("basis") or {}) if isinstance(data, dict) else {}).get("paths") or ["baseline"]),  # 实际路径（观测）
-            "elapsed_ms": int(((data.get("basis") or {}) if isinstance(data, dict) else {}).get("elapsed_ms") or 0),  # 检索耗时（观测）
-            "llm_calls": int(((data.get("basis") or {}) if isinstance(data, dict) else {}).get("llm_calls") or 0),  # LLM 次数（观测）
-        }  # 结束
-        run.emit(basis_event(basis_payload["keywords"], basis_payload["hit_counts"], basis_payload["sources"]))  # 事件
-    escalate_reason = ""  # 默认不升级
-    if name == "knowledge":  # 知识库走质量信号（阈值随档位）
-        from app.agent.routing.quality import assess  # 判定
-
-        min_results = int(plan.min_results) if plan is not None else 3  # 最少命中（随预算）
-        escalate, reason = assess(list(data.get("evidence") or []), question, min_results=min_results)  # 评估
-        escalate_reason = reason if escalate else ""  # 不够好 → 带原因升级
-    update: dict[str, Any] = {"answer": text, "route": route, "fragments": fragments, "escalate_reason": escalate_reason, "escalated_this_session": bool(escalate_reason)}  # 更新
-    # —— 依据资料作答门禁：证据弱/不足时如实提示（不假装有据）——
-    if name == "knowledge":  # 只对资料检索
-        gate_decision = str(((data.get("gate") or {}) if isinstance(data, dict) else {}).get("decision") or "")  # 门限
-        if gate_decision == "weak" and fragments:  # 证据弱
-            update["note"] = "证据较弱：以上回答请对照引用原文核对。"  # 提示
-        elif gate_decision == "reject" and not fragments:  # 无可用证据
-            update["note"] = "没有在本地资料里找到能支撑回答的内容，换个说法试试。"  # 诚实说明
-    if basis_payload:  # 有依据
-        update["basis"] = basis_payload  # 进 state（落库）
-    return update  # 返回（升级则记防乒乓标记）
+    fragments: list[dict[str, Any]] = []  # 快捷工具不带引用（摘引用走 ReAct）
+    update: dict[str, Any] = {"answer": text, "route": route, "fragments": fragments}  # 更新
+    return update  # 返回
