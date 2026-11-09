@@ -98,3 +98,26 @@ def _render_fragment_panel(fragment: Fragment) -> None:
         ui.separator()
         ui.label('所在资料全文').classes('hp-hint')
         ui.markdown(fragment.text).classes('hp-markdown w-full')
+        if fragment.doc_id:  # 有文档 id → 可看整篇
+            ui.button('查看整篇文档', on_click=partial(_open_full_document, fragment)).props(
+                'flat dense no-caps'
+            ).classes('hp-field-help').mark(f'doc-{fragment.doc_id}')
+
+
+def _open_full_document(fragment: Fragment) -> None:
+    """弹窗看该片段所属**整篇文档**（按 doc_id 取已入库分块拼回；超长截断给提示）。"""
+    from app.services.knowledge import queries as knowledge_queries  # 文档取数
+
+    data = knowledge_queries.document_full(int(fragment.doc_id))  # 整篇正文
+    with ui.dialog() as dialog, ui.card().classes('hp-card gap-2').style('width:760px;max-width:92vw;'):
+        ui.label(f"{data.get('name') or fragment.source_name} · 整篇文档").classes('hp-card-title')
+        if not data.get('found'):  # 文档没了
+            ui.label(str(data.get('note') or '这份资料不在库里了')).classes('hp-hint')
+        else:  # 有正文
+            with ui.scroll_area().classes('w-full').style('max-height:60vh;'):
+                ui.markdown(str(data.get('text') or '')).classes('hp-markdown w-full')
+            if data.get('note'):  # 截断提示
+                ui.label(str(data['note'])).classes('hp-hint')
+        with ui.row().classes('w-full justify-end'):
+            ui.button('关闭', on_click=dialog.close).props('flat dense no-caps')
+    dialog.open()

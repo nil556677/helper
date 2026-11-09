@@ -172,6 +172,7 @@ def _turn_from_json(content: str, raw: object) -> object:  # 还原一轮
                     text=str(item.get("text") or ""),  # 正文
                     snippet=str(item.get("snippet") or ""),  # 命中段
                     score_kind=str(item.get("score_kind") or "rrf"),  # 分数语义
+                    doc_id=int(item.get("doc_id") or 0),  # 所属文档（查看整篇用）
                 )  # 引用结束
             )  # 追加结束
         process = Process(  # 过程

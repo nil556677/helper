@@ -260,6 +260,31 @@ def document_chunks(
     return {"items": items, "total": total, "page": current, "pages": pages, "kinds": kinds}
 
 
+def document_full(doc_id: int, *, limit: int = 50000) -> dict[str, object]:
+    """按 doc_id 取**整篇文档**的索引正文（child 分块按 seq 拼回），供引用面板"查看全文"。
+
+    只读已入库的分块文本（不依赖原文件副本是否还在）；超长截断并给提示。
+    """
+    row = kb_store.get_document(int(doc_id))
+    if row is None:
+        return {"found": False, "name": "", "text": "", "truncated": False, "note": "这份资料不在库里了"}
+    version = int(row["version"] or 1)
+    rows = get_connection().execute(
+        "SELECT text FROM chunks WHERE doc_id = ? AND version = ? AND is_parent = 0 ORDER BY seq",
+        (int(doc_id), version),
+    ).fetchall()
+    parts = [str(item["text"] or "") for item in rows if str(item["text"] or "").strip()]
+    text = "\n\n".join(parts)
+    truncated = len(text) > limit
+    return {
+        "found": True,
+        "name": str(row["name"]),
+        "text": text[:limit],
+        "truncated": truncated,
+        "note": f"全文较长，只显示前 {limit} 字" if truncated else "",
+    }
+
+
 def document_preview(doc_id: int, *, limit: int = PREVIEW_CHARS) -> dict[str, object]:
     from app.core import paths
 

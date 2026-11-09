@@ -39,6 +39,9 @@ class Fragment:
     **不能混标**：RRF 是名次分（约 0.02），不是 bm25，也不是余弦。
     """
 
+    doc_id: int = 0
+    """所属文档 id（用于"查看整篇文档"；0 表示未知/历史数据）。"""
+
 
 @dataclass(frozen=True)
 class Step:
