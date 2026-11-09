@@ -87,6 +87,12 @@ def _metrics_of(ctx: RunContext, state: dict[str, Any]) -> dict[str, Any]:  # �
 
     metrics = finalize(ctx.metrics)  # 计数器 + 派生
     metrics["singleflight_timeouts"] = max(0, singleflight_timeouts() - int(getattr(ctx, "singleflight_base", 0)))  # 本 run 内等待超时次数
+    try:  # 后台压缩失败会话数（可观测；重试机制故障面）
+        from app.agent.memory.summarizer import last_errors  # 压缩失败记录
+
+        metrics["compaction_errors"] = len(last_errors())  # 失败会话数
+    except Exception:  # 防失败
+        metrics["compaction_errors"] = 0  # 兜底
     metrics["question_chars"] = len(str(ctx.question or ""))  # 问题体积
     metrics["answer_chars"] = len(str(state.get("answer") or ""))  # 回答体积
     metrics["ttft_ms"] = int(ctx.first_token_ms or 0)  # 首 token

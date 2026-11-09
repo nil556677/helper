@@ -10,13 +10,23 @@ from typing import Any  # 任意值
 
 from app.agent.context import current_run  # 当前 run
 
-__all__ = ["builder_enabled"]  # 导出
+__all__ = ["builder_enabled", "dispatch_context_enabled"]  # 导出
 
 
-def builder_enabled() -> bool:  # 是否启用 ContextBuilder 注入
-    """只在有 RunContext 且特性位置真时开（生产接线；无 run=测试走旧路径）。"""
+def _feature(key: str) -> bool:  # 读单特性位
+    """有 RunContext 且对应特性位置真才开；无 run（单测/独立调用）→ False。"""
     run = current_run()  # 当前 run（可能 None）
     if run is None:  # 无 run（单测/独立调用）
-        return False  # 走旧路径
+        return False  # 关
     features = getattr(run, "features", None) or {}  # 特性位
-    return bool(features.get("context_builder"))  # 开关
+    return bool(features.get(key))  # 读
+
+
+def builder_enabled() -> bool:  # 是否启用 ContextBuilder 注入（ReAct/general）
+    """生产因为 stream 置 context_builder=True；unit 无 run=False。"""
+    return _feature("context_builder")  # 特性位
+
+
+def dispatch_context_enabled() -> bool:  # 是否启用 dispatch 上文拼接
+    """独立于 ReAct：避免 ReAct 一开、dispatch 被连带开启上文的副作用。"""
+    return _feature("dispatch_context")  # 特性位

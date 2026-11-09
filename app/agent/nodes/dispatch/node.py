@@ -156,9 +156,9 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
 
         plan = plan_for(question)  # 动态档位
         args["top_k"] = int(plan.final_max)  # 动态 top_k（简单少/复杂多）
-        from app.agent.contexts.feature import builder_enabled as context_builder_enabled  # 特性开关
+        from app.agent.contexts.feature import dispatch_context_enabled  # 独立开关
 
-        if context_builder_enabled():  # 启用上文接入：把上一轮用户问题并进检索，便于连续追问
+        if dispatch_context_enabled():  # 启用上文接入：把上一轮用户问题并进检索，便于连续追问
             turns = list(state.get("turns") or [])  # 近轮
             if turns:  # 有历史
                 prev = str((turns[-1] if isinstance(turns[-1], dict) else {}).get("user") or "")  # 上一轮问
