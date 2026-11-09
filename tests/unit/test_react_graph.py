@@ -51,3 +51,39 @@ def test_react_graph_direct_answer() -> None:  # 不调工具直接答
         "messages": [HumanMessage(content="hi")], "status": "running", "pending_request_ids": [], "approval_checked": False,
     }))  # 结束
     assert str(result["messages"][-1].content or "") == "你好"  # 终答
+
+
+def test_react_graph_approval_intercepts_manual_tool(monkeypatch) -> None:  # manual 工具被审批门拦截、不执行
+    from langchain_core.messages import ToolMessage  # 找拦截消息
+
+    from app.services.order import repo as order_repo  # 订单仓储
+
+    calls: list[str] = []  # 记录工具是否真执行
+
+    class _FakeRepo:  # 假订单库（若被调用说明没拦住）
+        async def get_order(self, order_id: str):  # 会被记录
+            calls.append(order_id)  # 记
+            raise AssertionError("审批未拦截，工具被直接执行")  # 不该发生
+
+        async def get_orders_by_phone(self, phone: str):  # 同
+            calls.append(phone)  # 记
+            raise AssertionError("审批未拦截，工具被直接执行")  # 不该
+
+    order_repo.set_order_repo(_FakeRepo())  # 注入（其方法一调即炸）
+    try:  # 跑
+        tc = {"name": "query_order", "args": {"order_id": "12345"}, "id": "c1", "type": "tool_call"}  # 订单调用
+        model = _Model([  # 两次响应
+            AIMessage(content="", tool_calls=[tc]),  # 要调订单
+            AIMessage(content="该查询需要人工审批，已提交审核。"),  # 见拦截后终答
+        ])  # 结束
+        graph = build_react(model, [lib.query_order], "sys")  # 建图（query_order approval=manual）
+        result = asyncio.run(graph.ainvoke({  # 跑
+            "messages": [HumanMessage(content="查订单 12345")], "status": "running",
+            "pending_request_ids": [], "approval_checked": False, "thread_id": "t1",
+        }))  # 结束
+    finally:  # 复位
+        order_repo.set_order_repo(None)  # 清
+    msgs = result["messages"]  # 全部消息
+    assert any(isinstance(m, ToolMessage) and "需要人工审批" in str(m.content) for m in msgs)  # 被拦截
+    assert calls == []  # 工具未被真正执行
+    assert str(result["messages"][-1].content or "")  # 回了模型并给终答
