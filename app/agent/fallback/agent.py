@@ -19,6 +19,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # 消�
 from app.agent.agent_builder import build_react_agent  # 官方 ReAct 构造
 from app.agent.context import current_run  # 当前 run（发 TOOL 事件）
 from app.agent.events import tool as tool_event  # 工具事件
+from app.agent.events import context as context_event  # 上下文事件
 from app.agent.tools.catalog import tool_catalog  # 工具目录（单一来源）
 
 #: 兜底 agent 可调的工具名（天气/时间/本地资料检索）。
@@ -243,6 +244,7 @@ async def run_react(  # 跑单一 ReAct 兜底
     state = {**state, "intent_confirmed": confirmed}  # 覆盖意图确认态
     messages = [HumanMessage(content=_user_message(state))]  # 单条 human（含全部上下文））
     system_prompt = _system_prompt(state)  # 系统提示（默认手写规则）
+    ctx_view: Any = None  # builder 装配结果（C5 观测用）
     if _CONTEXT_BUILDER:  # 启用装配（生产接线）
         ctx_view = _state_context(state)  # 装配上下文
         if ctx_view is not None:  # 装配成功
@@ -250,6 +252,14 @@ async def run_react(  # 跑单一 ReAct 兜底
             system_prompt = ctx_view.system  # 用 builder system（含 working 锚点）
     graph = _build_graph(model, system_prompt)  # 图（不缓存））
     run = current_run()  # 事件出口
+    if ctx_view is not None and run is not None:  # C5：上下文事件带剪枝/丢弃/缓存前缀
+        run.emit(context_event(  # 上下文事件
+            len(ctx_view.messages),  # 条数
+            int(sum(getattr(b, "tokens", 0) for b in ctx_view.blocks)),  # token（块内）
+            pruned=dict(ctx_view.pruned),  # 剪枝
+            dropped=dict(ctx_view.dropped),  # 预算丢弃
+            cache_prefix_tokens=ctx_view.cache_prefix_tokens,  # 缓存前缀
+        ))  # 发送结束
     result = await graph.ainvoke({"messages": messages})  # 跑一轮（到终态））
     # —— 后置：从最终消息里回放工具调用 → TOOL 事件（时间线可见）——
     if run is not None:  # 有事件出口

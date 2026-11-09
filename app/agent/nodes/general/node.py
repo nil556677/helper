@@ -30,10 +30,22 @@ async def general_agent_node(state: dict[str, Any], config: Any = None) -> dict[
     question = str(state.get("question") or "")  # 问题
     if model is None:  # 无模型
         return _degrade()  # 模板
-    try:  # 调模型
+    try:  # 用 ContextBuilder 配上下文（含工作记忆/近轮），再调模型
+        from app.agent.contexts.builder import build_context, set_embed  # builder
+        from app.agent.memory import embed_text  # 嵌入
+
+        set_embed(embed_text)  # 注入嵌入（不可用退保底）
+        out = build_context(  # 装配（内容错误不阻塞）
+            system=_PROMPT,  # S 引导
+            working=state.get("working_memory") or {},  # 锚点
+            recent=list(state.get("turns") or []),  # 近轮
+            question=question,  # 问题
+        )  # 结束
+        sys_text = out.system or _PROMPT  # system
+        human = out.messages[-1]["content"] if out.messages else question  # 人类消息
         with stage("生成回答", group=StageGroup.GENERATE):  # 过程区可见
-            response = await model.ainvoke([("system", _PROMPT), ("human", question)])  # 请求
-        text = str(getattr(response, "content", "") or "").strip()  # 正文
-    except Exception:  # 失败
+            response = await model.ainvoke([("system", sys_text), ("human", human)])  # 请求
+    except Exception:  # 装配/调用失败
         return _degrade()  # 模板
+    text = str(getattr(response, "content", "") or "").strip()  # 正文
     return {"answer": text or _degrade()["answer"]}  # 返回
