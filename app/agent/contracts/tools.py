@@ -6,7 +6,7 @@
 from __future__ import annotations  # 类型注解延迟求值
 
 from enum import StrEnum  # 字符串枚举
-from typing import Any  # 任意值
+from typing import Any, Literal  # 任意值 / 字面量
 
 from pydantic import BaseModel, Field  # 校验模型
 
@@ -28,6 +28,8 @@ class ToolDescriptor(BaseModel):  # 工具对外契约（描述符）
     args_schema: type[BaseModel] | dict[str, Any] | None = None  # 参数 Pydantic 模型或 JSON Schema
     result_schema: type[BaseModel] | dict[str, Any] | None = None  # 结果模型或 JSON Schema
     mutation: Mutation = Mutation.READ_ONLY  # 变更画像
+    approval: Literal["none", "auto", "manual"] = "none"  # 审批策略（manual=必经人工审批 / auto=自动化决策 / none=不审）
+    risk: Literal["low", "medium", "high"] = "low"  # 风险等级（影响审批超时/可见性）
     permissions: tuple[str, ...] = Field(default_factory=tuple)  # 权限标签
     timeout_ms: int = 5000  # 工具级超时（毫秒；框架执行时可读它做超时）
 

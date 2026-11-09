@@ -94,6 +94,8 @@ def describe(  # 生成工具元数据描述符
         args_schema=tool.args_schema,  # 参数契约（框架原样）
         result_schema=meta.get("result_schema"),  # 结果契约（tool_spec 声明）
         mutation=mutation if mutation is not None else meta.get("mutation", Mutation.READ_ONLY),  # 变更画像
+        approval=str(meta.get("approval") or "none"),  # 审批策略（tool_spec 声明）
+        risk=str(meta.get("risk") or "low"),  # 风险等级（tool_spec 声明）
         permissions=tuple(permissions) if permissions is not None else tuple(meta.get("permissions") or ()),  # 权限
         timeout_ms=int(meta.get("timeout_ms", 5000)),  # 工具级超时（tool_spec 声明）
     )  # 描述符结束

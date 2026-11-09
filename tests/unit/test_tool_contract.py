@@ -24,3 +24,8 @@ def test_search_tool_contract_shape() -> None:  # 检索工具契约形状
     assert fields == {"query", "mode", "top_k"}  # 查询 + 强度 + 条数
     description = str(desc.args_schema.model_fields["mode"].description)  # mode 说明
     assert "fast" in description and "deep" in description  # 说明覆盖各档
+
+
+def test_describe_passes_approval_risk() -> None:  # approval/risk 透传 + 默认
+    desc = describe(tool_catalog()["search_knowledge_base"])  # 描述符
+    assert desc.approval == "none" and desc.risk == "low"  # 默认只读低风险

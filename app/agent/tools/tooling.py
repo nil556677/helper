@@ -187,6 +187,8 @@ def tool_spec(  # 工具范式装饰器
     version: int = 1,  # 契约版本（破坏性变更 +1）
     permissions: tuple[str, ...] = (),  # 权限标签
     result_schema: type[BaseModel] | None = None,  # 结果契约（describe/审计/下游校验用）
+    approval: str = "none",  # 审批策略（manual=必经人工审批 / auto / none）
+    risk: str = "low",  # 风险等级（low/medium/high）
     timeout_ms: int = 5000,  # 工具级超时（毫秒；框架可读）
     max_entries: int | None = 1000,  # 缓存容量上限（防长期增长；None=不限）
 ) -> Callable[[Callable[..., Any]], StructuredTool]:  # 返回装饰器
@@ -218,6 +220,8 @@ def tool_spec(  # 工具范式装饰器
         existing = dict(tool.metadata or {})  # 已有的元数据
         existing["dsh"] = {  # 项目元数据
             "mutation": mutation,  # 变更画像
+            "approval": str(approval),  # 审批策略
+            "risk": str(risk),  # 风险等级
             "version": int(version),  # 版本
             "permissions": tuple(permissions),  # 权限
             "result_schema": result_schema,  # 结果契约
