@@ -97,9 +97,17 @@ async def load_context(state: dict[str, Any], config: RunnableConfig) -> dict[st
     from app.agent.fallback.agent import guard_from_memory  # 跨轮护栏反推
 
     clarify_count, confirmed = guard_from_memory(steps)  # 从记忆反推(追问数/是否已确认)
+    # —— 工作记忆：读 checkpointer 状态，缺省造空白；无目标且本轮有问题则以问题为目标 ——
+    from app.agent.memory import blank_working, set_goal_working  # 白板
+
+    white = state.get("working_memory") if isinstance(state.get("working_memory"), dict) else blank_working()  # 读白板
+    question = str(state.get("question") or "")  # 当前问题
+    if question and not (white.get("task_goal") or ""):  # 有问、无目标
+        white = set_goal_working(white, question)  # 以当前问题为目标
     return {  # 写回（含跨轮护栏）
         "turns": [t.model_dump(mode="json") for t in turns],  # 轮次
         "summary": summary_text,  # 摘要
+        "working_memory": dict(white),  # 工作记忆（摘要零触碰，key_facts 保留）
         "clarify_count": int(state.get("clarify_count") or 0) or clarify_count,  # 追问计数（记忆反推，取大）
         "intent_confirmed": bool(state.get("intent_confirmed")) or confirmed,  # 意图确认（记忆反推）
     }  # 返回
