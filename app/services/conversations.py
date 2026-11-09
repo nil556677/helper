@@ -210,26 +210,51 @@ def load_messages(conversation_id: str) -> list[dict[str, Any]]:
 
 
 def load_summary(conversation_id: str) -> dict[str, Any]:
-    """读压缩摘要投影头；没有就返回空摘要 + 0。"""
+    """读最后一个分段摘要作为投影头；没有分段就返回空摘要 + 0。"""
     row = get_connection().execute(
-        "SELECT until_message_id, summary FROM conversation_summaries WHERE conversation_id = ?",
+        "SELECT seg_seq, end_id, summary FROM summary_segments"
+        " WHERE conversation_id = ? ORDER BY seg_seq DESC LIMIT 1",
         (conversation_id,),
     ).fetchone()
     if row is None:
         return {"summary": "", "until_message_id": 0}
-    return {"summary": str(row["summary"] or ""), "until_message_id": int(row["until_message_id"] or 0)}
+    return {"summary": str(row["summary"] or ""), "until_message_id": int(row["end_id"] or 0)}
 
 
-def save_summary(conversation_id: str, until_message_id: int, summary: str) -> None:
-    """滚动式 upsert：始终只存每会话一条（新摘要替换旧摘要，旧内容被并入）。"""
+def load_segments(conversation_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+    """读分段摘要（新 → 旧，保留最近 limit 段供上游按 token 预算取用）。"""
+    rows = get_connection().execute(
+        "SELECT seg_seq, start_id, end_id, summary, source_refs, created_at FROM summary_segments"
+        " WHERE conversation_id = ? ORDER BY seg_seq DESC LIMIT ?",
+        (conversation_id, int(limit)),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def segment_count(conversation_id: str) -> int:
+    """某会话现有分段数（压满 max_compactions 时封顶用）。"""
+    row = get_connection().execute(
+        "SELECT COUNT(*) AS n FROM summary_segments WHERE conversation_id = ?",
+        (conversation_id,),
+    ).fetchone()
+    return int((row["n"] if row else 0) or 0)
+
+
+def append_segment(conversation_id: str, *, start_id: int, end_id: int, summary: str, source_refs: list[int]) -> None:
+    """追加式写入一段摘要（永不重写旧段；seg_seq 自动递增）。"""
+    seg = get_connection().execute(
+        "SELECT COALESCE(MAX(seg_seq), 0) + 1 AS n FROM summary_segments WHERE conversation_id = ?",
+        (conversation_id,),
+    ).fetchone()
+    seg_seq = int((seg["n"] if seg else 0) or 1)
+    import json  # 序列化 refs
+
     with transaction() as conn:
         conn.execute(
-            "INSERT INTO conversation_summaries(conversation_id, until_message_id, summary, created_at)"
-            " VALUES (?, ?, ?, ?)"
-            " ON CONFLICT(conversation_id) DO UPDATE SET"
-            " until_message_id = excluded.until_message_id,"
-            " summary = excluded.summary, created_at = excluded.created_at",
-            (conversation_id, int(until_message_id), summary, time.time()),
+            "INSERT INTO summary_segments(conversation_id, seg_seq, start_id, end_id, summary, source_refs, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (conversation_id, seg_seq, int(start_id), int(end_id), str(summary),
+             json.dumps([int(r) for r in source_refs], ensure_ascii=False), time.time()),
         )
 
 

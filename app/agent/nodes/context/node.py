@@ -8,7 +8,6 @@ from langchain_core.runnables import RunnableConfig  # 图配置
 
 from app.agent.context import ctx_from_config  # 上下文
 from app.agent.contexts.budget import Budget  # 预算
-from app.agent.contexts.compact import compact  # 压缩引擎
 from app.agent.contexts.history import (  # 历史投影
     messages_from,  # 轮次 -> 消息
     turns_from_rows,  # 行 -> 轮次
@@ -16,7 +15,6 @@ from app.agent.contexts.history import (  # 历史投影
 from app.agent.contexts.history import (
     trim as trim_history,  # token 裁剪
 )
-from app.agent.contexts.summarize import build_summarizer  # 摘要生成器（不可用返回 None）
 from app.agent.contexts.tokens import count_messages  # token 估算
 from app.agent.contracts import StageGroup, TurnStatus  # 契约（分组/轮次状态）
 from app.agent.events import context as context_event  # 事件
@@ -63,24 +61,19 @@ async def load_context(state: dict[str, Any], config: RunnableConfig) -> dict[st
                 readable = sum(1 for item in files if attachments.load_text(item).strip())  # 按 disk 读判可读
                 info.detail = f"{len(files)} 个附件，{readable} 个可读"  # 明细
         if ctx is not None:  # 新链路
-            budget = Budget()  # 预算
-            if count_messages(messages) > budget.history_budget:  # T1 软触发（历史超预算）
-                compactor = build_summarizer(ctx.emit)  # 摘要生成器
-                if compactor is not None:  # 模型可用
-                    result = await compact(  # 压缩最老一段
-                        messages,  # 全部历史
-                        compactor,  # 生成器
-                        summary_text=summary_text,  # 旧摘要
-                        budget=budget,  # 预算
-                    )  # 压缩结束
-                    if result is not None:  # 摘要被接受
-                        conversations.save_summary(  # 落库（滚动替换）
-                            conversation_id,  # 会话
-                            result.until_message_id,  # 覆盖终点
-                            result.summary,  # 新摘要
-                        )  # 落库结束
-                        summary_text = result.summary  # 本轮就用新摘要
-            trimmed, dropped, _saved = trim_history(messages, budget)  # 兜底裁剪（到 trim_target）
+            budget = Budget()  # 预算（window=1M 推导）
+            compactions = conversations.segment_count(conversation_id) if conversation_id else 0  # 已有段数
+            turns_since = len(turns)  # 距上次压缩约几轮
+            if count_messages(messages) > budget.history_budget:  # 快路径：先看预算（pct 廉价）
+                from app.agent.memory.summarizer import maybe_enqueue  # 后台协调器
+
+                if budget.should_compact(  # 完整触发判定（预算+滞回+次数）
+                    count_messages(messages),  # 历史 token
+                    turns_since_last=turns_since,  # 距上次
+                    compactions=compactions,  # 次数
+                ) and conversation_id:  # 触发且会话可用
+                    maybe_enqueue(conversation_id)  # 后台压最老一段（不打主线）
+            trimmed, dropped, _saved = trim_history(messages, budget)  # 兜底裁剪（同步、无 LLM）
             messages = trimmed  # 用裁剪后的历史
             estimate = count_messages(messages)  # 统一估算
             ctx.emit(  # 上下文事件

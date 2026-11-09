@@ -44,14 +44,14 @@ async def test_load_messages_async(_db) -> None:  # 读历史
 
 
 async def test_load_summary_async_default_and_saved(_db) -> None:  # 摘要
-    """默认空摘要；save_summary 后可读回。"""
-    from app.services.conversations import save_summary  # 落库
+    """默认空摘要；append_segment 后可读回最后段。"""
+    from app.services.conversations import append_segment  # 写分段
 
     db, store = await _store()  # 建
     try:  # 用后关
         empty = await store.load_summary("c1")  # 无摘要
         assert empty["summary"] == "" and empty["until_message_id"] == 0  # 空
-        save_summary("c1", until_message_id=5, summary="摘要")  # 写
+        append_segment("c1", start_id=1, end_id=5, summary="摘要", source_refs=[1, 2, 3, 4, 5])  # 写一段
         got = await store.load_summary("c1")  # 读回
         assert got["summary"] == "摘要" and got["until_message_id"] == 5  # 有
     finally:  # 收尾

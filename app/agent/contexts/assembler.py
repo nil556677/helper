@@ -58,7 +58,7 @@ def _budget_for(spec: AgentContextSpec) -> Budget:  # 取预算
     """spec 给了就覆盖，否则用默认。"""
     if spec.history_budget is None:  # 没覆盖
         return Budget()  # 默认
-    return Budget(history_budget=int(spec.history_budget))  # 覆盖
+    return Budget(_history_budget=int(spec.history_budget))  # 覆盖（显式）
 
 
 def _versions(spec: AgentContextSpec) -> dict[str, int]:  # 模板版本

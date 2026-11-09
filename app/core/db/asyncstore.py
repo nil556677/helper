@@ -32,17 +32,17 @@ class ConversationAsyncStore:  # 会话异步仓储（读）
         return rows  # 返回
 
     async def load_summary(self, conversation_id: str) -> dict[str, Any]:  # 压缩摘要
-        """读摘要投影头；没有就返回空摘要 + 0（与 sync load_summary 一致）。"""
+        """读最后一个分段摘要作为投影头；没有就返回空摘要 + 0（与 sync load_summary 一致）。"""
         row = await self._db.fetch_one(  # 查询
-            "SELECT until_message_id, summary FROM conversation_summaries"
-            " WHERE conversation_id = ?",
+            "SELECT seg_seq, end_id, summary FROM summary_segments"
+            " WHERE conversation_id = ? ORDER BY seg_seq DESC LIMIT 1",
             (conversation_id,),
         )  # 结束
-        if row is None:  # 没有
+        if row is None:  # 没有分段
             return {"summary": "", "until_message_id": 0}  # 空
         return {  # 返回
-            "summary": str(row.get("summary") or ""),  # 摘要
-            "until_message_id": int(row.get("until_message_id") or 0),  # 覆盖终点
+            "summary": str(row.get("summary") or ""),  # 最近段摘要
+            "until_message_id": int(row.get("end_id") or 0),  # 覆盖终点
         }  # 结束
 
     async def pending_user_by_run(  # 找预写 user（发送即落库去重用）

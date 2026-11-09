@@ -182,12 +182,16 @@ CREATE TABLE IF NOT EXISTS turn_commits (
     PRIMARY KEY (conversation_id, turn_id)
 );
 
--- 表 conversation_summaries：会话压缩摘要（滚动式，每会话一条；原文仍在 messages，可回放）。
-CREATE TABLE IF NOT EXISTS conversation_summaries (
-    conversation_id  TEXT PRIMARY KEY,  -- 会话 id
-    until_message_id INTEGER NOT NULL,  -- 该摘要覆盖到的最后一条消息 id
-    summary          TEXT NOT NULL,     -- 摘要正文（<compacted-summary> 之外的核心文本）
-    created_at       REAL NOT NULL      -- 创建时间戳（秒）
+-- 表 summary_segments：会话压缩摘要（追加式分段，永不重写；原文仍在 messages 可回放）。
+CREATE TABLE IF NOT EXISTS summary_segments (
+    conversation_id TEXT NOT NULL,      -- 会话 id
+    seg_seq         INTEGER NOT NULL,   -- 段序号（唯一排序，追加递增）
+    start_id        INTEGER NOT NULL,   -- 本段覆盖的第一条消息 id
+    end_id          INTEGER NOT NULL,   -- 本段覆盖的最后一条消息 id（= until_message_id 边界）
+    summary         TEXT NOT NULL,      -- 本段摘要正文
+    source_refs     TEXT NOT NULL DEFAULT '[]',  -- 所覆盖消息 id 列表（JSON 数组，可回放）
+    created_at      REAL NOT NULL,      -- 创建时间戳（秒）
+    PRIMARY KEY (conversation_id, seg_seq)
 );
 
 -- 表 index_meta：索引指纹/元信息（键值对；向量指纹、词法指纹都存这里）。
@@ -393,16 +397,23 @@ def _ensure_chunks_columns(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_summaries_table(conn: sqlite3.Connection) -> None:
-    """给旧 v1 库幂等补摘要表（新表，不影响既有数据）。"""
-    conn.executescript(  # 幂等建表
+    """迁移：丢弃旧滚动单行摘要表，建新增量分段摘要表（幂等，不碰 messages 原文）。"""
+    conn.executescript(  # 先删旧表（决策：新写一律走 segments，旧数据随删）
+        "DROP TABLE IF EXISTS conversation_summaries;"  # 旧单行表删除
+    )
+    conn.executescript(  # 幂等建 summary_segments
         # **注释行结尾必须有 \n**：SQLite 的 -- 注释吃到行尾，拼在一起会把 CREATE 一起吞掉
         # （线上踩过：静默不建表，直到运行期才报 no such table）。
-        "-- 表 conversation_summaries：会话压缩摘要（滚动式，每会话一条）。\n"
-        "CREATE TABLE IF NOT EXISTS conversation_summaries ("
-        " conversation_id TEXT PRIMARY KEY,"
-        " until_message_id INTEGER NOT NULL,"
+        "-- 表 summary_segments：会话压缩摘要（追加式分段，永不重写）。\n"
+        "CREATE TABLE IF NOT EXISTS summary_segments ("
+        " conversation_id TEXT NOT NULL,"
+        " seg_seq INTEGER NOT NULL,"
+        " start_id INTEGER NOT NULL,"
+        " end_id INTEGER NOT NULL,"
         " summary TEXT NOT NULL,"
-        " created_at REAL NOT NULL"
+        " source_refs TEXT NOT NULL DEFAULT '[]',"
+        " created_at REAL NOT NULL,"
+        " PRIMARY KEY (conversation_id, seg_seq)"
         ");"
     )
 
