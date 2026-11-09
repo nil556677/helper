@@ -10,6 +10,9 @@ from langchain_core.documents import Document
 
 from app.rag import kb_store
 
+#: 引用上限：回答最多引用几段资料（防止引用爆炸、也约束"依据资料作答"的范围）。
+CITATION_MAX = 5
+
 
 def _loc_dict(row_or_meta: dict) -> dict:
     """兼容两种形状：SQLite 行的 `loc_json` 字符串，或 Qdrant metadata 的 `loc` dict。"""

@@ -225,3 +225,59 @@ def test_guard_derive_from_memory() -> None:  # 跨轮护栏：记忆反推追�
     # 场景3：正常运行（无追问）→ 0/False
     c3, f3 = agent_mod.guard_from_memory([_T("年假怎么算", "年假按累计工龄折算。")])
     assert c3 == 0 and f3 is False  # 未追问未确认
+
+
+class _FakeTool:  # 假检索工具
+    def __init__(self, data):  # 构造
+        self._data = data  # 固定出参
+
+    async def ainvoke(self, args):  # 返回结构化包络
+        del args  # 忽略
+        return SimpleNamespace(data=self._data)  # 包络
+
+
+def _run_with(messages, monkeypatch):  # 用固定消息跑 run_react
+    monkeypatch.setattr(agent_mod, "_build_graph", lambda m, p: _fake_graph(messages))  # 替换图
+    try:  # 跑
+        return asyncio.run(agent_mod.run_react({"question": "q"}, model=object()))  # 结果
+    finally:  # 复位
+        monkeypatch.undo()  # 恢复
+
+
+def test_weather_answer_has_no_citations(monkeypatch) -> None:  # 天气回答不需要引用
+    call = {"name": "query_weather", "args": {"city": "成都"}, "id": "1"}  # 调天气
+    messages = [  # 消息序列
+        AIMessage(content="", tool_calls=[call]),  # 调工具
+        ToolMessage(content="成都 多云 17℃", name="query_weather", tool_call_id="1", status="success"),  # 结果
+        AIMessage(content="成都今天多云，17℃。"),  # 终答
+    ]  # 结束
+    out = _run_with(messages, monkeypatch)  # 跑
+    assert out["fragments"] == []  # 不产生引用
+    assert "参考" not in out["answer"]  # 不加角标
+
+
+def test_rag_answer_has_citations(monkeypatch) -> None:  # 知识库检索才产生引用
+    fake = _FakeTool({"evidence": [{"text": "年假 5 天", "source_name": "制度", "origin": "第 1 段"}], "gate": {"decision": "pass"}})  # 假工具
+    monkeypatch.setattr("app.agent.tools.catalog.tool_catalog", lambda: {"search_knowledge_base": fake})  # 打桩目录
+    call = {"name": "search_knowledge_base", "args": {"query": "年假"}, "id": "1"}  # 调检索
+    messages = [  # 消息序列
+        AIMessage(content="", tool_calls=[call]),  # 调工具
+        ToolMessage(content="[1] 制度：年假 5 天", name="search_knowledge_base", tool_call_id="1", status="success"),  # 结果
+        AIMessage(content="年假 5 天。"),  # 终答
+    ]  # 结束
+    out = _run_with(messages, monkeypatch)  # 跑
+    assert len(out["fragments"]) == 1  # 有引用
+    assert "参考：[1]" in out["answer"]  # 补了角标
+
+
+def test_rag_weak_gate_sets_note(monkeypatch) -> None:  # 证据弱 → 门禁提示
+    fake = _FakeTool({"evidence": [{"text": "相关片段", "source_name": "资料"}], "gate": {"decision": "weak"}})  # 假工具
+    monkeypatch.setattr("app.agent.tools.catalog.tool_catalog", lambda: {"search_knowledge_base": fake})  # 打桩
+    call = {"name": "search_knowledge_base", "args": {"query": "x"}, "id": "1"}  # 调检索
+    messages = [  # 消息
+        AIMessage(content="", tool_calls=[call]),  # 调
+        ToolMessage(content="[1] 资料", name="search_knowledge_base", tool_call_id="1", status="success"),  # 结果
+        AIMessage(content="根据资料……"),  # 终答
+    ]  # 结束
+    out = _run_with(messages, monkeypatch)  # 跑
+    assert "证据较弱" in out["note"]  # 门禁提示生效

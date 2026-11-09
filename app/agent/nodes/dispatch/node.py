@@ -185,7 +185,9 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
         run.emit(tool_event(name=str(getattr(tool, "name", "") or name), status="done", detail=f"{name} 完成"))  # 工具完成
     data = getattr(envelope, "data", None) or {}  # 结果数据
     text = _format(name, data)  # 模板化
-    fragments = list(data.get("evidence") or []) if name == "knowledge" else []  # 知识库带引用
+    from app.rag.evidence import CITATION_MAX  # 引用上限（单一来源）
+
+    fragments = list(data.get("evidence") or [])[:CITATION_MAX] if name == "knowledge" else []  # 知识库带引用（限条数）
     basis_payload: dict[str, Any] = {}  # 检索依据（知识路径才有）
     if name == "knowledge" and run is not None:  # 发检索依据（UI"检索依据"区 + 落库）
         raw_basis = data.get("basis") or {}  # 工具返回的计数
@@ -211,6 +213,13 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
         escalate, reason = assess(list(data.get("evidence") or []), question, min_results=min_results)  # 评估
         escalate_reason = reason if escalate else ""  # 不够好 → 带原因升级
     update: dict[str, Any] = {"answer": text, "route": route, "fragments": fragments, "escalate_reason": escalate_reason, "escalated_this_session": bool(escalate_reason)}  # 更新
+    # —— 依据资料作答门禁：证据弱/不足时如实提示（不假装有据）——
+    if name == "knowledge":  # 只对资料检索
+        gate_decision = str(((data.get("gate") or {}) if isinstance(data, dict) else {}).get("decision") or "")  # 门限
+        if gate_decision == "weak" and fragments:  # 证据弱
+            update["note"] = "证据较弱：以上回答请对照引用原文核对。"  # 提示
+        elif gate_decision == "reject" and not fragments:  # 无可用证据
+            update["note"] = "没有在本地资料里找到能支撑回答的内容，换个说法试试。"  # 诚实说明
     if basis_payload:  # 有依据
         update["basis"] = basis_payload  # 进 state（落库）
     return update  # 返回（升级则记防乒乓标记）

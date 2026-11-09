@@ -144,6 +144,47 @@ def guard_from_memory(turns: list[Any]) -> tuple[int, bool]:  # 从对话记忆�
     return count, confirmed  # 返回
 
 
+async def _collect_evidence(messages: list[Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:  # 收集引用+门禁
+    """从 ReAct 的工具调用里回收知识库证据与门限（工具 10 分钟幂等缓存，重调很便宜）。
+
+    agent 只拿到工具的编号文本，结构化证据/门限要在这里取回，才能给出引用、查看全文、
+    并让"依据资料作答"的门禁生效（证据弱→提示，证据不足→诚实说明）。
+    """
+    from app.agent.tools.catalog import tool_catalog  # 工具目录
+    from app.rag.evidence import CITATION_MAX  # 引用上限
+
+    catalog = tool_catalog()  # 名 → 工具
+    seen: set[str] = set()  # 去重
+    fragments: list[dict[str, Any]] = []  # 引用
+    gate: dict[str, Any] = {}  # 门限（取第一次知识检索的）
+    for msg in messages:  # 按顺序
+        if not (isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None)):  # 只看"要调工具"的
+            continue  # 跳过
+        for call in msg.tool_calls:  # 逐个
+            name = str(call.get("name") or "")  # 工具名
+            if not name.startswith("search_"):  # 只回收检索类
+                continue  # 跳过
+            tool = catalog.get(name)  # 取工具
+            if tool is None:  # 未注册
+                continue  # 跳过
+            try:  # 重调（缓存命中，便宜）
+                envelope = await tool.ainvoke(call.get("args") or {})  # 执行
+                data = getattr(envelope, "data", None) or {}  # 结构化出参
+            except Exception:  # 失败不影响回答
+                continue  # 跳过
+            if not gate and isinstance(data.get("gate"), dict):  # 首次门限
+                gate = dict(data["gate"])  # 记录
+            for item in data.get("evidence") or []:  # 证据
+                key = str(item.get("text") or "")  # 去重键
+                if not key or key in seen:  # 空/重复
+                    continue  # 跳过
+                seen.add(key)  # 记
+                fragments.append(item)  # 收集
+                if len(fragments) >= CITATION_MAX:  # 到上限
+                    return fragments, gate  # 早停
+    return fragments, gate  # 返回
+
+
 async def run_react(  # 跑单一 ReAct 兜底
     state: dict[str, Any],  # 父图 State
     *,
@@ -189,11 +230,31 @@ async def run_react(  # 跑单一 ReAct 兜底
             answer = "信息仍不够具体，请换一种更明确的说法再试。"  # 诚实收尾
         else:  # 首次追问
             new_clarify += 1  # 记一次（下一轮 confirmed → 熔断）
+    # —— 依据资料作答的门禁：回收引用 + 门限；证据弱/不足时如实提示（不假装有据）——
+    fragments, gate = await _collect_evidence(result.get("messages", []))  # 回收证据
+    note = ""  # 说明
+    decision = str((gate or {}).get("decision") or "")  # pass/weak/reject
+    if fragments:  # 有引用
+        answer = _add_citation_marks(answer, fragments)  # 给模型回答补角标（保持可追溯）
+    if decision == "weak" and not _is_question(answer):  # 证据弱
+        note = "证据较弱：以上回答请对照引用原文核对。"  # 提示
+    elif decision == "reject" and fragments:  # 门禁判不足
+        note = "资料不足以下结论，请以引用原文为准。"  # 提示
     return {  # 写回父图
         "answer": answer or "已尝试，但未能完成，请换一种方式描述。",  # 兜底话术
         "fallback_used": True,  # 标记
         "clarify_count": new_clarify,  # 喂追计数（供下一轮熔断）
         "intent_confirmed": confirmed,  # 意图确认态（跟进轮置真）
-        "fragments": [],  # 兜底不产引用（检索工具结果在答案里）
-        "note": "",  # 说明
+        "fragments": fragments,  # 引用（agent 也有资料可点开看全文）
+        "gate": gate,  # 门限结论（观测/校验用）
+        "note": note,  # 说明
     }  # 返回
+
+
+def _add_citation_marks(answer: str, fragments: list[dict[str, Any]]) -> str:  # 给回答补引用角标
+    """模型回答若没写角标，就在末尾补一条"参考 [1][2]"，保证引用可追溯。"""
+    text = str(answer or "").rstrip()  # 去尾空白
+    if not text or "[1]" in text or "[来源" in text:  # 已带角标
+        return text  # 不动
+    marks = "".join(f"[{i}]" for i in range(1, min(len(fragments), 5) + 1))  # 角标
+    return f"{text}\n\n参考：{marks}"  # 追加
