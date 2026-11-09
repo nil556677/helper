@@ -262,6 +262,16 @@ async def run_react(  # 跑单一 ReAct 兜底
     graph = _build_graph(model, system_prompt)  # 图（不缓存））
     run = current_run()  # 事件出口
     if ctx_view is not None and run is not None:  # C5：上下文事件带剪枝/丢弃/缓存前缀
+        from app.agent.contexts.assembler import ContextUsage  # 上下文占用
+        from app.agent.contexts.budget import Budget  # 预算
+
+        run.context_usage = ContextUsage(  # 供 persist 落 turn_json → UI 占用条读取
+            window=Budget().window,  # 窗口
+            total=int(sum(getattr(b, "tokens", 0) for b in ctx_view.blocks)),  # token
+            pruned=dict(ctx_view.pruned),  # 剪枝
+            dropped=dict(ctx_view.dropped),  # 预算丢
+            cache_prefix_tokens=ctx_view.cache_prefix_tokens,  # 缓存前缀
+        )  # 结束
         run.emit(context_event(  # 上下文事件
             len(ctx_view.messages),  # 条数
             int(sum(getattr(b, "tokens", 0) for b in ctx_view.blocks)),  # token（块内）

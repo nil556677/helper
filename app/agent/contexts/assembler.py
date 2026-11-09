@@ -37,6 +37,9 @@ class ContextUsage:  # 上下文占用（给事件/UI/落库）
     trimmed: int = 0  # 裁剪条数
     trimmed_saved: int = 0  # 裁剪释放
     prompt_versions: dict[str, int] = field(default_factory=dict)  # 模板版本
+    pruned: dict[str, int] = field(default_factory=dict)  # 各层剪枝计数
+    dropped: dict[str, int] = field(default_factory=dict)  # 各层预算丢弃计数
+    cache_prefix_tokens: int = 0  # 稳定前缀(S) token（Prompt Cache 观测）
 
     def to_dict(self) -> dict[str, Any]:  # 序列化
         """给事件/turn_json/落库用（纯 dict）。"""
