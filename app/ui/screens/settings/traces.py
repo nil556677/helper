@@ -399,6 +399,15 @@ def render() -> None:  # 画分区
         """总览与列表一起刷新；内容没变就不重建 DOM（避免每秒闪 + tooltip 丢锚点）。"""
         try:  # 单点失败不要拖垮整页
             _refresh_kpi()  # KPI 一直更新（数字小，重建便宜）
+            try:  # 上下文治理统计（剪枝/预算丢/缓存前缀）
+                ms = trace_service.context_usage_stats(7)  # 近 7 天聚合
+                mem_stats_lbl.text = (  # 写统计
+                    f"剪枝 {ms['pruned']} 条 · 预算丢 {ms['dropped']} · "
+                    f"缓存前缀 {ms['cache_prefix_tokens']} token"
+                )  # 结束
+                mem_stats_lbl.update()  # 刷新
+            except Exception:  # 统计失败不拖垮
+                pass  # 忽略
 
             errors = trace_service.error_top(7, 5)  # 失败原因 Top5（近 7 天）
             error_sig = tuple(errors)  # 变化签名
@@ -495,10 +504,13 @@ def render() -> None:  # 画分区
                     with ui.element("div").classes("hp-stats w-full"):  # KPI 条
                         for key, name in kpi_names.items():  # 六格
                             kpi[key] = _kpi_tile("—", name)  # 建格并记句柄
-                    with ui.row().classes("w-full items-start gap-3 flex-wrap"):  # 两卡并排
+                    with ui.row().classes("w-full items-start gap-3 flex-wrap"):  # 三卡并排
                         with ui.column().classes("hp-card gap-2 flex-1").style("min-width: 240px;"):  # 失败原因
                             card_head("warning_amber", "失败原因", "近 7 天")  # 卡片头
                             failure_box = ui.column().classes("w-full gap-1")  # 列表容器
+                        with ui.column().classes("hp-card gap-2 flex-1").style("min-width: 200px;"):  # 上下文治理
+                            card_head("memory", "上下文治理", "近 7 天")  # 卡片头
+                            mem_stats_lbl = ui.label("…").classes("hp-field-help")  # 统计值
                         with ui.column().classes("hp-card gap-2 flex-1").style("min-width: 320px;"):  # 最近
                             card_head("history", "最近提问", "点一行看详情")  # 卡片头
                             recent_box = ui.column().classes("w-full gap-1")  # 列表容器

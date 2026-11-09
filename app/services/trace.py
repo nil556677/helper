@@ -161,3 +161,37 @@ def compaction_errors(conversation_id: str, *, limit: int = 20) -> list[dict[str
             {"conversation_id": conversation_id, "at": float(item["at"] or 0), "error": str(detail.get("error") or "")}
         )  # 结束
     return result  # 返回
+
+
+def context_usage_stats(days: int = 7) -> dict[str, int]:
+    """近 days 天累积的上下文剪枝/预算丢/缓存前缀 token（读 messages.turn_json.context_usage）。"""
+    from app.core.db.connection import get_connection  # DB
+
+    import json  # 解析 turn_json
+    import time  # 时间窗
+
+    since = time.time() - int(days) * 86400  # 起始时间
+    total = {"pruned": 0, "dropped": 0, "cache_prefix_tokens": 0}  # 累积
+    try:  # 坏库/旧表兜底
+        rows = get_connection().execute(  # 近 days 天的 assistant 消息
+            "SELECT turn_json FROM messages WHERE role = 'assistant' AND created_at >= ?",
+            (since,),
+        ).fetchall()
+    except Exception:  # 无表
+        return total  # 空
+    for item in rows:  # 逐条
+        try:  # 坏 JSON 跳过
+            payload = json.loads(item["turn_json"] or "{}")  # turn_json
+            usage = payload.get("context_usage") or {}  # 上下文占用
+        except Exception:  # 坏 JSON
+            continue  # 跳过
+        if not isinstance(usage, dict):  # 非 dict
+            continue  # 跳过
+        for key in ("pruned", "dropped"):  # 剪枝/预算丢（dict 或 int）
+            value = usage.get(key)  # 值
+            if isinstance(value, dict):  # 按层 dict
+                total[key] += int(sum(int(v) for v in value.values()))  # 求和
+            elif value:  # int
+                total[key] += int(value)  # 累加
+        total["cache_prefix_tokens"] += int(usage.get("cache_prefix_tokens") or 0)  # 缓存前缀
+    return total  # 返回
