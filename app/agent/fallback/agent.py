@@ -30,6 +30,42 @@ _VARIANT: dict[str, str] = {"current_time": "time", "query_weather": "weather", 
 #: 说话者标签（多轮记忆格式化用）。
 _MAX_TURNS = 6  # 最多带最近 6 轮记忆
 
+#: 是否启用 ContextBuilder 装配（生产接线开关；默认关保持测试兼容，开则走 builder system+messages）。
+_CONTEXT_BUILDER = False  # 开关
+
+
+def _state_context(state: dict[str, Any]) -> Any | None:  # 用 ContextBuilder 装配上下文
+    """从 state 取工作记忆/近轮/段/事实/问题 → build_context；失败返回 None（退回手拼）。"""
+    try:  # 任何失败退回旧路径
+        from app.agent.contexts.builder import build_context, set_embed  # builder
+        from app.agent.memory import MemoryStore, embed_text  # 长期库/嵌入
+
+        set_embed(embed_text)  # 注入 bge-m3 嵌入（不可用则退保底）
+        conversation_id = str(state.get("conversation_id") or "")  # 会话
+        segments: list[dict[str, Any]] = []  # 段
+        facts: list[dict[str, Any]] = []  # 事实
+        try:  # 段取数失败不影响装配
+            if conversation_id:  # 有会话
+                from app.services import conversations  # 会话服务
+
+                segments = conversations.load_segments(conversation_id, limit=2)  # 最近段
+        except Exception:  # 无表/坏库
+            segments = []  # 空
+        try:  # 事实取数失败不影响装配
+            facts = MemoryStore().search(top_k=6)  # 长期事实
+        except Exception:  # 无表/坏库
+            facts = []  # 空
+        return build_context(  # 装配（system 用现有工具规则）
+            system=_system_prompt(state),  # S 规则
+            working=state.get("working_memory") or {},  # 锚点
+            facts=facts,  # 事实
+            segments=segments,  # 段
+            recent=list(state.get("turns") or []),  # 近轮
+            question=str(state.get("question") or ""),  # 问题
+        )  # 返回
+    except Exception:  # 失败
+        return None  # 退回旧路径
+
 
 def _build_graph(model: Any, prompt: str) -> Any:  # 构造 ReAct 图
     """模型实例 + 系统提示 → 编译好的 ReAct 图。模型可能不可哈希，不缓存。"""
@@ -205,8 +241,14 @@ async def run_react(  # 跑单一 ReAct 兜底
     prior_asked = int(state.get("clarify_count") or 0) > 0  # 之前是否问过
     confirmed = bool(state.get("intent_confirmed")) or prior_asked  # 已确认（含"正在答复追问"）
     state = {**state, "intent_confirmed": confirmed}  # 覆盖意图确认态
-    graph = _build_graph(model, _system_prompt(state))  # 图（不缓存））
     messages = [HumanMessage(content=_user_message(state))]  # 单条 human（含全部上下文））
+    system_prompt = _system_prompt(state)  # 系统提示（默认手写规则）
+    if _CONTEXT_BUILDER:  # 启用装配（生产接线）
+        ctx_view = _state_context(state)  # 装配上下文
+        if ctx_view is not None:  # 装配成功
+            messages = [HumanMessage(content=str(item.get("content") or "")) for item in ctx_view.messages if item.get("content")]  # 用 builder messages
+            system_prompt = ctx_view.system  # 用 builder system（含 working 锚点）
+    graph = _build_graph(model, system_prompt)  # 图（不缓存））
     run = current_run()  # 事件出口
     result = await graph.ainvoke({"messages": messages})  # 跑一轮（到终态））
     # —— 后置：从最终消息里回放工具调用 → TOOL 事件（时间线可见）——

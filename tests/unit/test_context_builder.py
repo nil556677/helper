@@ -65,3 +65,20 @@ def test_no_input_shape() -> None:  # 空输入 shape 正确
     assert out.messages and out.messages[0]["content"] == "q"  # 仅问题
     assert out.blocks == []  # 无块
     assert "q" in out.system or "q" in out.messages[0]["content"]  # 问题可达
+
+
+def test_state_context_via_builder(monkeypatch) -> None:  # C4：run_react 用 builder 装配
+    import app.agent.contexts.builder as b  # builder 模块
+    import app.agent.fallback.agent as a  # ReAct 模块
+
+    monkeypatch.setattr(b, "set_embed", lambda f: None)  # 禁嵌入（退保守剪枝，别拉模型）
+    out = a._state_context({  # 装配
+        "question": "q",  # 问题
+        "working_memory": {"task_goal": "g", "key_facts": {"id": "1"}},  # 锚点
+        "turns": [{"user": "上轮", "assistant": "已答"}],  # 近轮
+    })  # 结束
+    assert out is not None  # 装配成功
+    assert "g" in out.system  # working 目标进 system
+    assert "1" in out.system  # key_facts 进 system（锚点）
+    assert "上轮" in out.messages[0]["content"]  # 近轮进消息
+    assert "q" in out.messages[0]["content"]  # 问题最末
