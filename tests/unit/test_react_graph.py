@@ -7,7 +7,7 @@ import asyncio  # 跑 async
 from langchain_core.messages import AIMessage, HumanMessage  # 消息
 
 import app.agent.tools.library as lib  # 内置工具（取 current_time）
-from app.agent.react.graph import build_react  # 自定义图
+from app.agent.react.graph import approval_stats, build_react  # 自定义图 + 计数
 
 
 class _Model:  # 桩模型：两次调用（先调工具，再给终答）
@@ -70,6 +70,7 @@ def test_react_graph_approval_intercepts_manual_tool(monkeypatch) -> None:  # ma
             raise AssertionError("审批未拦截，工具被直接执行")  # 不该
 
     order_repo.set_order_repo(_FakeRepo())  # 注入（其方法一调即炸）
+    before_blocked = approval_stats()["blocked"]  # 拦截前
     try:  # 跑
         tc = {"name": "query_order", "args": {"order_id": "12345"}, "id": "c1", "type": "tool_call"}  # 订单调用
         model = _Model([  # 两次响应
@@ -87,3 +88,4 @@ def test_react_graph_approval_intercepts_manual_tool(monkeypatch) -> None:  # ma
     assert any(isinstance(m, ToolMessage) and "需要人工审批" in str(m.content) for m in msgs)  # 被拦截
     assert calls == []  # 工具未被真正执行
     assert str(result["messages"][-1].content or "")  # 回了模型并给终答
+    assert approval_stats()["blocked"] > before_blocked  # 审批拦截计数增长

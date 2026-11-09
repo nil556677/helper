@@ -16,7 +16,15 @@ from langgraph.prebuilt import ToolNode  # 工具执行
 from app.agent.react.policies.approval import should_require_approval  # 审批策略
 from app.agent.tools.wiring import describe  # 工具描述符（读 approval）
 
-__all__ = ["ReactState", "build_react"]  # 导出
+__all__ = ["ReactState", "approval_stats", "build_react"]  # 导出
+
+#: 进程级审批计数（观测用）。
+_approval_stats: dict[str, int] = {"blocked": 0, "created": 0}  # 计数
+
+
+def approval_stats() -> dict[str, int]:  # 审批统计
+    """被审批门拦截次数 / 落表登记次数（累计，观测用）。"""
+    return dict(_approval_stats)  # 拷贝
 
 
 class ReactState(TypedDict):  # ReAct 状态
@@ -65,6 +73,7 @@ def build_react(  # 构造自定义 ReAct 图
         # 需审批：落表(best-effort) + 用 ToolMessage 拦截本次执行，回模型如实说明
         import time as _time  # 时间
 
+        _approval_stats["blocked"] += len(need)  # 计拦截
         try:  # 落表失败不阻断拦截
             from app.agent.approval import repository as approval_repo  # 审批仓储
 
@@ -81,6 +90,7 @@ def build_react(  # 构造自定义 ReAct 图
                     approval_reason="工具策略要求人工审批",  # 原因
                     expires_at=_time.time() + 3600,  # 1 小时
                 )  # 结束
+                _approval_stats["created"] += 1  # 计登记
         except Exception:  # 未配置库等
             pass  # 仍拦截
         blocked: list[Any] = []  # 拦截消息

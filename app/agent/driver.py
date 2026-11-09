@@ -93,6 +93,15 @@ def _metrics_of(ctx: RunContext, state: dict[str, Any]) -> dict[str, Any]:  # �
         metrics["compaction_errors"] = len(last_errors())  # 失败会话数
     except Exception:  # 防失败
         metrics["compaction_errors"] = 0  # 兜底
+    try:  # 审批门拦截/登记计数（进程级累计，观测）
+        from app.agent.react.graph import approval_stats  # 审批计数
+
+        _a = approval_stats()  # 取
+        metrics["approval_blocked"] = int(_a.get("blocked") or 0)  # 拦截
+        metrics["approval_created"] = int(_a.get("created") or 0)  # 登记
+    except Exception:  # 防失败
+        metrics["approval_blocked"] = 0  # 兜底
+        metrics["approval_created"] = 0  # 兜底
     metrics["question_chars"] = len(str(ctx.question or ""))  # 问题体积
     metrics["answer_chars"] = len(str(state.get("answer") or ""))  # 回答体积
     metrics["ttft_ms"] = int(ctx.first_token_ms or 0)  # 首 token
