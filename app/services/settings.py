@@ -85,6 +85,20 @@ def get_log_debug() -> bool:
     return bool(access.load().log_debug)
 
 
+def get_flag(name: str, default: bool = False) -> bool:
+    """读一个布尔配置项（记忆/上下文等特性开关）。"""
+    from app.core.config.store import load  # 配置
+
+    return bool(load().values.get(name, default))  # 值
+
+
+def set_flag(name: str, value: bool) -> None:
+    """写一个布尔配置项（记忆/上下文等特性开关）。"""
+    from app.core.config.store import save_values  # 配置
+
+    save_values({name: bool(value)})  # 持久化
+
+
 def set_log_debug(on: bool) -> None:
     """打开/关闭调试模式：写数据库并**立即重建日志 sink**（不用重启生效）。
 

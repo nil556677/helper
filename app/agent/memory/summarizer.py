@@ -32,10 +32,34 @@ async def _run(conversation_id: str) -> None:  # 执行一次压缩
     """压最老一段并追加分段；失败记录不致命（不动 until，下轮自然重试）。"""
     try:  # 任何失败都不影响主线
         await _compact_once(conversation_id)  # 真正压缩
-    except Exception as exc:  # 记录失败原因（可观测）
-        _last_errors[conversation_id] = f"{type(exc).__name__}: {exc}"  # 记
+    except Exception as exc:  # 记录失败（进程内 + 持久化 trace_events）
+        reason = f"{type(exc).__name__}: {exc}"  # 失败原因
+        _last_errors[conversation_id] = reason  # 进程内记
+        try:  # 持久化到 trace_events（重启可查；best-effort）
+            await asyncio.to_thread(_persist_error, conversation_id, reason)  # 后台写
+        except Exception:  # 持久化失败不影响
+            pass  # 忽略
     finally:  # 一定释放单飞位
         _running.pop(conversation_id, None)  # 移除
+
+
+def _persist_error(conversation_id: str, reason: str) -> None:  # 写一条 trace_event（同步，丢线程）
+    """挂到该会话最近一次 run（无则空 run_id）；供追踪详情/排障。"""
+    from app.core.db.connection import get_connection  # DB
+    from app.core.trace import store as trace_store  # trace
+
+    row = get_connection().execute(  # 找最近 run
+        "SELECT id FROM trace_runs WHERE conversation_id = ? ORDER BY started_at DESC LIMIT 1",
+        (conversation_id,),
+    ).fetchone()
+    run_id = str(row["id"]) if row else ""  # 最近 run 或空
+    trace_store.add_event(  # 插入事件
+        run_id,  # run
+        level="error",  # 等级
+        code="compaction_failed",  # 码
+        message="记忆压缩失败",  # 标题
+        detail={"conversation_id": conversation_id, "error": str(reason or "")},  # 明细
+    )  # 结束
 
 
 def last_errors() -> dict[str, str]:  # 各会话最近一次压缩失败原因（观测）

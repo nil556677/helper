@@ -185,8 +185,16 @@ def start_stream(  # 启动
         attachments=list(attachments or []),  # 附件
         singleflight_base=singleflight_timeouts(),  # 记录基线，收尾算增量
     )  # 上下文结束
-    ctx.features["context_builder"] = True  # 生产开启 ContextBuilder 注入（ReAct/general）
-    ctx.features["dispatch_context"] = False  # dispatch 上文拼接默认关（避免 ReAct 连带副作用）
+    ctx.features["context_builder"] = True  # 默认生产开 ContextBuilder（可按配置覆盖）
+    ctx.features["dispatch_context"] = False  # dispatch 上文拼接默认关
+    try:  # 读配置开关（设置页可改）
+        from app.core.config.store import load as load_config  # 配置
+
+        values = load_config().values  # 配置值
+        ctx.features["context_builder"] = bool(values.get("agent.context_builder_enabled", True))  # ReAct/general 注入
+        ctx.features["dispatch_context"] = bool(values.get("agent.dispatch_context_enabled", False))  # dispatch 上文
+    except Exception:  # 读失败用默认
+        pass  # 保持默认
     sink._run_id = ctx.run_id  # 事件出口预先知道临时 run id
     handle = StreamHandle(run_id=ctx.run_id, ctx=ctx, events=queue)  # 句柄
     handle.task = asyncio.create_task(_run(handle))  # 后台跑

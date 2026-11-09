@@ -58,6 +58,32 @@ def render() -> None:
 
                 debug_switch.on_value_change(_toggle_debug)
 
+        # ---- 记忆与上下文 ----
+        with ui.column().classes("hp-card w-full gap-3"):
+            card_head("memory", "记忆与上下文")  # 卡头
+            with ui.row().classes("hp-field-row"):  # ContextBuilder
+                with ui.column().classes("hp-field-main gap-0"):
+                    ui.label("ContextBuilder 注入").classes("hp-field-name")
+                    ui.label("ReAct/general 用工作记忆+事实+摘要+近轮装配上下文；下一轮生效。").classes("hp-field-help")
+                cb = ui.switch(value=settings_service.get_flag("agent.context_builder_enabled", True)).mark("general-context-builder")
+
+                def _t_cb(event: Any) -> None:
+                    settings_service.set_flag("agent.context_builder_enabled", bool(event.value))  # 存
+                    notify("ContextBuilder 注入已开启；对之后的请求生效" if event.value else "已关闭 ContextBuilder 注入", kind="positive" if event.value else "info")
+
+                cb.on_value_change(_t_cb)
+            with ui.row().classes("hp-field-row"):  # dispatch 上文
+                with ui.column().classes("hp-field-main gap-0"):
+                    ui.label("Dispatch 上文拼接").classes("hp-field-name")
+                    ui.label("固定路径知识检索时并进上一轮问题（连续追问用）；默认关。").classes("hp-field-help")
+                dc = ui.switch(value=settings_service.get_flag("agent.dispatch_context_enabled", False)).mark("general-dispatch-context")
+
+                def _t_dc(event: Any) -> None:
+                    settings_service.set_flag("agent.dispatch_context_enabled", bool(event.value))  # 存
+                    notify("Dispatch 上文拼接已开启；对之后的请求生效" if event.value else "已关闭 Dispatch 上文拼接", kind="positive" if event.value else "info")
+
+                dc.on_value_change(_t_dc)
+
         # ---- 本机服务（Qdrant / worker）----
         # 生命周期与主程序一致：启动时拉起、退出时停止（见 app/__main__.py 与 core/proc/services）。
         with ui.column().classes("hp-card w-full gap-3"):
