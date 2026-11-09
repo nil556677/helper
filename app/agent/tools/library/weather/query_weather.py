@@ -133,7 +133,7 @@ async def query_weather(city: str, mode: str = "current", date: str = ""):  # �
         fields = _daily_fields(data.get("daily") or {}, str(date))  # 取字段（格式已校验）
         if fields is None:  # 只有"不在窗口"会到这里
             raise ToolError(str(ErrorCode.PROTOCOL_ARG_INVALID), f"日期 {date} 不在未来 7 天预报范围内")  # 业务错
-        return {"city": city, "date": str(date), "type": "forecast", "ts": int(time.time()), **fields}  # 统一结构（含 ts）
+        return {"city": city, "date": str(date), "type": "forecast", "ts": int(time.time()), "temperature_c": None, "windspeed_kmh": None, **fields}  # 统一结构（含 ts；缺失字段置空）
     current = data.get("current_weather") or {}  # 实时
     text = f"{city} 当前 {_code_text(current.get('weathercode'))}，气温 {current.get('temperature')}℃，风速 {current.get('windspeed')} km/h"  # 人话
     return {  # 实时固定结构
@@ -143,6 +143,8 @@ async def query_weather(city: str, mode: str = "current", date: str = ""):  # �
         "weather": _code_text(current.get("weathercode")),  # 天气
         "temperature_c": current.get("temperature"),  # 气温
         "windspeed_kmh": current.get("windspeed"),  # 风速
+        "tmin_c": None,  # 实时无最低温
+        "tmax_c": None,  # 实时无最高温
         "ts": int(time.time()),  # 查询时间戳
         "text": text,  # 人话文本
     }  # 返回

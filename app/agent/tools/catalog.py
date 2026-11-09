@@ -3,7 +3,6 @@
 from __future__ import annotations  # 延迟求值注解
 
 from functools import lru_cache  # 进程级缓存
-from typing import Any  # 任意值
 
 from langchain_core.tools import BaseTool  # 框架工具基类
 
