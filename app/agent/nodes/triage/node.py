@@ -75,14 +75,6 @@ def triage_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  #
                     decided_by="config",  # 用户选择
                 )  # 结束
                 return {"triage": decision.model_dump(mode="json"), "route": resolved.model_dump(mode="json")}  # 短路
-    # 需澄清且有可展示候选 → 仍走 clarify 弹窗（HITL 选候选）；无候选 → 交给 agent
-    if _intent_of(state).intent == "clarify":  # 澄清意图
-        recall = state.get("semantic_recall") if isinstance(state.get("semantic_recall"), dict) else {}  # 语义召回
-        candidates = recall.get("candidates") or []  # 候选
-        displayable = any(float((item or {}).get("score") or 0.0) >= 0.25 for item in candidates if isinstance(item, dict))  # 可展示
-        if displayable:  # 有候选可让用户选
-            decision = TriageDecision(intent="clarify", path_type="clarify")  # 弹窗澄清
-            return {"triage": _with_approval(decision)}  # 写回
     decision = decide_triage(  # 决策
         query,  # 问题
         _intent_of(state),  # 意图

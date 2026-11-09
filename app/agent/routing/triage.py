@@ -53,47 +53,28 @@ def _missing(query: str, intent: IntentDecision, entities: dict[str, Any], time_
     return missing  # 返回
 
 
-def decide_triage(  # 纯函数：产出统一执行计划
+def decide_triage(  # 纯函数：极简统一执行计划
     query: str,  # 规范化问题
     intent: IntentDecision,  # L2 意图
     flags: dict[str, Any],  # 硬约束
     *,
-    escalated: bool = False,  # 本会话是否已升级过（防乒乓）
-    entities: dict[str, Any] | None = None,  # 补全后的实体
-    time_range: Any = None,  # 解析出的时间范围
+    escalated: bool = False,  # 兼容旧签名（不再使用）
+    entities: dict[str, Any] | None = None,  # 兼容旧签名
+    time_range: Any = None,  # 兼容旧签名
     last_failed: bool = False,  # 上一轮是否失败
-    has_route: bool = True,  # 是否已有固定路径（规则/语义 direct 命中）
-    dependency_agentic: bool = False,  # 依赖链 LLM 兜底结论（规则词表未命中时上游判定）
+    has_route: bool = True,  # 兼容旧签名
+    dependency_agentic: bool = False,  # 兼容旧签名
 ) -> TriageDecision:  # 决策
-    """顺序：flags 短路 > 意图判定 > 兜底。"""
-    text = str(query or "")  # 原文
+    """极简：能接住的功能由 pretriage/规则直连；**到这里=没被接住 → 一律 ReAct**。
+
+    不再判别 fast_single / fast_multi / dependency / unsupported——动作/澄清/复杂
+    全交给 ReAct 统一处理（ReAct 未来承载更多能力）。仅 flags.no_tools 走 general。
+    """
     domain = intent.domain or ""  # 域
     kind = intent.intent  # 意图
-    missing = _missing(text, intent, entities or {}, time_range)  # 缺参
-    extras = {"missing_entities": missing, "retry_after_failure": bool(last_failed)}  # 公共字段
-    # 1) flags 硬约束（模型不可推翻）
-    if flags.get("no_tools"):  # 禁工具
-        return TriageDecision(intent=kind, domain=domain, path_type="agentic", agent="general_agent", escalate_reason="flag_no_tools", **extras)  # 兜底
-    if flags.get("mode") == "deep_research":  # 深研
-        return TriageDecision(intent="query", domain=domain, path_type="agentic", agent=agent_for_domain(domain), escalate_reason="flag_deep", **extras)  # 深研
-    if flags.get("mode") == "answer_only":  # 只要答案
-        if escalated:  # 已升级过
-            return TriageDecision(intent="query", domain=domain, path_type="fast_single", escalate_reason="escalate_blocked", **extras)  # 不再升级
-        return TriageDecision(intent="query", domain=domain, path_type="fast_single", **extras)  # 快捷
-    # 2) 意图判定
-    if kind == "action":  # 操作意图（本期无写工具）
-        return TriageDecision(intent="action", domain=domain, path_type="unsupported", escalate_reason="no_action_capability", **extras)  # 显式不支持
-    if kind == "clarify":  # 需澄清 → 交给兜底 ReAct（由 agent 追问或诚实说明），不再弹窗
-        return TriageDecision(intent="query", domain=domain, path_type="agentic", agent=agent_for_domain(domain), escalate_reason="clarify_by_agent", **extras)  # agent 承担澄清
-    # query
-    if not has_route and not escalated:  # 没有固定路径可直连 → 交给 agentic 专家
-        return TriageDecision(intent="query", domain=domain, path_type="agentic", agent=agent_for_domain(domain), escalate_reason="no_fixed_path", **extras)  # 专家子图
-    if escalated:  # 防 fast→agentic→fast 乒乓
-        return TriageDecision(intent="query", domain=domain, path_type="fast_single", escalate_reason="escalate_blocked", **extras)  # 锁定
-    if _has(text, AGENTIC_MARKERS):  # 有依赖链
-        return TriageDecision(intent="query", domain=domain, path_type="agentic", agent=agent_for_domain(domain), escalate_reason="dependency_chain", **extras)  # 专家子图
-    if dependency_agentic:  # 词表未命中，但 LLM 兜底判为依赖链
-        return TriageDecision(intent="query", domain=domain, path_type="agentic", agent=agent_for_domain(domain), escalate_reason="dependency_llm", **extras)  # 专家子图
-    if _has(text, MULTI_MARKERS):  # 多源独立
-        return TriageDecision(intent="query", domain=domain, path_type="fast_multi", **extras)  # 多源
-    return TriageDecision(intent="query", domain=domain, path_type="fast_single", **extras)  # 单源快速
+    extras = {"retry_after_failure": bool(last_failed)}  # 公共字段
+    del escalated, entities, time_range, has_route, dependency_agentic  # 忽略不用的旧参数
+    if flags.get("no_tools"):  # 禁工具（硬约束）
+        return TriageDecision(intent=kind, domain=domain, path_type="agentic", agent="general_agent", escalate_reason="flag_no_tools", **extras)  # 通用兜底
+    # 其余全部 → ReAct（唯一出口）
+    return TriageDecision(intent=kind, domain=domain, path_type="agentic", agent=agent_for_domain(domain), escalate_reason="react_unified", **extras)  # ReAct

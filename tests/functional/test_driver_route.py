@@ -57,9 +57,7 @@ async def test_driver_drives_route_graph_direct() -> None:  # direct 路径
     assert sink.events[-1].type is EventType.DONE  # 最后一帧 done
 
 
-async def test_driver_drives_route_graph_miss_to_clarify() -> None:  # miss → 澄清
+async def test_driver_drives_route_graph_miss_to_react() -> None:  # miss → ReAct（不再写 clarify_options）
     result, sink = await _run("帮我解释一下这个奇怪的需求，完全无关")  # 跑（易混/无候选）
     assert result.status == "done"  # 终态
-    answer = str(result.state.get("answer") or "")  # 回答
-    assert answer  # 有澄清/拒绝话术
-    assert result.state.get("clarify_options")  # 写了澄清选项
+    assert str(result.state.get("answer") or "")  # 有降级/诚意话术（ReAct）

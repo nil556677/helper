@@ -1,23 +1,21 @@
-"""HITL 端到端：生产路由图 interrupt 暂停 → resume 选路径 → 固定路径作答。"""
+"""路由图：语义 miss 不再走 clarify 弹窗，一律交给 ReAct（不暂停）。"""
 
-from __future__ import annotations  # 延迟求值注解
+from __future__ import annotations  # 延迟值注解
 
 import asyncio  # 跑
 
 import uuid  # 唯一线程
 
-from langgraph.types import Command  # 恢复
-
 import app.agent.agent as agent_mod  # 图
 from app.agent.checkpoint import build_async_saver  # 真实 saver
 
 
-async def _run(tmp_path) -> tuple[dict, dict]:  # 跑一轮
+async def _run(tmp_path) -> dict:  # 跑一轮
     async def noop_finalize(state, config=None):  # 打桩收尾
         del config  # 不用
         return {}  # 不落库
 
-    async def fake_semantic(state, config=None):  # 强制 miss 但保留可展示候选 → 澄清选项
+    async def fake_semantic(state, config=None):  # 强制 miss（即便有候选也不弹窗）
         del state, config  # 不用
         return {"semantic_recall": {"decision": "miss", "candidates": [{"route": "time", "score": 0.26}], "top1": 0.26, "margin": 0.0}}  # 召回
 
@@ -28,13 +26,11 @@ async def _run(tmp_path) -> tuple[dict, dict]:  # 跑一轮
     thread_id = f"hitl-{uuid.uuid4().hex[:8]}"  # 唯一线程
     cfg = {"configurable": {"thread_id": thread_id}}  # 线程
     initial = {"question": "随便说点什么", "conversation_id": "c", "hitl_enabled": True, "run_id": "r1", "thread_id": thread_id, "turns": [], "attachments": []}  # 输入
-    paused = await graph.ainvoke(initial, cfg)  # 第一次：暂停
-    resumed = await graph.ainvoke(Command(resume="time"), cfg)  # 恢复：选 time
-    return paused, resumed  # 返回
+    return await graph.ainvoke(initial, cfg)  # 一次跑到底
 
 
-def test_route_graph_hitl_pause_and_resume(tmp_path) -> None:  # 暂停 + 恢复
-    paused, resumed = asyncio.run(_run(tmp_path))  # 跑
-    assert "__interrupt__" in paused  # 暂停了
-    assert resumed["route"]["route"] == "time"  # 落到固定路径
-    assert str(resumed.get("answer") or "").startswith("现在是 ")  # 固定路径作答
+def test_route_graph_miss_goes_react_without_interrupt(tmp_path) -> None:  # miss → ReAct，不暂停
+    out = asyncio.run(_run(tmp_path))  # 跑
+    assert "__interrupt__" not in out  # 不再为选择暂停
+    # 语义 miss → triage agentic → ReAct(llm_fallback 无模型=降级话术)
+    assert str(out.get("answer") or "")  # 至少给了话术（降级）
