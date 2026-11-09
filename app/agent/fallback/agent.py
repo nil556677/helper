@@ -56,12 +56,22 @@ def _state_context(state: dict[str, Any]) -> Any | None:  # 用 ContextBuilder �
             facts = MemoryStore().search(top_k=6)  # 长期事实
         except Exception:  # 无表/坏库
             facts = []  # 空
+        hints: list[str] = []  # 防追问护栏（候选/确认/追问预算）
+        hints.append(f"候选方向（仅供参考，不盲从）：{_candidate_hint(state)}")  # 候选
+        confirmed = bool(state.get("intent_confirmed"))  # 意图确认
+        clarify = int(state.get("clarify_count") or 0)  # 追问数
+        hints.append(f"意图已确认：{confirmed}；已追问次数：{clarify}（>1 严禁再追问）")  # 预算
+        if clarify >= 1:  # 已问过
+            hints.append("已追问过用户；这次必须直接作答或诚实说明，严禁再次提问。")  # 硬约束
+        if confirmed:  # 已确认
+            hints.append("意图已确认：直接执行请求，不要二次确认。")  # 硬约束
         return build_context(  # 装配（system 用现有工具规则）
             system=_system_prompt(state),  # S 规则
             working=state.get("working_memory") or {},  # 锚点
             facts=facts,  # 事实
             segments=segments,  # 段
             recent=list(state.get("turns") or []),  # 近轮
+            hints=hints,  # 护栏（防追问循环）
             question=str(state.get("question") or ""),  # 问题
         )  # 返回
     except Exception:  # 失败

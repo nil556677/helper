@@ -167,6 +167,7 @@ def build_context(  # 装配一次
     recent: list[dict[str, Any]] = (),  # 近轮
     tools: list[dict[str, Any]] = (),  # 工具结果
     attachments: list[dict[str, Any]] = (),  # 附件
+    hints: list[str] = (),  # 护栏提示（候选/意图确认/追问预算，注入 system 防止追问循环）
     question: str = "",  # 当前问题
     budget: Budget | None = None,  # 预算
     keep_turns: int = KEEP_TURNS,  # 近轮保底
@@ -214,6 +215,9 @@ def build_context(  # 装配一次
 
     # —— Compose ——
     system_out = (str(system or "") + (("\n\n" + working_block) if working_block else "")).strip()  # S + working（缓存前缀+锚点）
+    hints_lines = [str(h) for h in (hints or []) if str(h).strip()]  # 护栏提示（防追问循环）
+    if hints_lines:  # 有护栏
+        system_out += "\n\n<hints>\n" + "\n".join(hints_lines) + "\n</hints>"  # 注入 system（锚点区）
     cache_prefix = len(str(system or "")) // 4  # 稳定前缀(S)估算 token（Prompt Cache）
     non_empty = [b for b in keep_blocks if b.text]  # 去空
     messages: list[dict[str, Any]] = []  # 消息

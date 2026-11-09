@@ -82,3 +82,4 @@ def test_state_context_via_builder(monkeypatch) -> None:  # C4：run_react 用 b
     assert "1" in out.system  # key_facts 进 system（锚点）
     assert "上轮" in out.messages[0]["content"]  # 近轮进消息
     assert "q" in out.messages[0]["content"]  # 问题最末
+    assert "意图已确认" in out.system  # 护栏 hint 注入 system（防追问循环）
