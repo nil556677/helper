@@ -183,7 +183,11 @@ async def _collect_evidence(messages: list[Any]) -> tuple[list[dict[str, Any]], 
                 seen.add(key)  # 记
                 fragments.append(item)  # 收集
                 if len(fragments) >= CITATION_MAX:  # 到上限
-                    return fragments, gate  # 早停
+                    break  # 停止收集
+        if len(fragments) >= CITATION_MAX:  # 已达上限
+            break  # 退出外层
+    for position, item in enumerate(fragments, start=1):  # 生成层统一编号（多轮检索也不冲突）
+        item["index"] = position  # 覆盖工具内的本次编号
     return fragments, gate  # 返回
 
 

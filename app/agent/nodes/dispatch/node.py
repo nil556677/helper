@@ -189,6 +189,8 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
     from app.rag.evidence import CITATION_MAX  # 引用上限（单一来源）
 
     fragments = list(data.get("evidence") or [])[:CITATION_MAX] if name == "knowledge" else []  # 知识库带引用（限条数）
+    for position, item in enumerate(fragments, start=1):  # 生成层统一编号
+        item["index"] = position  # 单次调用即 1..N
     basis_payload: dict[str, Any] = {}  # 检索依据（知识路径才有）
     if name == "knowledge" and run is not None:  # 发检索依据（UI"检索依据"区 + 落库）
         raw_basis = data.get("basis") or {}  # 工具返回的计数
