@@ -12,7 +12,7 @@ from app.agent.agents.base import AgentDescriptor, build_expert_agent  # 基座
 DESCRIPTOR = AgentDescriptor(  # 专家描述符
     name="knowledge_agent",  # 功能点：资料检索与问答
     description="知识专家：在本地资料/知识库中检索并据资料回答问题；也可查询时间与天气",  # 能力边界（不含风险词）
-    tools=("search_hybrid", "search_deep", "current_time", "query_weather"),  # 工具（全部只读）
+    tools=("search_knowledge_base", "current_time", "query_weather"),  # 工具（全部只读）
     side_effect="none",  # 无副作用
     prompt=(  # 系统提示
         "你是知识专家：优先在本地资料库检索并严格依据资料作答；"

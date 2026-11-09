@@ -25,6 +25,7 @@ def test_data_includes_profile_paths() -> None:  # 工具出参带 profile/paths
         profile="full",  # 档位
         paths=["baseline", "multi_query", "rerank"],  # 路径
     )  # 结束
-    data = _data(result)  # 出参
+    data = _data(result, query="q", mode="deep")  # 出参
     assert data["basis"]["profile"] == "full"  # 档位可见
     assert "multi_query" in data["basis"]["paths"]  # 路径可见
+    assert data["query"] == "q" and data["mode"] == "deep"  # 归因字段
