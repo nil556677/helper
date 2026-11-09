@@ -214,6 +214,45 @@ CREATE TABLE IF NOT EXISTS user_memories (
 -- 索引：按命名空间 + 状态过滤（召回只取 active 的该租户/用户）。
 CREATE INDEX IF NOT EXISTS idx_user_memories_ns ON user_memories(namespace, status);
 
+-- 表 approval_requests：工具调用人工审批请求（幂等落一条，乐观更新）。
+CREATE TABLE IF NOT EXISTS approval_requests (
+    request_id       TEXT PRIMARY KEY,   -- 请求 id（uuid 文本）
+    thread_id        TEXT NOT NULL,      -- 会话线程（checkpointer 用）
+    checkpoint_ns    TEXT NOT NULL DEFAULT '',  -- 检查点命名空间
+    trace_id         TEXT NOT NULL DEFAULT '',  -- 追踪 id
+    tenant_id        TEXT NOT NULL,      -- 租户
+    requester_id     TEXT NOT NULL,      -- 请求发起人
+    tool_name        TEXT NOT NULL,      -- 工具名
+    args_hash        TEXT NOT NULL,      -- 参数指纹（幂等键）
+    args_redacted    TEXT NOT NULL DEFAULT '{}',  -- 脱敏参数（JSON）
+    resource_summary TEXT NOT NULL DEFAULT '',  -- 资源摘要（人话）
+    mutation         TEXT NOT NULL DEFAULT 'read_only',  -- 变更画像
+    risk             TEXT NOT NULL DEFAULT 'low',  -- 风险等级
+    approval_reason  TEXT NOT NULL DEFAULT '',  -- 需审批原因
+    status           TEXT NOT NULL DEFAULT 'pending',  -- 状态（pending 待审 / approved / rejected / expired）
+    decided_by       TEXT,               -- 决策人
+    decided_at       REAL,               -- 决策时间
+    decision_note    TEXT,               -- 决策备注
+    edited_args      TEXT,               -- 决策时编辑的参数（JSON）
+    expires_at       REAL NOT NULL,      -- 过期时间（秒）
+    created_at       REAL NOT NULL,      -- 创建时间（秒）
+    updated_at       REAL NOT NULL       -- 更新时间（秒）
+);
+-- 索引：按租户+状态+过期扫超时。
+CREATE INDEX IF NOT EXISTS idx_approval_pending ON approval_requests(tenant_id, status, expires_at);
+-- 唯一：同一线程同参 pending 只落一条（幂等）。
+CREATE INDEX IF NOT EXISTS idx_approval_dedup ON approval_requests(thread_id, checkpoint_ns, args_hash, status);
+
+-- 表 approval_audit：审批审计（只追加；禁止 UPDATE/DELETE）。
+CREATE TABLE IF NOT EXISTS approval_audit (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,  -- 自增
+    request_id TEXT NOT NULL REFERENCES approval_requests(request_id),  -- 关联请求
+    event      TEXT NOT NULL,            -- 事件（created/approved/rejected/expired…）
+    actor_id   TEXT NOT NULL DEFAULT 'system',  -- 操作者
+    detail     TEXT NOT NULL DEFAULT '{}',  -- 明细（JSON）
+    created_at REAL NOT NULL             -- 时间（秒）
+);
+
 -- 表 index_meta：索引指纹/元信息（键值对；向量指纹、词法指纹都存这里）。
 CREATE TABLE IF NOT EXISTS index_meta (
     key        TEXT PRIMARY KEY,   -- 键名
@@ -462,6 +501,46 @@ def _ensure_user_memories_table(conn: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_approval_tables(conn: sqlite3.Connection) -> None:
+    """给旧 v1 库幂等补审批表（不影响既有数据）。"""
+    conn.executescript(  # 幂等建表
+        "-- 表 approval_requests：工具人工审批请求。\n"
+        "CREATE TABLE IF NOT EXISTS approval_requests ("
+        " request_id TEXT PRIMARY KEY,"
+        " thread_id TEXT NOT NULL,"
+        " checkpoint_ns TEXT NOT NULL DEFAULT '',"
+        " trace_id TEXT NOT NULL DEFAULT '',"
+        " tenant_id TEXT NOT NULL,"
+        " requester_id TEXT NOT NULL,"
+        " tool_name TEXT NOT NULL,"
+        " args_hash TEXT NOT NULL,"
+        " args_redacted TEXT NOT NULL DEFAULT '{}',"
+        " resource_summary TEXT NOT NULL DEFAULT '',"
+        " mutation TEXT NOT NULL DEFAULT 'read_only',"
+        " risk TEXT NOT NULL DEFAULT 'low',"
+        " approval_reason TEXT NOT NULL DEFAULT '',"
+        " status TEXT NOT NULL DEFAULT 'pending',"
+        " decided_by TEXT,"
+        " decided_at REAL,"
+        " decision_note TEXT,"
+        " edited_args TEXT,"
+        " expires_at REAL NOT NULL,"
+        " created_at REAL NOT NULL,"
+        " updated_at REAL NOT NULL"
+        ");"
+        "CREATE INDEX IF NOT EXISTS idx_approval_pending ON approval_requests(tenant_id, status, expires_at);"
+        "CREATE INDEX IF NOT EXISTS idx_approval_dedup ON approval_requests(thread_id, checkpoint_ns, args_hash, status);"
+        "CREATE TABLE IF NOT EXISTS approval_audit ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " request_id TEXT NOT NULL REFERENCES approval_requests(request_id),"
+        " event TEXT NOT NULL,"
+        " actor_id TEXT NOT NULL DEFAULT 'system',"
+        " detail TEXT NOT NULL DEFAULT '{}',"
+        " created_at REAL NOT NULL"
+        ");"
+    )
+
+
 def _ensure_messages_columns(conn: sqlite3.Connection) -> None:
     """给 messages 表补消息模型的字段（附录 A.2，additive，幂等）。
 
@@ -569,6 +648,7 @@ def initialize(conn: sqlite3.Connection) -> int:
         _ensure_audit_tables(conn)
         _ensure_conversation_tombstones(conn)
         _ensure_user_memories_table(conn)
+        _ensure_approval_tables(conn)
         return current
     if current != 0:
         raise ValueError(
@@ -578,6 +658,7 @@ def initialize(conn: sqlite3.Connection) -> int:
     conn.executescript(DDL_SQL)
     _ensure_audit_tables(conn)
     _ensure_conversation_tombstones(conn)
+    _ensure_approval_tables(conn)
     conn.execute(
         "INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('schema_version', ?)",
         (str(SCHEMA_VERSION),),
