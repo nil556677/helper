@@ -231,6 +231,20 @@ def _detail(run_id: str) -> None:  # 详情弹窗
                     f"查询：{run.normalized_query or run.question}"  # 归一
                     f" → {run.rewritten_query or '（未改写）'}"  # 改写
                 ).classes("hp-field-help")  # 样式
+            try:  # 记忆压缩错误（后台作业失败明细，当前会话的）
+                from app.agent.memory.summarizer import last_errors  # 压缩失败记录
+
+                mem_errors = {c: r for c, r in last_errors().items() if c == run.conversation_id}  # 本会话的失败
+                if mem_errors:  # 有
+                    with ui.expansion("记忆压缩错误", icon="memory", value=False).classes("w-full hp-sources"):
+                        for conv, reason in mem_errors.items():  # 逐条
+                            with ui.row().classes("w-full items-start gap-2 no-wrap hp-note-error"):  # 一行
+                                ui.icon("error_outline").classes("text-base")  # 图标
+                                ui.label(f"{conv}：{reason}").classes("hp-note-error").style(  # 会话 + 原因
+                                    "white-space: pre-wrap; word-break: break-word;"
+                                )  # 样式
+            except Exception:  # 兜底
+                pass  # 不阻断详情
             try:  # 决策链/步骤：metadata 有坏数据也绝不能让整个详情空白
                 metadata = _meta(run)  # 元数据
                 decisions = metadata.get("decisions") or {}  # 决策链
