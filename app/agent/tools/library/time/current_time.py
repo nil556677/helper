@@ -31,13 +31,17 @@ class CurrentTimeParams(BaseModel):  # 参数契约
     description="查询当前本地时间，按指定 strftime 格式，或返回秒级 Unix 时间戳。",  # 能力说明
     args_schema=CurrentTimeParams,  # 参数契约
 )  # 装饰结束
-def current_time(format: str = DEFAULT_FORMAT, as_timestamp: bool = False):  # 纯函数（返回 data）
-    """成功返回 data 字典；格式不合法抛 ToolError（由 tool_spec 转带内 err）。"""
+def current_time(format: str | None = None, as_timestamp: bool = False):  # 纯函数（返回 data）
+    """成功返回 data 字典；格式不合法抛 ToolError（由 tool_spec 转带内 err）。
+
+    `format=None` 时用模块常量 DEFAULT_FORMAT（默认值单一来源）。
+    """
+    fmt = format or DEFAULT_FORMAT  # 单一来源：签名不再重复默认值
     ts = int(time.time())  # 秒级时间戳（内部统一给，方便调用方直接用）
     if as_timestamp:  # 只要时间戳
         return {"value": str(ts), "kind": "timestamp", "ts": ts, "format": ""}  # data
     try:  # 格式不合法会抛
-        text = datetime.now().strftime(format)  # 文本
+        text = datetime.now().strftime(fmt)  # 文本
     except (ValueError, TypeError) as exc:  # 格式错
         raise ToolError(str(ErrorCode.PROTOCOL_ARG_INVALID), f"时间格式不合法：{exc}")  # 业务错
-    return {"value": text, "kind": "datetime", "ts": ts, "format": format}  # data
+    return {"value": text, "kind": "datetime", "ts": ts, "format": fmt}  # data

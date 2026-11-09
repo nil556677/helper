@@ -6,8 +6,10 @@
 
 from __future__ import annotations  # 延迟求值注解
 
+import re  # 日期格式校验
 import time  # 时间戳
-from typing import Any  # 任意类型
+from datetime import datetime  # 日期合法性校验
+from typing import Any, Literal  # 任意类型 / 枚举
 
 from pydantic import BaseModel, Field  # 参数契约（会随 args_schema 发给模型）
 
@@ -60,10 +62,10 @@ def _code_text(code: int) -> str:  # 天气编码转中文
 
 
 def _daily_fields(daily: dict[str, Any], today: str) -> dict[str, Any] | None:  # 取某日字段
-    """从 daily 数组取指定日期的结构化字段；不在窗口返回 None。"""
+    """从 daily 数组取指定日期的结构化字段；**仅表示"格式已校验但不在预报窗口"**（返回 None）。"""
     index = list(daily.get("time") or [])  # 日期列表
     if today not in index:  # 不在预报窗口
-        return None  # 无
+        return None  # 无（调用方据此报"不在窗口"）
     i = index.index(today)  # 当天下标
     code = _code_text(daily["weather_code"][i])  # 天气
     high = daily["temperature_2m_max"][i]  # 最高温
@@ -80,21 +82,38 @@ def _daily_fields(daily: dict[str, Any], today: str) -> dict[str, Any] | None:  
 #: 参数契约：字段说明只写 Field(description=...)，不写行尾注释（模型只能读到 description）。
 class WeatherQuery(BaseModel):  # 参数契约
     city: str = Field(  # 城市参数
+        min_length=1,  # 空串直接判格式错，不浪费一次网络请求
         description="要查询天气的城市名，如 北京、上海、成都",  # 给模型的说明
+    )  # 字段结束
+    mode: Literal["current", "forecast"] = Field(  # 分支参数（显式化，避免空串隐式语义）
+        default="current",  # 默认实时
+        description="current=当前实时天气；forecast=按 date 查预报（窗口为未来 7 天）",  # 给模型的说明
     )  # 字段结束
     date: str = Field(  # 日期参数
         default="",  # 默认空
-        description="要查询的日期 YYYY-MM-DD；留空表示当前实时天气",  # 给模型的说明
+        description="forecast 时必填，格式 YYYY-MM-DD，须在未来 7 天预报窗口内；mode=current 时忽略",  # 给模型的说明
     )  # 字段结束
 
 
 @tool_spec(  # 统一范式 + 5 分钟幂等缓存
-    description="查询指定城市当前天气或指定日期预报。",  # 能力说明
+    description="查询指定城市当前天气或未来 7 天内的某日预报。",  # 能力说明
     args_schema=WeatherQuery,  # 参数契约
     ttl=300.0,  # 同参 5 分钟内幂等
 )  # 装饰结束
-async def query_weather(city: str, date: str = ""):  # 异步纯函数（返回 data）
+async def query_weather(city: str, mode: str = "current", date: str = ""):  # 异步纯函数（返回 data）
     """成功返回 data；业务错抛 ToolError，网络错冒泡给共享客户端/tool_spec。"""
+    city = str(city or "").strip()  # 去空白
+    if not city:  # 空城市
+        raise ToolError(str(ErrorCode.PROTOCOL_ARG_INVALID), "城市不能为空")  # 业务错（不请求网络）
+    if str(mode or "current") not in ("current", "forecast"):  # 非法模式
+        raise ToolError(str(ErrorCode.PROTOCOL_ARG_INVALID), "mode 只能是 current 或 forecast")  # 业务错
+    if mode == "forecast":  # 预报分支
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", str(date or "")):  # 格式先行校验
+            raise ToolError(str(ErrorCode.PROTOCOL_ARG_INVALID), "日期格式须为 YYYY-MM-DD（例如 2026-11-10）")  # 格式错
+        try:  # 校验真实日期
+            datetime.strptime(str(date), "%Y-%m-%d")  # 解析
+        except ValueError:  # 非法日期
+            raise ToolError(str(ErrorCode.PROTOCOL_ARG_INVALID), f"日期无效：{date}")  # 业务错
     coord = await _geocode(city)  # 定位（共享客户端可重试网络错）
     if coord is None:  # 城市找不到
         raise ToolError(str(ErrorCode.PROTOCOL_ARG_INVALID), f"未能定位到城市「{city}」")  # 业务错
@@ -105,16 +124,16 @@ async def query_weather(city: str, date: str = ""):  # 异步纯函数（返回 
         "timezone": "Asia/Shanghai",  # 时区
         "forecast_days": 7,  # 窗口 7 天
     }  # 参数结束
-    if date:  # 指定日期 -> 每日字段
+    if mode == "forecast":  # 指定日期 -> 每日字段
         params["daily"] = "weather_code,temperature_2m_max,temperature_2m_min"  # 每日字段
     else:  # 没指定 -> 实时
         params["current_weather"] = True  # 实时字段
     data = await aget_json(_FORECAST, params=params)  # 请求天气（共享客户端重试，仍失败冒泡）
-    if date:  # 定日
-        fields = _daily_fields(data.get("daily") or {}, date)  # 取字段
-        if fields is None:  # 不在窗口
-            raise ToolError(str(ErrorCode.PROTOCOL_ARG_INVALID), f"日期 {date} 不在预报范围内")  # 业务错
-        return {"city": city, "date": date, "type": "forecast", **fields}  # 合并
+    if mode == "forecast":  # 定日
+        fields = _daily_fields(data.get("daily") or {}, str(date))  # 取字段（格式已校验）
+        if fields is None:  # 只有"不在窗口"会到这里
+            raise ToolError(str(ErrorCode.PROTOCOL_ARG_INVALID), f"日期 {date} 不在未来 7 天预报范围内")  # 业务错
+        return {"city": city, "date": str(date), "type": "forecast", "ts": int(time.time()), **fields}  # 统一结构（含 ts）
     current = data.get("current_weather") or {}  # 实时
     text = f"{city} 当前 {_code_text(current.get('weathercode'))}，气温 {current.get('temperature')}℃，风速 {current.get('windspeed')} km/h"  # 人话
     return {  # 实时固定结构

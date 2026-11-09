@@ -177,8 +177,8 @@ def unwrap_tool_output(value: Any) -> Result:  # 程序化调用还原完整 Res
     if isinstance(value, str):  # 序列化文本
         try:  # 解析
             obj = json.loads(value)  # JSON
-        except Exception:  # 非 JSON
-            return value  # 原样返回（调用方按失败处理）
+        except Exception:  # 非 JSON（如参数校验失败的可读文本）
+            return Result(ok=False, code="schema_invalid", message=str(value), retryable=False)  # 还原为参数错
         if isinstance(obj, dict):  # 对象
             if "ok" in obj and "code" in obj:  # 完整包络
                 try:  # 还原

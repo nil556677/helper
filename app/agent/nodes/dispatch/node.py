@@ -32,7 +32,7 @@ def _weather_args(question: str) -> dict[str, Any]:  # 从问题里抠城市/日
             offset = off  # 设偏移
             break  # 取第一个
     day = base + timedelta(days=offset)  # 目标日
-    return {"city": city, "date": day.isoformat()}  # ISO 日期（今天即当天）
+    return {"city": city, "mode": "forecast", "date": day.isoformat()}  # 显式预报分支 + ISO 日期
 
 
 def _fill_param(args: dict[str, Any], param_name: str, value: str) -> dict[str, Any]:  # 按参数名填值
