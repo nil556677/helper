@@ -1,14 +1,12 @@
-"""L1 预处理：实体/时间/flags/改写 + 节点写入。"""
+"""L1 预处理：实体/时间/flags + 节点写入（改写归 RAG full 档，不在此层）。"""
 
 from __future__ import annotations  # 延迟求值注解
 
 from datetime import datetime  # 固定"今天"
 
-from app.agent.contracts.triage import EntityBundle  # 契约
 from app.agent.nodes.preprocess.node import preprocess_node  # 节点
 from app.agent.preprocess.entities import extract_entities, inherit_from_turns  # 实体
 from app.agent.preprocess.flags import collect_flags  # flags
-from app.agent.preprocess.rewrite import maybe_rewrite, needs_rewrite  # 改写
 from app.agent.preprocess.timeparse import resolve_time  # 时间
 
 
@@ -40,16 +38,6 @@ def test_resolve_time_single_day() -> None:  # 单日
 
 def test_flags_whitelist() -> None:  # flags 白名单
     assert collect_flags({"mode": "answer_only", "evil": "x"}) == {"mode": "answer_only"}  # 只留白名单
-
-
-def test_rewrite_seam() -> None:  # 改写接缝
-    entities = EntityBundle(explicit={})  # 无显式实体
-    assert needs_rewrite("它多少钱", entities) is True  # 有指代
-    assert needs_rewrite("订单 12345 多少钱", EntityBundle(explicit={"order_id": "12345"})) is False  # 有实体
-    q, done, reason = maybe_rewrite("它多少钱", entities, {"no_rewrite": True}, None)  # 被禁
-    assert (q, done, reason) == ("它多少钱", False, "flag_blocked")  # 不改
-    q2, done2, _ = maybe_rewrite("它多少钱", entities, {}, lambda text, ents: "订单 12345 多少钱")  # 有实现
-    assert done2 is True and "12345" in q2  # 改写生效
 
 
 def test_preprocess_node_writes_state() -> None:  # 节点写 preprocessed

@@ -61,8 +61,6 @@ class PreprocessResult(BaseModel):  # L1 预处理产物
     entities: EntityBundle = Field(default_factory=EntityBundle)  # 实体
     time_range: TimeRange | None = None  # 时间范围（解析失败为 None）
     flags: dict[str, Any] = Field(default_factory=dict)  # 硬约束标志
-    rewritten: bool = False  # 是否触发过改写
-    rewrite_reason: str = ""  # 改写原因
     phase: Phase = "start"  # 会话阶段
     pending_clarify: dict[str, Any] | None = None  # 待接住的澄清
 
