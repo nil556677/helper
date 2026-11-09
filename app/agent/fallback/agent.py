@@ -22,11 +22,23 @@ from app.agent.events import tool as tool_event  # 工具事件
 from app.agent.events import context as context_event  # 上下文事件
 from app.agent.tools.catalog import tool_catalog  # 工具目录（单一来源）
 
-#: 兜底 agent 可调的工具名（天气/时间/本地资料检索）。
-TOOL_NAMES: tuple[str, ...] = ("current_time", "query_weather", "search_knowledge_base")  # 3 工具
+#: 兜底 agent 可调的工具名（时间/天气/检索/订单(需审)/物流）。
+TOOL_NAMES: tuple[str, ...] = (
+    "current_time",  # 时间
+    "query_weather",  # 天气
+    "search_knowledge_base",  # 检索
+    "query_order",  # 订单（approval=manual → 审批门）
+    "query_logistics",  # 物流（第三方）
+)  # 5 工具
 
 #: 工具名 → UI variant（时间线图标归类）。
-_VARIANT: dict[str, str] = {"current_time": "time", "query_weather": "weather", "search_knowledge_base": "search"}  # 变体
+_VARIANT: dict[str, str] = {  # 变体
+    "current_time": "time",  # 时间
+    "query_weather": "weather",  # 天气
+    "search_knowledge_base": "search",  # 检索
+    "query_order": "order",  # 订单
+    "query_logistics": "logistics",  # 物流
+}  # 变体结束
 
 #: 说话者标签（多轮记忆格式化用）。
 _MAX_TURNS = 6  # 最多带最近 6 轮记忆
