@@ -53,3 +53,21 @@ def test_mode_maps_profile_and_top_k(monkeypatch) -> None:  # mode → profile/t
     assert out.data["query"] == "q"  # data 带 query（归因）
     assert seen["profile"] == "deep"  # 深度档
     assert seen["top_k"] == 20  # 按 mode 自动条数
+
+
+def test_hybrid_maps_full_profile(monkeypatch) -> None:  # hybrid → full 档（低置信才增强）
+    import importlib  # 取模块
+
+    mod = importlib.import_module("app.agent.tools.library.rag.search_knowledge_base")  # 模块
+    seen: dict = {}  # 记录
+
+    class _Runner:  # 假运行器
+        async def run(self, query, *, profile="tool", top_k=6, rerank=True):  # 跑
+            seen["profile"] = profile  # 记录档位
+            seen["top_k"] = top_k  # 记录条数
+            return SimpleNamespace(evidence=[], gate={}, dense_count=0, sparse_count=0, fused_count=0, selected_count=0, profile=profile, paths=["baseline"])  # 结果
+
+    monkeypatch.setattr(mod, "_runner", lambda: _Runner())  # 打桩
+    asyncio.run(mod.search_knowledge_base.ainvoke({"query": "q", "mode": "hybrid"}))  # 调
+    assert seen["profile"] == "full"  # hybrid 走 full
+    assert seen["top_k"] == 10  # 默认条数

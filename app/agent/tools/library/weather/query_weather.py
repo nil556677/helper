@@ -95,9 +95,25 @@ class WeatherQuery(BaseModel):  # 参数契约
     )  # 字段结束
 
 
+class WeatherResultData(BaseModel):  # 结果契约（describe/审计/下游校验用）
+    """成功时 data 的固定形状（current/forecast 两分支字段一致，缺的置 null）。"""
+
+    city: str = ""  # 城市
+    date: str = ""  # 日期（实时为空）
+    type: str = ""  # current / forecast
+    weather: str = ""  # 天气描述
+    temperature_c: float | None = None  # 实时气温
+    windspeed_kmh: float | None = None  # 实时风速
+    tmin_c: float | None = None  # 最低温（预报）
+    tmax_c: float | None = None  # 最高温（预报）
+    ts: int = 0  # 查询时间戳
+    text: str = ""  # 人话文本
+
+
 @tool_spec(  # 统一范式 + 5 分钟幂等缓存
     description="查询指定城市当前天气或未来 7 天内的某日预报。",  # 能力说明
     args_schema=WeatherQuery,  # 参数契约
+    result_schema=WeatherResultData,  # 结果契约
     ttl=300.0,  # 同参 5 分钟内幂等
 )  # 装饰结束
 async def query_weather(city: str, mode: str = "current", date: str = ""):  # 异步纯函数（返回 data）

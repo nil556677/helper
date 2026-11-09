@@ -94,7 +94,7 @@ class SearchResultData(BaseModel):  # 结果契约（describe/审计/下游校�
 async def search_knowledge_base(query: str, mode: str = "fast", top_k: int = 0):  # 异步纯函数（返回 data）
     """成功返回固定 data；检索失败抛给 tool_spec 转带内可重试。"""
     chosen = str(mode or "fast")  # 模式
-    profile = "deep" if chosen == "deep" else "tool"  # 深度档 vs 工具档
+    profile = {"deep": "deep", "hybrid": "full"}.get(chosen, "tool")  # hybrid 走 full（低置信才增强），其余按档
     limit = int(top_k) or _MODE_TOP_K.get(chosen, 6)  # 0 → 按模式自动
     result = await _runner().run(query, profile=profile, top_k=int(limit), rerank=True)  # 唯一检索内核
     return _data(result, query=query, mode=chosen)  # 固定 data 结构

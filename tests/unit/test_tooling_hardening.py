@@ -2,6 +2,7 @@
 
 from __future__ import annotations  # 延迟值注解
 
+import asyncio  # 并发测试
 import json  # 解析 render
 from types import SimpleNamespace  # 假模块
 
@@ -9,7 +10,7 @@ from pydantic import BaseModel  # 结果契约
 
 from app.agent.contracts import ErrorCode  # 错误码
 from app.agent.tools.cache import TtlCache  # 缓存
-from app.agent.tools.tooling import tool_spec  # 装饰器
+from app.agent.tools.tooling import singleflight_timeouts, tool_spec  # 装饰器 / 观测
 from app.agent.tools.wiring import collect, describe, render, unwrap_tool_output  # 接线
 from app.core.error import err as make_err  # 失败包络
 from app.core.error import ok as make_ok  # 成功包络
@@ -94,3 +95,25 @@ def test_collect_prefers_all() -> None:  # __all__ 过滤，误收的同模块�
 
     module = SimpleNamespace(keep=keep, skip=skip, __all__=["keep"])  # 声明 __all__
     assert [tool.name for tool in collect(module)] == ["keep"]  # 只收声明
+
+
+def test_singleflight_wait_timeout_degrades() -> None:  # 等待超时 → 降级自算 + 计数
+    calls: list[str] = []  # 记录真实执行次数
+
+    class _SlowArgs(BaseModel):  # 参数契约
+        q: str = ""  # 查询
+
+    @tool_spec(description="慢工具", args_schema=_SlowArgs, timeout_ms=600)  # 等待上限 0.1s
+    async def slow(q: str = ""):  # 慢纯函数
+        calls.append(q)  # 记一次
+        await asyncio.sleep(0.3)  # 故意超过等待上限
+        return {"q": q}  # data
+
+    before = singleflight_timeouts()  # 之前的超时计数
+
+    async def _run():  # 并发两发
+        return await asyncio.gather(slow.ainvoke({"q": "t"}), slow.ainvoke({"q": "t"}))  # 同时调
+
+    asyncio.run(_run())  # 跑
+    assert singleflight_timeouts() > before  # 记到了超时
+    assert len(calls) == 2  # 等待者没有永久阻塞，自己算了一次

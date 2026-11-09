@@ -27,9 +27,19 @@ class CurrentTimeParams(BaseModel):  # 参数契约
     )  # 字段结束
 
 
+class TimeResultData(BaseModel):  # 结果契约（describe/审计/下游校验用）
+    """成功时 data 的固定形状。"""
+
+    value: str = ""  # 时间文本或时间戳
+    kind: str = ""  # datetime / timestamp
+    ts: int = 0  # 秒级时间戳
+    format: str = ""  # 实际使用的格式（时间戳时为空）
+
+
 @tool_spec(  # 统一范式：成功返回 ok 包络、业务错转带内 err
     description="查询当前本地时间，按指定 strftime 格式，或返回秒级 Unix 时间戳。",  # 能力说明
     args_schema=CurrentTimeParams,  # 参数契约
+    result_schema=TimeResultData,  # 结果契约
 )  # 装饰结束
 def current_time(format: str | None = None, as_timestamp: bool = False):  # 纯函数（返回 data）
     """成功返回 data 字典；格式不合法抛 ToolError（由 tool_spec 转带内 err）。

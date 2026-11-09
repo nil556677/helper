@@ -88,6 +88,20 @@ _inflight: dict[tuple, asyncio.Future] = {}
 #: 同步 single-flight：key -> Event（线程间去重）。
 _inflight_sync: dict[tuple, threading.Event] = {}
 _inflight_lock = threading.Lock()  # 同步字典锁
+_singleflight_timeout_count = 0  # 等待超时降级自算的次数（可观测）
+_singleflight_count_lock = threading.Lock()  # 计数器锁
+
+
+def singleflight_timeouts() -> int:  # 等待超时次数
+    """返回进程内 single-flight 等待超时、降级自算的累计次数（观测用）。"""
+    return int(_singleflight_timeout_count)  # 读计数
+
+
+def _mark_timeout() -> None:  # 记一次超时
+    """线程安全自增超时计数。"""
+    global _singleflight_timeout_count  # 改模块级
+    with _singleflight_count_lock:  # 加锁
+        _singleflight_timeout_count += 1  # 自增
 
 
 def _find_hit(cache: TtlCache | None, key: str) -> Any | None:  # 查缓存命中
@@ -110,6 +124,7 @@ async def _call_async(fn: Callable[..., Any], cache: TtlCache | None, schema: ty
         try:  # 等它，但不无限等
             await asyncio.wait_for(fut, timeout=wait_s)  # 超时后放弃等待
         except (asyncio.TimeoutError, asyncio.CancelledError):  # 领导者卡住/被取消
+            _mark_timeout()  # 记一次超时（观测）
             pass  # 降级为自算
         hit = _find_hit(cache, key)  # 它成功后已落缓存
         if hit is not None:  # 命中了
@@ -140,7 +155,8 @@ def _call_sync(fn: Callable[..., Any], cache: TtlCache | None, schema: type[Base
             event = threading.Event()  # 建信号
             _inflight_sync[dkey] = event  # 占位
     if not_leader:  # 等领导者
-        event.wait(wait_s)  # 有超时的等，避免永久阻塞
+        if not event.wait(wait_s):  # 有超时的等，避免永久阻塞
+            _mark_timeout()  # 超时了：记一次并降级自算
         hit = _find_hit(cache, key)  # 它成功后已落缓存
         if hit is not None:  # 命中
             return hit  # 回
