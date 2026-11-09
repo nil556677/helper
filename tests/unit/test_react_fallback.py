@@ -185,7 +185,7 @@ def test_memory_included() -> None:  # 多轮记忆带过去
     monkeypatch.setattr(agent_mod, "_build_graph", lambda m, p: _G())
     try:
         asyncio.run(agent_mod.run_react(  # 跑
-            {"question": "q", "turns": [{"question": "上轮问题", "answer": "上轮答案"}]}, model=object())
+            {"question": "q", "turns": [{"user": "上轮问题", "assistant": "上轮答案"}]}, model=object())
         )  # 结束
     finally:
         monkeypatch.undo()
@@ -207,9 +207,9 @@ def test_guard_derive_from_memory() -> None:  # 跨轮护栏：记忆反推追�
     from langchain_core.messages import AIMessage as _A  # 复用消息（构造 Turn 用）
 
     class _T:  # 假 Turn
-        def __init__(self, question, answer):  # 字段
-            self.question = question  # 问题
-            self.answer = answer  # 回答
+        def __init__(self, question, answer):  # 字段（映射到 Turn.user/assistant）
+            self.user = question  # 用户问题
+            self.assistant = answer  # 助手回答
 
     # 场景1：agent 问过一次，用户补充 → 已确认、追问=1
     turns = [_T("什么", "您想查天气还是资料？"), _T("查天气", "好，成都天气多云。")]  # 追问后用户答复

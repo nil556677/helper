@@ -45,14 +45,17 @@ def _build_graph(model: Any, prompt: str) -> Any:  # 构造 ReAct 图
 
 
 def _format_memory(state: dict[str, Any]) -> str:  # 把对话历史格式成文本
-    """只带最近几轮的用户/助手问答（简要）——agent 的"完整记忆"。"""
+    """只带最近几轮的用户/助手问答（简要）——agent 的"完整记忆"。
+
+    注意：state['turns'] 是 `Turn` 的 JSON，字段是 `user/assistant`，不是 question/answer。
+    """
     turns = list(state.get("turns") or [])[-_MAX_TURNS:]  # 最近几轮
     lines: list[str] = []  # 行
     for turn in turns:  # 逐轮
         if not isinstance(turn, dict):  # 坏数据
             continue  # 跳过
-        q = str(turn.get("question") or "")  # 用户问题
-        a = str(turn.get("answer") or "")  # 助手回答
+        q = str(turn.get("user") or "")  # 用户问题（Turn.user）
+        a = str(turn.get("assistant") or "")  # 助手回答（Turn.assistant）
         if q:  # 有问题
             lines.append(f"用户：{q}")  # 用户行
         if a:  # 有答
@@ -134,7 +137,7 @@ def guard_from_memory(turns: list[Any]) -> tuple[int, bool]:  # 从对话记忆�
     confirmed = False  # 是否已确认
     asked_before = False  # 上一轮是否追问
     for turn in turns or []:  # 逐轮
-        answer = str(getattr(turn, "answer", "") or "") if not isinstance(turn, dict) else str(turn.get("answer") or "")  # 助手回答
+        answer = str(getattr(turn, "assistant", "") or "") if not isinstance(turn, dict) else str(turn.get("assistant") or "")  # 助手回答（Turn.assistant）
         if _is_question(answer):  # 本轮是追问
             count += 1  # 计数
             asked_before = True  # 记录
