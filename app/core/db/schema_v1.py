@@ -194,6 +194,25 @@ CREATE TABLE IF NOT EXISTS summary_segments (
     PRIMARY KEY (conversation_id, seg_seq)
 );
 
+-- 表 user_memories：长期记忆可信知识库（跨会话稳定事实/偏好；命名空间隔离，治理写入）。
+CREATE TABLE IF NOT EXISTS user_memories (
+    namespace       TEXT NOT NULL,      -- 命名空间（JSON 数组：tenant/user/kind 分层）
+    memory_key      TEXT NOT NULL,      -- 事实 key（EAV：entity::attribute）
+    value           TEXT NOT NULL,      -- 事实值（JSON）
+    source          TEXT NOT NULL DEFAULT '',  -- 来源（对话/检索/用户显式…）
+    created_at      REAL NOT NULL,      -- 首次写入时间戳
+    updated_at      REAL NOT NULL,      -- 最近更新时间戳
+    confidence      REAL NOT NULL DEFAULT 0.5,  -- 可信度 0..1
+    access_count    INTEGER NOT NULL DEFAULT 0,  -- 访问次数（喂回衰减）
+    last_access     REAL NOT NULL DEFAULT 0,     -- 最近访问时间戳（衰减用）
+    status          TEXT NOT NULL DEFAULT 'active',  -- 状态（active 活跃 / superseded 被软替代 / contested / uncertain）
+    superseded_by   TEXT,               -- 被谁替代（软替代保留内容）
+    history_versions TEXT NOT NULL DEFAULT '[]',  -- 历史版本（JSON 数组，可追溯）
+    PRIMARY KEY (namespace, memory_key)
+);
+-- 索引：按命名空间 + 状态过滤（召回只取 active 的该租户/用户）。
+CREATE INDEX IF NOT EXISTS idx_user_memories_ns ON user_memories(namespace, status);
+
 -- 表 index_meta：索引指纹/元信息（键值对；向量指纹、词法指纹都存这里）。
 CREATE TABLE IF NOT EXISTS index_meta (
     key        TEXT PRIMARY KEY,   -- 键名
@@ -418,6 +437,29 @@ def _ensure_summaries_table(conn: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_user_memories_table(conn: sqlite3.Connection) -> None:
+    """给旧 v1 库幂等补长期记忆表（不影响既有数据）。"""
+    conn.executescript(  # 幂等建表
+        "-- 表 user_memories：长期记忆可信知识库（命名空间隔离，治理写入）。\n"
+        "CREATE TABLE IF NOT EXISTS user_memories ("
+        " namespace TEXT NOT NULL,"
+        " memory_key TEXT NOT NULL,"
+        " value TEXT NOT NULL,"
+        " source TEXT NOT NULL DEFAULT '',"
+        " created_at REAL NOT NULL,"
+        " updated_at REAL NOT NULL,"
+        " confidence REAL NOT NULL DEFAULT 0.5,"
+        " access_count INTEGER NOT NULL DEFAULT 0,"
+        " last_access REAL NOT NULL DEFAULT 0,"
+        " status TEXT NOT NULL DEFAULT 'active',"
+        " superseded_by TEXT,"
+        " history_versions TEXT NOT NULL DEFAULT '[]',"
+        " PRIMARY KEY (namespace, memory_key)"
+        ");"
+        "CREATE INDEX IF NOT EXISTS idx_user_memories_ns ON user_memories(namespace, status);"
+    )
+
+
 def _ensure_messages_columns(conn: sqlite3.Connection) -> None:
     """给 messages 表补消息模型的字段（附录 A.2，additive，幂等）。
 
@@ -524,6 +566,7 @@ def initialize(conn: sqlite3.Connection) -> int:
         _ensure_turn_commits_table(conn)
         _ensure_audit_tables(conn)
         _ensure_conversation_tombstones(conn)
+        _ensure_user_memories_table(conn)
         return current
     if current != 0:
         raise ValueError(

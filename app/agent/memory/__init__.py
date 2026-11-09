@@ -11,8 +11,16 @@ from app.agent.memory.working import (  # 工作记忆白板
     touch as touch_working,  # 合并关键事实
     update as update_working,  # 局部更新
 )  # 导入结束
+from app.agent.memory.longterm import (  # 长期可信知识库
+    MemoryFact,  # 事实
+    MemoryStore,  # 仓储
+    confidence_for,  # 可信度
+    decay_score,  # 衰减
+    extract_eav,  # 规则抽取
+)  # 导入结束
 
 __all__ = [  # 导出
+    # 工作记忆
     "WorkingMemory",  # 白板形状
     "blank_working",  # 空白板
     "promote_working",  # 收尾
@@ -20,4 +28,10 @@ __all__ = [  # 导出
     "set_goal_working",  # 设目标
     "touch_working",  # 合并关键事实
     "update_working",  # 局部更新
+    # 长期知识库
+    "MemoryFact",  # 事实
+    "MemoryStore",  # 仓储
+    "confidence_for",  # 可信度
+    "decay_score",  # 衰减
+    "extract_eav",  # 规则抽取
 ]  # 结束
