@@ -115,5 +115,8 @@ def _data(result: Any, *, query: str, mode: str) -> dict:  # 检索结果 → �
             "selected_count": result.selected_count,  # 证据数
             "profile": getattr(result, "profile", "tool"),  # 检索档位（观测）
             "paths": list(getattr(result, "paths", ["baseline"])),  # 实际路径（观测）
+            "elapsed_ms": int(getattr(result, "elapsed_ms", 0)),  # 检索耗时（观测）
+            "llm_calls": int(getattr(result, "llm_calls", 0)),  # 触发的 LLM 次数（成本观测）
+            "variants": int(getattr(result, "variants", 0)),  # 并行变体数（观测）
         },  # basis 结束
     }  # 返回

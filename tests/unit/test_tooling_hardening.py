@@ -62,6 +62,34 @@ def test_describe_passes_result_schema_and_timeout() -> None:  # describe 透传
     assert desc.timeout_ms == 8500  # 超时
 
 
+def test_result_schema_validated_at_runtime() -> None:  # 声明了结果契约就强制校验
+    class _Expect(BaseModel):  # 期望 int
+        n: int = 0  # 数字
+
+    @tool_spec(description="形状错", args_schema=_Args, result_schema=_Expect)  # 声明
+    def _wrong(q: str = ""):  # 返回字符串
+        return {"n": "not-int"}  # 违反契约
+
+    env = unwrap_tool_output(_wrong.invoke({"q": "x"}))  # 调
+    assert env.ok is False  # 校验失败
+    assert env.retryable is False  # 编程 Bug 不重试
+
+
+def test_result_schema_accepts_valid_shape() -> None:  # 合法形状正常通过
+    env = unwrap_tool_output(_declared.invoke({"q": "x"}))  # 调
+    assert env.ok and env.data == {"q": "x"}  # 正常
+
+
+def test_run_metrics_include_singleflight_delta(monkeypatch) -> None:  # single-flight 超时汇入 run 指标
+    import app.agent.tools.tooling as tooling  # 模块
+    from app.agent.driver import _metrics_of  # 指标汇总
+
+    monkeypatch.setattr(tooling, "singleflight_timeouts", lambda: 5)  # 当前累计 5
+    ctx = SimpleNamespace(metrics={}, question="q", first_token_ms=0, singleflight_base=3)  # run 基线 3
+    metrics = _metrics_of(ctx, {})  # 汇总
+    assert metrics["singleflight_timeouts"] == 2  # 本 run 增量 = 5-3
+
+
 def test_render_success_only_data() -> None:  # 模型只看到 data
     text = render(make_ok({"a": 1}))  # 渲染成功
     assert json.loads(text) == {"a": 1}  # 只有 data

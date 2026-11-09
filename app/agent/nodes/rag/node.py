@@ -3,7 +3,7 @@
 from __future__ import annotations  # 延迟求值注解
 
 import asyncio  # 并行多路
-from dataclasses import dataclass, field  # 结果容器
+from dataclasses import dataclass, field, replace  # 结果容器 / 替换派生字段
 from typing import Any  # 任意值
 
 from app.agent.nodes.rag.graph import RagSteps, build_rag_graph  # 子图
@@ -30,6 +30,9 @@ class RagResult:  # 子图结果
     gate: dict[str, Any] = field(default_factory=dict)  # 门限判决（pass/weak/reject）
     profile: str = "tool"  # 实际使用的档位（观测）
     paths: list[str] = field(default_factory=lambda: ["baseline"])  # 实际用到的召回/后处理路（观测）
+    elapsed_ms: int = 0  # 本次检索耗时（毫秒，观测）
+    llm_calls: int = 0  # 本次检索触发的 LLM 次数（Multi-Query/HyDE，观测）
+    variants: int = 0  # 实际并行的改写变体数（观测）
 
 
 class RagRunner:  # 子图运行器
@@ -59,10 +62,14 @@ class RagRunner:  # 子图运行器
         key = (question, int(top_k), bool(rerank), budget.level, str(profile))  # 缓存键（含档位）
         cached = _RETRIEVAL_CACHE.get(key)  # 命中检查
         if cached is not None:  # 窗口内命中
-            return cached  # 直接返回（幂等）
+            return replace(cached, elapsed_ms=0)  # 直接返回（幂等；耗时归零避免误读）
+        import time  # 计时
+
+        started = time.monotonic()  # 开始
         result = await self._invoke(question, int(top_k), bool(rerank), budget, str(profile))  # 基线（工具档）
         if str(profile) == "full":  # full 档：低置信才增强
             result = await self._enhance(question, result, int(top_k), bool(rerank), budget)  # 条件多路
+        result = replace(result, elapsed_ms=int((time.monotonic() - started) * 1000))  # 记录总耗时
         _RETRIEVAL_CACHE.set(key, result)  # 只缓存成功结果
         return result  # 返回
 
@@ -132,6 +139,8 @@ class RagRunner:  # 子图运行器
             gate=base.gate,  # 门限沿用基线
             profile="full",  # 档位
             paths=["baseline", "multi_query", "rerank"] + (["hyde"] if hyde_hits else []),  # 实际路径（观测）
+            llm_calls=(1 if variants else 0) + (1 if hyde_hits else 0),  # 触发的 LLM 次数
+            variants=len(variants),  # 并行变体数
         )  # 结束
 
     async def _variants(self, question: str) -> list[str]:  # 改写变体（多路）

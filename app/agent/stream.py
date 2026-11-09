@@ -175,12 +175,15 @@ def start_stream(  # 启动
     """立即返回句柄；后台任务开始跑。"""
     queue: asyncio.Queue = asyncio.Queue()  # 事件队列
     sink = _EventSink(queue)  # 事件出口：终态之后自动闭嘴
+    from app.agent.tools.tooling import singleflight_timeouts  # 进程级超时计数
+
     ctx = RunContext(  # 上下文
         run_id=run_id or uuid.uuid4().hex,  # 复用传入 id，否则生成
         question=question,  # 问题
         conversation_id=session or "default",  # 会话
         emit=sink,  # 事件出口
         attachments=list(attachments or []),  # 附件
+        singleflight_base=singleflight_timeouts(),  # 记录基线，收尾算增量
     )  # 上下文结束
     sink._run_id = ctx.run_id  # 事件出口预先知道临时 run id
     handle = StreamHandle(run_id=ctx.run_id, ctx=ctx, events=queue)  # 句柄

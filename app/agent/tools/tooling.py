@@ -63,20 +63,30 @@ def _error_envelope(exc: BaseException, *, where: str = "") -> Any:  # 异常 �
     return resolve(exc, where=where or "tool")  # 核心统一分类
 
 
-async def _compute_async(fn: Callable[..., Any], cache: TtlCache | None, key: str, kwargs: dict[str, Any]) -> Any:  # 异步计算
-    """执行纯函数 + 缓存写入 + 错误映射；返回包络。"""
+def _validate_result(data: Any, result_schema: type[BaseModel] | None) -> None:  # 运行时校验返回形状
+    """声明了 result_schema 就必须通过校验；不通过按编程 Bug 处理（不吞）。"""
+    if result_schema is None:  # 未声明
+        return  # 跳过
+    if isinstance(result_schema, type) and issubclass(result_schema, BaseModel):  # pydantic 模型
+        result_schema.model_validate(data)  # 形状不对会抛
+
+
+async def _compute_async(fn: Callable[..., Any], cache: TtlCache | None, key: str, kwargs: dict[str, Any], result_schema: type[BaseModel] | None = None) -> Any:  # 异步计算
+    """执行纯函数 + 缓存写入 + 形状校验 + 错误映射；返回包络。"""
     try:  # 成功 / 业务错 / 内部或上游错
         data = await _maybe_await(fn(**kwargs))  # 调纯函数
+        _validate_result(data, result_schema)  # 校验返回形状
     except Exception as exc:  # 统一映射（优化点 1 在 _error_envelope）
         return _error_envelope(exc, where=getattr(fn, "__name__", "tool"))  # 包络
     if cache is not None:  # 只缓存成功
         cache.set(key, data)  # 存
     return ok(data, cached=False)  # 成功包络（非命中）
 
-def _compute_sync(fn: Callable[..., Any], cache: TtlCache | None, key: str, kwargs: dict[str, Any]) -> Any:  # 同步计算
-    """同步版：返回包络；与异步版共享错误映射。"""
+def _compute_sync(fn: Callable[..., Any], cache: TtlCache | None, key: str, kwargs: dict[str, Any], result_schema: type[BaseModel] | None = None) -> Any:  # 同步计算
+    """同步版：返回包络；与异步版共享错误映射与形状校验。"""
     try:  # 成功 / 业务错 / 内部或上游错
         data = fn(**kwargs)  # 调纯函数（同步）
+        _validate_result(data, result_schema)  # 校验返回形状
     except Exception as exc:  # 统一映射
         return _error_envelope(exc, where=getattr(fn, "__name__", "tool"))  # 包络
     if cache is not None:  # 只缓存成功
@@ -112,7 +122,7 @@ def _find_hit(cache: TtlCache | None, key: str) -> Any | None:  # 查缓存命�
     return ok(cached, cached=True) if cached is not None else None  # 命中带标记
 
 
-async def _call_async(fn: Callable[..., Any], cache: TtlCache | None, schema: type[BaseModel] | None, wait_s: float, **kwargs: Any) -> Any:  # 异步主入口
+async def _call_async(fn: Callable[..., Any], cache: TtlCache | None, schema: type[BaseModel] | None, wait_s: float, result_schema: type[BaseModel] | None = None, **kwargs: Any) -> Any:  # 异步主入口
     """缓存 + single-flight + 计算；并发同参合并为一次（优化点 2），等待超时则自算。"""
     key = _args_key(kwargs, schema)  # 规范参数键（缓存用小 key）
     hit = _find_hit(cache, key)  # 命中即回
@@ -129,19 +139,19 @@ async def _call_async(fn: Callable[..., Any], cache: TtlCache | None, schema: ty
         hit = _find_hit(cache, key)  # 它成功后已落缓存
         if hit is not None:  # 命中了
             return hit  # 直接回
-        return await _compute_async(fn, cache, key, kwargs)  # 它失败了，保守自算
+        return await _compute_async(fn, cache, key, kwargs, result_schema)  # 它失败了，保守自算
     loop = asyncio.get_running_loop()  # 当前循环
     fut = loop.create_future()  # 领导者信号
     _inflight[dkey] = fut  # 占位
     try:  # 计算
-        return await _compute_async(fn, cache, key, kwargs)  # 领导计算
+        return await _compute_async(fn, cache, key, kwargs, result_schema)  # 领导计算
     finally:  # 一定释放
         if not fut.done():  # 没被其它收尾
             fut.set_result(None)  # 唤醒等待者
         _inflight.pop(dkey, None)  # 移除占位
 
 
-def _call_sync(fn: Callable[..., Any], cache: TtlCache | None, schema: type[BaseModel] | None, wait_s: float, **kwargs: Any) -> Any:  # 同步主入口
+def _call_sync(fn: Callable[..., Any], cache: TtlCache | None, schema: type[BaseModel] | None, wait_s: float, result_schema: type[BaseModel] | None = None, **kwargs: Any) -> Any:  # 同步主入口
     """同步版：缓存 + single-flight + 计算（线程安全，等待有超时）。"""
     key = _args_key(kwargs, schema)  # 规范参数键
     hit = _find_hit(cache, key)  # 命中即回
@@ -161,7 +171,7 @@ def _call_sync(fn: Callable[..., Any], cache: TtlCache | None, schema: type[Base
         if hit is not None:  # 命中
             return hit  # 回
     try:  # 计算（含领导者）
-        return _compute_sync(fn, cache, key, kwargs)  # 计算
+        return _compute_sync(fn, cache, key, kwargs, result_schema)  # 计算
     finally:  # 一定释放
         with _inflight_lock:  # 加锁
             _inflight_sync.pop(dkey, None)  # 移除占位
@@ -186,11 +196,11 @@ def tool_spec(  # 工具范式装饰器
         wait_s = max(0.1, float(timeout_ms) / 1000.0 - 0.5)  # 等待上限略小于工具超时，留收尾余量
 
         async def wrapped_async(**kwargs: Any) -> Any:  # 异步入口（真协程函数）
-            env = await _call_async(fn, cache, args_schema, wait_s, **kwargs)  # 主路由
+            env = await _call_async(fn, cache, args_schema, wait_s, result_schema, **kwargs)  # 主路由
             return to_content_and_artifact(env, render(env))  # 模型只拿 data，审计留完整包络
 
         def wrapped_sync(**kwargs: Any) -> Any:  # 同步入口（真函数）
-            env = _call_sync(fn, cache, args_schema, wait_s, **kwargs)  # 主路由
+            env = _call_sync(fn, cache, args_schema, wait_s, result_schema, **kwargs)  # 主路由
             return to_content_and_artifact(env, render(env))  # 同上
 
         common = {  # 公共参数

@@ -83,8 +83,10 @@ async def _persist(ctx: RunContext, question: str, answer: str) -> None:  # 落�
 def _metrics_of(ctx: RunContext, state: dict[str, Any]) -> dict[str, Any]:  # 指标汇总
     """收尾把本 run 指标补齐派生值并落 metadata（单一来源）。"""
     from app.agent.metrics import finalize  # 局部导入避免循环
+    from app.agent.tools.tooling import singleflight_timeouts  # 进程级超时计数
 
     metrics = finalize(ctx.metrics)  # 计数器 + 派生
+    metrics["singleflight_timeouts"] = max(0, singleflight_timeouts() - int(getattr(ctx, "singleflight_base", 0)))  # 本 run 内等待超时次数
     metrics["question_chars"] = len(str(ctx.question or ""))  # 问题体积
     metrics["answer_chars"] = len(str(state.get("answer") or ""))  # 回答体积
     metrics["ttft_ms"] = int(ctx.first_token_ms or 0)  # 首 token

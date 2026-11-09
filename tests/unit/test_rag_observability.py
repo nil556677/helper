@@ -24,8 +24,14 @@ def test_data_includes_profile_paths() -> None:  # 工具出参带 profile/paths
         selected_count=0,  # 证据数
         profile="full",  # 档位
         paths=["baseline", "multi_query", "rerank"],  # 路径
+        elapsed_ms=123,  # 耗时
+        llm_calls=1,  # LLM 次数
+        variants=2,  # 变体数
     )  # 结束
     data = _data(result, query="q", mode="deep")  # 出参
     assert data["basis"]["profile"] == "full"  # 档位可见
     assert "multi_query" in data["basis"]["paths"]  # 路径可见
+    assert data["basis"]["elapsed_ms"] == 123  # 耗时可见
+    assert data["basis"]["llm_calls"] == 1  # LLM 次数可见
+    assert data["basis"]["variants"] == 2  # 变体数可见
     assert data["query"] == "q" and data["mode"] == "deep"  # 归因字段

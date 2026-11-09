@@ -68,6 +68,7 @@ class RunContext:  # 一轮运行的运行时上下文
     attachments: list[dict[str, Any]] = field(default_factory=list)  # 本轮附件（输入透传）
     turn_id: str = ""  # 逻辑轮次 id（落库后 = user 消息 id；供 trace/对账关联）
     metrics: dict[str, Any] = field(default_factory=new_metrics)  # 本次 run 指标（可观测，收尾汇总）
+    singleflight_base: int = 0  # run 开始时的 single-flight 超时累计值（算 run 内增量）
     interrupt_payload: dict[str, Any] | None = None  # HITL 暂停时的待办负载（澄清/审批）
     step_records: list[dict[str, Any]] = field(default_factory=list)  # 逐节点记录（节点名 + 返回 update，排障）
 
