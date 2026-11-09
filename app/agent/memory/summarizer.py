@@ -78,3 +78,16 @@ async def _compact_once(conversation_id: str) -> None:  # 一次压缩到段
         summary=new_summary,  # 摘要
         source_refs=refs,  # 可回放引用
     )  # 结束
+    # —— 写回跟随摘要同一趟：同一段里规则抽 EAV 事实 → 长期知识库（确定性，后台）——
+    from app.agent.memory import MemoryStore, confidence_for, extract_eav  # 长期库
+
+    store = MemoryStore()  # 长期记忆仓储（sqlite）
+    for item in oldest:  # 逐条最老消息
+        for fact in extract_eav(str(item.get("content") or "")):  # 规则抽事实
+            store.put(  # 写回（confested/软替代在 reconcile 内处理）
+                fact.key,  # key
+                fact.value,  # value
+                source=fact.source,  # 来源
+                confidence=confidence_for(fact),  # 可信度
+                time_s=fact.time,  # 时间
+            )  # 结束
