@@ -103,6 +103,27 @@ def list_pending(tenant_id: str, *, limit: int = 50) -> list[dict[str, Any]]:  #
     return [dict(row) for row in rows]  # 列表
 
 
+def get_request(request_id: str) -> dict[str, Any] | None:  # 取单条请求
+    """按 id 取审批请求（含 args/status）。"""
+    row = get_connection().execute(  # 查询
+        "SELECT request_id, thread_id, tenant_id, requester_id, tool_name, args_redacted, status"
+        " FROM approval_requests WHERE request_id=?",
+        (request_id,),
+    ).fetchone()  # 一行
+    if row is None:  # 无
+        return None  # 空
+    return dict(row)  # 返回
+
+
+def has_executed(request_id: str) -> bool:  # 是否已执行过（幂等）
+    """审计里是否已有 executed 事件。"""
+    row = get_connection().execute(  # 查询
+        "SELECT 1 FROM approval_audit WHERE request_id=? AND event='executed' LIMIT 1",
+        (request_id,),
+    ).fetchone()  # 命中
+    return row is not None  # 判
+
+
 def expire_pending(now: float | None = None) -> list[str]:  # 超时扫描
     """把过期的 pending 标 expired 并审计；返回 request_id 供唤醒图。"""
     stamp = _stamp() if now is None else float(now)  # 当前

@@ -42,3 +42,33 @@ def test_service_expire_all(fake_root) -> None:  # 超时扫描
 def test_main_graph_builds() -> None:  # 总图可构建
     graph = build_main_graph()  # 构建
     assert hasattr(graph, "ainvoke")  # 可跑
+
+
+def test_execute_approved_only_when_approved_and_once(fake_root) -> None:  # 批准才执行且幂等
+    import asyncio  # 跑异步
+    from types import SimpleNamespace  # 假工具
+
+    class _Tool:  # 假工具（记录调用）
+        def __init__(self) -> None:
+            self.calls = 0  # 次数
+
+        async def ainvoke(self, args):  # 执行
+            self.calls += 1  # 记
+            return SimpleNamespace(ok=True, data={"ret": args})  # 包络
+
+    _init(fake_root)  # 建表
+    tool = _Tool()  # 假工具
+    registry = {"query_order": tool}  # 工具表
+    rid = _create()  # pending
+    blocked = asyncio.run(approval_service.execute_approved(rid, registry=registry))  # pending 不执行
+    assert blocked["executed"] is False and tool.calls == 0  # 未批不执行
+    approval_service.decide(rid, "rejected", decided_by="admin")  # 拒绝
+    rej = asyncio.run(approval_service.execute_approved(rid, registry=registry))  # 拒绝不执行
+    assert rej["executed"] is False and tool.calls == 0  # 拒绝不执行
+    rid2 = _create(thread_id="t2", args_redacted={"order_id": "9"})  # 另一单
+    approval_service.decide(rid2, "approved", decided_by="admin")  # 批
+    first = asyncio.run(approval_service.execute_approved(rid2, registry=registry))  # 执行
+    assert first["executed"] is True and tool.calls == 1  # 执行一次
+    second = asyncio.run(approval_service.execute_approved(rid2, registry=registry))  # 再执行
+    assert second["executed"] is False and second["reason"] == "already"  # 幂等
+    assert tool.calls == 1  # 只执行一次
