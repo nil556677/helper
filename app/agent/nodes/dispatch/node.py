@@ -10,6 +10,7 @@ from app.agent.events import basis as basis_event  # 检索依据事件
 from app.agent.events import tool as tool_event  # 工具事件
 from app.agent.stages import stage  # 过程步骤
 from app.agent.tools.library import current_time, query_weather, search_knowledge_base  # 内置工具
+from app.agent.tools.wiring import unwrap_tool_output  # 工具出参还原（content+artifact → Result）
 from app.agent.nodes.semantic.node import route_specs  # 路径定义（含必需参数）
 from app.rag.answer import extractive  # 原文回退（无模型时也能给证据原文）
 
@@ -162,7 +163,7 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
     try:  # 直调工具
         if name == "knowledge":  # 检索类走"查找资料"过程步（含计步）
             with stage("查找资料", name="search", group=StageGroup.SEARCH) as info:  # 过程可点开看详情
-                envelope = await tool.ainvoke(args)  # 执行
+                envelope = unwrap_tool_output(await tool.ainvoke(args))  # 执行（还原完整包络）
                 _data = getattr(envelope, "data", None) or {}  # 结果
                 _frags = list(_data.get("evidence") or [])  # 命中片段
                 info.detail = f"找到 {len(_frags)} 段资料"  # 一行摘要
@@ -175,7 +176,7 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
                 info.body = "\n".join(_lines)  # 点开看到资料+判断
         else:  # 时间/天气直调
             with stage("调用工具", name="run", group=StageGroup.TOOL):  # 工具过程步（name 区分同函数两支）
-                envelope = await tool.ainvoke(args)  # 执行
+                envelope = unwrap_tool_output(await tool.ainvoke(args))  # 执行（还原完整包络）
     except Exception as exc:  # 工具失败 → 带内 + 升级（让 agentic 再试/降级）
         note = f"{name} 查询失败：{exc}"  # 说明
         if run is not None and tool_event_sent:  # 发失败

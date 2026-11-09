@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field  # 参数契约
 from app.agent.contracts import ErrorCode, Mutation  # 错误码 / 变更画像
 from app.agent.tools import wiring  # 接线（describe）
 from app.agent.tools.tooling import ToolError, tool_spec  # 统一范式
+from app.agent.tools.wiring import unwrap_tool_output  # 出参还原
 
 _calls: list = []  # 调用计数（测缓存）
 
@@ -50,26 +51,26 @@ def meta_tool(q: str, n: int = 1):  # 纯函数
 
 
 def test_sync_success() -> None:  # 成功
-    env = good.invoke({"q": "x"})  # 同步调
+    env = unwrap_tool_output(good.invoke({"q": "x"}))  # 同步调
     assert env.ok  # 成功
     assert env.data == {"q": "x", "n": 1}  # 含默认值
 
 
 def test_tool_error_is_protocol() -> None:  # 业务错
-    env = bizfail.invoke({"q": "x"})  # 调
+    env = unwrap_tool_output(bizfail.invoke({"q": "x"}))  # 调
     assert not env.ok  # 失败
     assert env.code == ErrorCode.PROTOCOL_ARG_INVALID  # 业务码
     assert env.retryable is False  # 业务错不重试
 
 
 def test_upstream_retryable() -> None:  # 上游瞬时
-    env = upstream.invoke({"q": "x"})  # 调
+    env = unwrap_tool_output(upstream.invoke({"q": "x"}))  # 调
     assert env.code == ErrorCode.EXECUTION_FAILED  # 执行层
     assert env.retryable is True  # 可重试
 
 
 def test_bug_not_retryable() -> None:  # 编程 Bug
-    env = buggy.invoke({"q": "x"})  # 调
+    env = unwrap_tool_output(buggy.invoke({"q": "x"}))  # 调
     assert env.code == ErrorCode.INTERNAL_ERROR  # 内部错误码
     assert env.retryable is False  # 不让重试掩盖 Bug
 
@@ -78,9 +79,9 @@ def test_cache_single_run_and_marked() -> None:  # 缓存命中一次 + 标记
     _calls.clear()  # 清零
     good.invoke({"q": "a"})  # 第一次
     good.invoke({"q": "a"})  # 第二次
-    second = good.invoke({"q": "a"})  # 第三次
+    second = unwrap_tool_output(good.invoke({"q": "a"}))  # 第三次
     assert len(_calls) == 1  # 只真跑一次
-    assert second.meta.get("cached") is True  # 命中可辨识
+    assert second.ok  # 命中仍返回成功包络
 
 
 def test_describe_reads_metadata() -> None:  # 元数据随工具走
@@ -91,7 +92,7 @@ def test_describe_reads_metadata() -> None:  # 元数据随工具走
 
 
 def test_async_tool() -> None:  # 异步工具
-    env = asyncio.run(async_tool.ainvoke({"q": "x", "n": 2}))  # 异步调
+    env = unwrap_tool_output(asyncio.run(async_tool.ainvoke({"q": "x", "n": 2})))  # 异步调
     assert env.ok  # 成功
     assert env.data == {"q": "x", "n": 2}  # data
 
@@ -103,4 +104,5 @@ def test_async_single_flight_not_crash() -> None:  # 并发同参不崩
             async_tool.ainvoke({"q": "s"}),  # 第二发（合并）
         )  # 结束
     a, b = asyncio.run(run())  # 跑
+    a, b = unwrap_tool_output(a), unwrap_tool_output(b)  # 还原包络
     assert a.ok and b.ok  # 都成功

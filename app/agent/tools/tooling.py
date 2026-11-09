@@ -30,6 +30,10 @@ from pydantic import BaseModel  # 参数契约基类
 from app.agent.contracts import Mutation  # 变更画像
 from app.core.error import ResolveError, ok, resolve  # 统一错误基类/成功/分类
 from app.agent.tools.cache import TtlCache  # TTL 缓存（窗口内幂等）
+from app.agent.tools.wiring import render, to_content_and_artifact  # 模型视角/审计视角拆分
+
+#: single-flight 等待上限（秒）：领导者没在时限内完成就自己算，避免永久阻塞。
+SINGLEFLIGHT_WAIT_S = 4.0  # 默认等待（工具超时 5s 时留 1s 给收尾）
 
 
 class ToolError(ResolveError):  # 工具业务错
@@ -94,16 +98,19 @@ def _find_hit(cache: TtlCache | None, key: str) -> Any | None:  # 查缓存命�
     return ok(cached, cached=True) if cached is not None else None  # 命中带标记
 
 
-async def _call_async(fn: Callable[..., Any], cache: TtlCache | None, schema: type[BaseModel] | None, **kwargs: Any) -> Any:  # 异步主入口
-    """缓存 + single-flight + 计算；并发同参合并为一次（优化点 2）。"""
+async def _call_async(fn: Callable[..., Any], cache: TtlCache | None, schema: type[BaseModel] | None, wait_s: float, **kwargs: Any) -> Any:  # 异步主入口
+    """缓存 + single-flight + 计算；并发同参合并为一次（优化点 2），等待超时则自算。"""
     key = _args_key(kwargs, schema)  # 规范参数键（缓存用小 key）
     hit = _find_hit(cache, key)  # 命中即回
     if hit is not None:  # 命中
         return hit  # 带 cached 标记
-    dkey = (getattr(fn, "__name__", "tool"), key)  # single-flight 唯一键（含工具名）
+    dkey = (getattr(fn, "__module__", ""), getattr(fn, "__qualname__", "tool"), key)  # 含模块/限定名，避免跨模块同名碰撞
     fut = _inflight.get(dkey)  # 有别的调用在算？
     if fut is not None:  # 有
-        await fut  # 等它
+        try:  # 等它，但不无限等
+            await asyncio.wait_for(fut, timeout=wait_s)  # 超时后放弃等待
+        except (asyncio.TimeoutError, asyncio.CancelledError):  # 领导者卡住/被取消
+            pass  # 降级为自算
         hit = _find_hit(cache, key)  # 它成功后已落缓存
         if hit is not None:  # 命中了
             return hit  # 直接回
@@ -119,13 +126,13 @@ async def _call_async(fn: Callable[..., Any], cache: TtlCache | None, schema: ty
         _inflight.pop(dkey, None)  # 移除占位
 
 
-def _call_sync(fn: Callable[..., Any], cache: TtlCache | None, schema: type[BaseModel] | None, **kwargs: Any) -> Any:  # 同步主入口
-    """同步版：缓存 + single-flight + 计算（线程安全）。"""
+def _call_sync(fn: Callable[..., Any], cache: TtlCache | None, schema: type[BaseModel] | None, wait_s: float, **kwargs: Any) -> Any:  # 同步主入口
+    """同步版：缓存 + single-flight + 计算（线程安全，等待有超时）。"""
     key = _args_key(kwargs, schema)  # 规范参数键
     hit = _find_hit(cache, key)  # 命中即回
     if hit is not None:  # 命中
         return hit  # 带 cached 标记
-    dkey = (getattr(fn, "__name__", "tool"), key)  # 唯一键
+    dkey = (getattr(fn, "__module__", ""), getattr(fn, "__qualname__", "tool"), key)  # 含模块/限定名
     with _inflight_lock:  # 线程安全查占位
         event = _inflight_sync.get(dkey)  # 有别的在算？
         not_leader = event is not None  # 是否要等
@@ -133,7 +140,7 @@ def _call_sync(fn: Callable[..., Any], cache: TtlCache | None, schema: type[Base
             event = threading.Event()  # 建信号
             _inflight_sync[dkey] = event  # 占位
     if not_leader:  # 等领导者
-        event.wait()  # 阻塞等
+        event.wait(wait_s)  # 有超时的等，避免永久阻塞
         hit = _find_hit(cache, key)  # 它成功后已落缓存
         if hit is not None:  # 命中
             return hit  # 回
@@ -153,22 +160,29 @@ def tool_spec(  # 工具范式装饰器
     mutation: Mutation = Mutation.READ_ONLY,  # 变更画像（重试安全决策）
     version: int = 1,  # 契约版本（破坏性变更 +1）
     permissions: tuple[str, ...] = (),  # 权限标签
+    result_schema: type[BaseModel] | None = None,  # 结果契约（describe/审计/下游校验用）
+    timeout_ms: int = 5000,  # 工具级超时（毫秒；框架可读）
+    max_entries: int | None = 1000,  # 缓存容量上限（防长期增长；None=不限）
 ) -> Callable[[Callable[..., Any]], StructuredTool]:  # 返回装饰器
-    """包成返回 `core.Result` 的 langchain 工具；错误/缓存/并发/元数据在此统一。"""
+    """包成返回 `(模型视角, 审计视角)` 的 langchain 工具；错误/缓存/并发/元数据在此统一。"""
     def deco(fn: Callable[..., Any]) -> StructuredTool:  # 装饰器本体
-        cache = TtlCache(ttl=float(ttl)) if ttl is not None else None  # 可选缓存
+        cache = TtlCache(ttl=float(ttl), max_entries=max_entries) if ttl is not None else None  # 有界缓存
+        wait_s = max(0.1, float(timeout_ms) / 1000.0 - 0.5)  # 等待上限略小于工具超时，留收尾余量
 
         async def wrapped_async(**kwargs: Any) -> Any:  # 异步入口（真协程函数）
-            return await _call_async(fn, cache, args_schema, **kwargs)  # 主路由
+            env = await _call_async(fn, cache, args_schema, wait_s, **kwargs)  # 主路由
+            return to_content_and_artifact(env, render(env))  # 模型只拿 data，审计留完整包络
 
         def wrapped_sync(**kwargs: Any) -> Any:  # 同步入口（真函数）
-            return _call_sync(fn, cache, args_schema, **kwargs)  # 主路由
+            env = _call_sync(fn, cache, args_schema, wait_s, **kwargs)  # 主路由
+            return to_content_and_artifact(env, render(env))  # 同上
 
         common = {  # 公共参数
             "name": fn.__name__,  # 名 = 函数名
             "description": description,  # 能力说明
             "args_schema": args_schema,  # 参数契约
             "handle_validation_error": True,  # 校验错转 message 而非抛（优化点 7）
+            "response_format": "content_and_artifact",  # 模型视角与审计视角分离
         }  # 公共参数结束
         if asyncio.iscoroutinefunction(fn):  # 异步函数 -> 异步工具
             tool = StructuredTool(**common, coroutine=wrapped_async)  # 只异步
@@ -180,8 +194,28 @@ def tool_spec(  # 工具范式装饰器
             "mutation": mutation,  # 变更画像
             "version": int(version),  # 版本
             "permissions": tuple(permissions),  # 权限
+            "result_schema": result_schema,  # 结果契约
+            "timeout_ms": int(timeout_ms),  # 工具超时
         }  # 项目元数据结束
         tool.metadata = existing  # 写回（BaseTool.metadata 是合法 pydantic 字段）
         return tool  # 返回工具
 
     return deco  # 返回装饰器
+
+
+def unwrap_tool_output(value: Any) -> Any:  # (content, artifact) → 完整 Result
+    """程序化调用（tool.invoke）拿到的是 (content, artifact)，这里还原成 Result 供代码读 data。"""
+    from app.core.result import Result  # 唯一结果契约
+
+    if isinstance(value, Result):  # 已是包络
+        return value  # 原样
+    if isinstance(value, tuple) and len(value) == 2:  # content_and_artifact
+        artifact = value[1]  # 审计视角
+        if isinstance(artifact, Result):  # 已是对象
+            return artifact  # 原样
+        if isinstance(artifact, str):  # 序列化文本
+            try:  # 解析
+                return Result.model_validate_json(artifact)  # 还原
+            except Exception:  # 解析失败
+                return value  # 退回原值
+    return value  # 其它原样

@@ -34,6 +34,7 @@ __all__ = [  # 对外导出
     "ok",  # 成功包络
     "render",  # 包络 -> 模型 JSON
     "to_content_and_artifact",  # 拆分模型视角与审计视角
+    "unwrap_tool_output",  # (content, artifact) -> 完整 Result
     "validate_unique",  # 名称合规 + 全局唯一
 ]  # 导出结束
 
@@ -43,8 +44,14 @@ class InvalidToolNameError(ValueError):  # 非法工具名
 
 
 def collect(module: ModuleType) -> list[BaseTool]:  # 收集模块内工具
-    """返回模块里 `@tool` 定义的 `BaseTool`（按定义顺序）；类型就是框架的。"""
-    return [value for value in vars(module).values() if isinstance(value, BaseTool)]  # 筛出工具
+    """返回模块里 `@tool` 定义的 `BaseTool`；有 `__all__` 时只收其中声明为工具的。"""
+    declared = getattr(module, "__all__", None)  # 显式导出清单（防误收 import 进来的工具）
+    if declared:  # 有清单
+        found = [getattr(module, name, None) for name in declared]  # 按名取
+        tools = [value for value in found if isinstance(value, BaseTool)]  # 只留工具
+        if tools:  # 有收获
+            return tools  # 按声明顺序返回
+    return [value for value in vars(module).values() if isinstance(value, BaseTool)]  # 无清单时退回全量筛
 
 
 def validate_unique(tools: list[BaseTool]) -> list[BaseTool]:  # 校验名称唯一
@@ -85,8 +92,10 @@ def describe(  # 生成工具元数据描述符
         version=int(version if version is not None else meta.get("version", 1)),  # 版本
         description=str(tool.description or ""),  # 能力描述
         args_schema=tool.args_schema,  # 参数契约（框架原样）
+        result_schema=meta.get("result_schema"),  # 结果契约（tool_spec 声明）
         mutation=mutation if mutation is not None else meta.get("mutation", Mutation.READ_ONLY),  # 变更画像
         permissions=tuple(permissions) if permissions is not None else tuple(meta.get("permissions") or ()),  # 权限
+        timeout_ms=int(meta.get("timeout_ms", 5000)),  # 工具级超时（tool_spec 声明）
     )  # 描述符结束
 
 
@@ -137,5 +146,46 @@ def to_content_and_artifact(  # 拆分模型视角与审计视角
 
 
 def render(env: Result) -> str:  # 把统一 Result 转成给模型的 JSON 文本
-    """统一返回形：喂给模型的 ToolMessage 内容就是这段 JSON（错误时 message 模型可见）。"""
-    return env.model_dump_json()  # JSON 文本
+    """模型视角：成功只给 `data`，失败只给 `{code,message,retryable}`（不再带缓存等框架字段）。"""
+    if env.ok:  # 成功
+        import json  # 只在需要时导入
+
+        return json.dumps(env.data, ensure_ascii=False, default=str)  # 只暴露数据
+    import json  # 只在需要时导入
+
+    return json.dumps(  # 错误给模型可读的最小信息
+        {"code": env.code, "message": env.message, "retryable": env.retryable},  # 错误三要素
+        ensure_ascii=False,  # 中文直出
+    )  # 返回
+
+
+def unwrap_tool_output(value: Any) -> Result:  # 程序化调用还原完整 Result
+    """tool.invoke/ainvoke 在 content_and_artifact 下只回 content 文本，这里按 JSON 还原包络。
+
+    - 完整包络 JSON（含 ok/code）→ 直接还原；
+    - 仅错误三要素（code/message/retryable）→ 还原失败包络；
+    - 其它 JSON 对象 → 视为成功 data。
+    """
+    import json  # 解析 content
+
+    if isinstance(value, Result):  # 已是包络
+        return value  # 原样
+    if isinstance(value, tuple) and len(value) == 2:  # (content, artifact)
+        value = value[1]  # 走审计视角
+        if isinstance(value, Result):  # 已是对象
+            return value  # 原样
+    if isinstance(value, str):  # 序列化文本
+        try:  # 解析
+            obj = json.loads(value)  # JSON
+        except Exception:  # 非 JSON
+            return value  # 原样返回（调用方按失败处理）
+        if isinstance(obj, dict):  # 对象
+            if "ok" in obj and "code" in obj:  # 完整包络
+                try:  # 还原
+                    return Result(**obj)  # 成功/失败都能还原
+                except Exception:  # 字段不全
+                    pass  # 继续按下面兜底
+            if "code" in obj and "message" in obj:  # 错误三要素
+                return Result(ok=False, code=str(obj.get("code")), message=str(obj.get("message")), retryable=bool(obj.get("retryable", False)))  # 失败包络
+            return Result(ok=True, code="ok", data=obj)  # 视为成功 data
+    return value  # 其它原样

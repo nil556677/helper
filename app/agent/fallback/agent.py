@@ -168,7 +168,9 @@ async def _collect_evidence(messages: list[Any]) -> tuple[list[dict[str, Any]], 
             if tool is None:  # 未注册
                 continue  # 跳过
             try:  # 重调（缓存命中，便宜）
-                envelope = await tool.ainvoke(call.get("args") or {})  # 执行
+                from app.agent.tools.wiring import unwrap_tool_output  # 还原完整包络
+
+                envelope = unwrap_tool_output(await tool.ainvoke(call.get("args") or {}))  # 执行
                 data = getattr(envelope, "data", None) or {}  # 结构化出参
             except Exception:  # 失败不影响回答
                 continue  # 跳过
