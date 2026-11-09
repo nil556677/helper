@@ -207,6 +207,7 @@ CREATE TABLE IF NOT EXISTS user_memories (
     last_access     REAL NOT NULL DEFAULT 0,     -- 最近访问时间戳（衰减用）
     status          TEXT NOT NULL DEFAULT 'active',  -- 状态（active 活跃 / superseded 被软替代 / contested / uncertain）
     superseded_by   TEXT,               -- 被谁替代（软替代保留内容）
+    embedding       BLOB,               -- 事实向量（bge-m3 嵌入，JSON bytes；语义召回用）
     history_versions TEXT NOT NULL DEFAULT '[]',  -- 历史版本（JSON 数组，可追溯）
     PRIMARY KEY (namespace, memory_key)
 );
@@ -453,6 +454,7 @@ def _ensure_user_memories_table(conn: sqlite3.Connection) -> None:
         " last_access REAL NOT NULL DEFAULT 0,"
         " status TEXT NOT NULL DEFAULT 'active',"
         " superseded_by TEXT,"
+        " embedding BLOB,"
         " history_versions TEXT NOT NULL DEFAULT '[]',"
         " PRIMARY KEY (namespace, memory_key)"
         ");"

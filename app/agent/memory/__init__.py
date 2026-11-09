@@ -15,7 +15,10 @@ from app.agent.memory.longterm import (  # 长期可信知识库
     MemoryFact,  # 事实
     MemoryStore,  # 仓储
     confidence_for,  # 可信度
+    cosine_sim,  # 余弦
     decay_score,  # 衰减
+    distill_and_write,  # 异步写回入口
+    embed_text,  # 嵌入
     extract_eav,  # 规则抽取
 )  # 导入结束
 
@@ -32,6 +35,9 @@ __all__ = [  # 导出
     "MemoryFact",  # 事实
     "MemoryStore",  # 仓储
     "confidence_for",  # 可信度
+    "cosine_sim",  # 余弦
     "decay_score",  # 衰减
+    "distill_and_write",  # 异步写回入口
+    "embed_text",  # 嵌入
     "extract_eav",  # 规则抽取
 ]  # 结束

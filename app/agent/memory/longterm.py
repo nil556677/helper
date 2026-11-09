@@ -105,9 +105,10 @@ class MemoryStore:  # 长期记忆仓储（sqlite 后端）
         source: str = "user_explicit",  # 来源
         confidence: float | None = None,  # 可选覆盖可信度
         time_s: float | None = None,  # 可选事实时间
+        embedding: Iterable[float] | None = None,  # 可选向量（语义召回用）
         kind: str = "memories",  # 子命名空间
     ) -> MemoryFact:  # 保留的事实
-        emb = None  # 向量（规则抽取出暂不嵌）
+        emb_bytes = (json.dumps(list(embedding), ensure_ascii=False).encode("utf-8") if embedding is not None else None)  # 向量序列化
         fact = MemoryFact(  # 构造
             key=str(key),  # key
             value=value,  # 值
@@ -115,10 +116,10 @@ class MemoryStore:  # 长期记忆仓储（sqlite 后端）
             confidence=float(confidence) if confidence is not None else confidence_for(MemoryFact(key=str(key), value=value, source=source)),  # 可信度
             time=float(time_s) if time_s is not None else time.time(),  # 时间
         )  # 结束
-        self._reconcile(self._ns(kind), fact)  # 仲裁写回
+        self._reconcile(self._ns(kind), fact, emb_bytes)  # 仲裁写回
         return fact  # 返回
 
-    def _reconcile(self, namespace: str, new: MemoryFact) -> None:  # 确定性仲裁
+    def _reconcile(self, namespace: str, new: MemoryFact, embedding: bytes | None = None) -> None:  # 确定性仲裁
         """无活跃 → active；新且更旧更可信 → 旧软替代；冲突 → contest + fail closed。"""
         row = get_connection().execute(  # 查现有活跃
             "SELECT value, source, confidence, created_at, history_versions, updated_at FROM user_memories"
@@ -129,7 +130,7 @@ class MemoryStore:  # 长期记忆仓储（sqlite 后端）
         stamp = float(new.time)  # 新时间
         with transaction() as conn:  # 单事务幂等
             if row is None:  # 无活跃 → 直接 active
-                self._insert(conn, namespace, new.key, payload, new.source, new.confidence, stamp)  # 写
+                self._insert(conn, namespace, new.key, payload, new.source, new.confidence, stamp, embedding=embedding)  # 写
                 return
             current_ts = float(row["updated_at"] or 0)  # 旧时间
             new_trusted = new.confidence > float(row["confidence"] or 0) and stamp >= current_ts  # 更可信且不旧
@@ -143,26 +144,26 @@ class MemoryStore:  # 长期记忆仓储（sqlite 后端）
                     (new.key, namespace, new.key),
                 )  # 更新
                 self._insert(  # 新 active（带版本历史）
-                    conn, namespace, new.key, payload, new.source, new.confidence, stamp, versions=versions,
+                    conn, namespace, new.key, payload, new.source, new.confidence, stamp, versions=versions, embedding=embedding,
                 )  # 写
             elif new.confidence < float(row["confidence"] or 0) * 0.8:  # 冲突且更弱 → 进 contest（fail closed）
                 conflict_key = f"{new.key}#contested"  # 冲突槽（非主键，避免覆盖活跃）
                 self._insert(  # 冲突记录
                     conn, namespace, conflict_key, payload, new.source, min(new.confidence, 0.3), stamp,
-                    status="contested",
+                    status="contested", embedding=embedding,
                 )  # 写
             # 否则：既不可信也不冲突 → 保留旧，忽略新（静默不覆盖）
 
     @staticmethod
     def _insert(  # 插入一行
         conn: Any, namespace: str, key: str, payload: str, source: str, conf: float, stamp: float,  # 参数
-        *, status: str = "active", versions: list | None = None,  # 可选
+        *, status: str = "active", versions: list | None = None, embedding: bytes | None = None,  # 可选
     ) -> None:  # 结束
         conn.execute(  # 插
             "INSERT OR REPLACE INTO user_memories(namespace, memory_key, value, source, created_at, updated_at,"
-            " confidence, access_count, last_access, status, superseded_by, history_versions)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, NULL, ?)",
-            (namespace, key, payload, source, stamp, stamp, conf, status,
+            " confidence, access_count, last_access, status, superseded_by, embedding, history_versions)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, NULL, ?, ?)",
+            (namespace, key, payload, source, stamp, stamp, conf, status, embedding,
              json.dumps(versions or [], ensure_ascii=False)),
         )  # 结束
 
@@ -194,21 +195,34 @@ class MemoryStore:  # 长期记忆仓储（sqlite 后端）
         *,  # 关键字
         kind: str = "memories",  # 子命名空间
         top_k: int = 10,  # 上限
-    ) -> list[dict[str, Any]]:  # 按衰减分排序的活跃事实
-        """只取 active；按 `decay_score` 排序；命中即记账。"""
-        rows = get_connection().execute(  # 查该命名空间活跃
-            "SELECT memory_key, value, source, confidence, updated_at, access_count, last_access FROM user_memories"
+        query_embedding: Iterable[float] | None = None,  # 可选查询向量（语义召回）
+    ) -> list[dict[str, Any]]:  # 按相关性分排序的活跃事实
+        """只取 active；分 = 语义(余弦×0.7) + 衰减×0.3；命中即记账。
+
+        无查询向量 → 纯衰减排序；事实无向量 → 跳过语义加分。
+        """
+        rows = get_connection().execute(  # 查该命名空间活跃（含向量）
+            "SELECT memory_key, value, source, confidence, updated_at, access_count, last_access, embedding FROM user_memories"
             " WHERE namespace = ? AND status = 'active'",
             (self._ns(kind),),
         ).fetchall()
+        qvec = list(query_embedding) if query_embedding is not None else None  # 查询向量
         scored: list[dict[str, Any]] = []  # 带分
         for item in rows:  # 逐条
-            score = decay_score(item["confidence"], item["updated_at"], item["access_count"], item["last_access"])  # 衰减分
-            if item["access_count"] or True:  # 命中记访问（下次衰减用）
-                get_connection().execute(  # 记账
-                    "UPDATE user_memories SET access_count = access_count + 1, last_access = ? WHERE namespace = ? AND memory_key = ?",
-                    (time.time(), self._ns(kind), item["memory_key"]),
-                )  # 更新
+            decay = decay_score(item["confidence"], item["updated_at"], item["access_count"], item["last_access"])  # 衰减分
+            sim = 0.0  # 余弦
+            if qvec:  # 给了查询向量
+                raw = item["embedding"]  # 存的事实向量
+                if raw:  # 有向量
+                    try:  # 解析
+                        sim = cosine_sim(qvec, json.loads(raw.decode("utf-8")))  # 余弦
+                    except Exception:  # 坏向量
+                        sim = 0.0  # 归零
+            score = round(0.7 * sim + 0.3 * decay, 6) if qvec else decay  # 综合分
+            get_connection().execute(  # 记账（喂回衰减）
+                "UPDATE user_memories SET access_count = access_count + 1, last_access = ? WHERE namespace = ? AND memory_key = ?",
+                (time.time(), self._ns(kind), item["memory_key"]),
+            )  # 更新
             scored.append({"key": item["memory_key"], "value": json.loads(item["value"]), "source": item["source"], "confidence": item["confidence"], "score": score})  # 候选
         if scored:  # 有候选
             get_connection().commit()  # 提交记账
@@ -225,3 +239,57 @@ def extract_eav(text: str) -> list[MemoryFact]:  # 规则抽 EAV 事实
         if match:  # 命中
             facts.append(MemoryFact(key=f"{attr}::{match.group(1)}", value=match.group(1), source="paraphrase"))  # 事实
     return facts  # 返回
+
+
+def cosine_sim(a: Iterable[float], b: Iterable[float]) -> float:  # 余弦相似度
+    """两个等长向量的余弦；空/坏输入返回 0。"""
+    va = list(a)  # a
+    vb = list(b)  # b
+    if not va or not vb or len(va) != len(vb):  # 形状不对
+        return 0.0  # 0
+    dot = sum(x * y for x, y in zip(va, vb))  # 点积
+    na = sum(x * x for x in va) ** 0.5  # 模 a
+    nb = sum(y * y for y in vb) ** 0.5  # 模 b
+    if na == 0 or nb == 0:  # 零向量
+        return 0.0  # 0
+    return dot / (na * nb)  # 余弦
+
+
+def embed_text(text: str) -> list[float] | None:  # 文本 → 向量（复用本地 bge-m3）
+    """嵌入不可用/失败返回 None（召回退回纯衰减）。"""
+    try:  # 模型可能没配
+        from app.rag.retrieval import embed_query  # 复用嵌入
+
+        vec = embed_query(str(text or ""))  # 嵌入
+        if vec is None:  # 空
+            return None  # 无
+        return list(vec)  # 列表
+    except Exception:  # 任何失败
+        return None  # 退回
+
+
+async def distill_and_write(conversation_id: str) -> None:  # 异步写回入口（可被 jobs 调度）
+    """读最近分段，规则抽 EAV 事实并写长期库（后台，不打主线）。"""
+    import asyncio  # 线程切换
+    from app.core.db.connection import get_connection, transaction  # DB
+    from app.services import conversations  # 会话
+
+    rows = get_connection().execute(  # 读最后一段 refs
+        "SELECT end_id, source_refs FROM summary_segments"
+        " WHERE conversation_id = ? ORDER BY seg_seq DESC LIMIT 1",
+        (conversation_id,),
+    ).fetchone()
+    if rows is None:  # 无段
+        return  # 无
+    refs = json.loads(rows["source_refs"] or "[]")  # 覆盖消息
+    if not refs:  # 空
+        return  # 无
+    msgs = get_connection().execute(  # 读这些消息内容
+        "SELECT content FROM messages WHERE conversation_id = ? AND id IN (%s)"
+        % ",".join("?" * len(refs)),
+        (conversation_id, *[int(r) for r in refs]),
+    ).fetchall()
+    store = MemoryStore()  # 长期库
+    for msg in msgs:  # 逐条消息
+        for fact in extract_eav(str(msg["content"] or "")):  # 抽事实
+            await asyncio.to_thread(store.put, fact.key, fact.value, source=fact.source, confidence=confidence_for(fact), time_s=fact.time)  # 后台写

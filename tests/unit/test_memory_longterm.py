@@ -89,3 +89,20 @@ def test_extract_eav_rules() -> None:  # 规则抽 EAV 事实
     keys = {f.key for f in facts}  # 键
     assert "order_id::37979" in keys  # 订单
     assert "amount::99.5" in keys  # 金额
+
+
+def test_cosine_sim() -> None:  # 余弦相似度
+    from app.agent.memory import cosine_sim  # 余弦
+
+    assert round(cosine_sim([1, 0], [1, 0]), 4) == 1.0  # 同向
+    assert round(cosine_sim([1, 0], [0, 1]), 4) == 0.0  # 垂直
+    assert cosine_sim([], [1]) == 0.0  # 坏输入安全
+
+
+def test_search_with_query_embedding_ranks(fake_root) -> None:  # 语义召回：余弦加分排序
+    store = _store()  # store
+    store.put("pref::lang", "python", source="user_explicit", embedding=[1.0, 0.0, 0.0], time_s=time.time())  # 与查询近
+    store.put("pref::city", "成都", source="user_explicit", embedding=[0.0, 0.0, 1.0], time_s=time.time())  # 与查询远
+    ranked = store.search(query_embedding=[1.0, 0.0, 0.0], top_k=2)  # 按余弦召回
+    assert ranked[0]["key"] == "pref::lang"  # 近的排前
+    assert all(0 <= r["score"] <= 1 for r in ranked)  # 分合法
