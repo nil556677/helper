@@ -19,7 +19,7 @@ class OrderQuery(BaseModel):  # 参数契约
 
 
 class OrderResult(BaseModel):  # 结果契约
-    """订单主数据固定形状。"""
+    """订单主数据 + 商品明细固定形状。"""
 
     order_id: str = ""  # 订单号
     status: str = ""  # 状态
@@ -27,6 +27,7 @@ class OrderResult(BaseModel):  # 结果契约
     pay_method: str = ""  # 支付方式
     created_at: str = ""  # 下单时间
     logistics_no: str = ""  # 运单号
+    items: list[dict[str, Any]] = Field(default_factory=list)  # 商品明细
     text: str = ""  # 一句话
 
 
@@ -47,8 +48,9 @@ async def query_order(order_id: str = "", phone: str = ""):  # 异步纯函数
     if not order_id and not phone:  # 两者都缺
         raise ToolError(str(ErrorCode.PROTOCOL_ARG_INVALID), "需提供订单号或手机号")  # 缺参
     repo = get_order_repo()  # 仓储（后台配置/注入）
+    items: list[Any] = []  # 商品
     if order_id:  # 按单号
-        order = await repo.get_order(order_id)  # 查
+        order, items = await repo.get_order_detail(order_id)  # 订单+商品
         if order is None:  # 不存在
             raise ToolError(str(ErrorCode.PROTOCOL_ARG_INVALID), f"订单 {order_id} 不存在")  # 业务错
     else:  # 按手机号
@@ -58,4 +60,5 @@ async def query_order(order_id: str = "", phone: str = ""):  # 异步纯函数
         if not orders:  # 无单
             raise ToolError(str(ErrorCode.PROTOCOL_ARG_INVALID), f"手机号 {phone} 下没有订单")  # 无
         order = orders[0]  # 取单
-    return order.to_data()  # 出参
+        order, items = await repo.get_order_detail(order.order_id)  # 补商品
+    return order.to_data(items)  # 出参（订单+商品）

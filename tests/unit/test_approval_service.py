@@ -72,3 +72,16 @@ def test_execute_approved_only_when_approved_and_once(fake_root) -> None:  # 批
     second = asyncio.run(approval_service.execute_approved(rid2, registry=registry))  # 再执行
     assert second["executed"] is False and second["reason"] == "already"  # 幂等
     assert tool.calls == 1  # 只执行一次
+
+
+def test_decide_and_execute_route_node(fake_root) -> None:  # 路由级决策 + 幂等
+    from app.agent.nodes.approval import node as approval_node  # 审批节点
+
+    _init(fake_root)  # 建表
+    rid = _create()  # 建一条
+    out = approval_node.decide_and_execute(rid, "reject")  # 拒绝
+    assert out["ok"] is True and out["executed"] is False  # 拒绝不执行
+    again = approval_node.decide_and_execute(rid, "approve")  # 再批（已被拒）
+    assert again["ok"] is False and again["reason"] == "already_decided"  # 幂等：不二次生效
+    bad = approval_node.decide_and_execute(rid, "other")  # 非法值
+    assert bad["ok"] is False  # 忽略

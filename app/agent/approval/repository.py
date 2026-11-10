@@ -103,6 +103,16 @@ def list_pending(tenant_id: str, *, limit: int = 50) -> list[dict[str, Any]]:  #
     return [dict(row) for row in rows]  # 列表
 
 
+def list_requests(*, limit: int = 100) -> list[dict[str, Any]]:  # 台账（只读）
+    """按时间倒序列出审批请求（含状态/决策人），供后台只读台账。"""
+    rows = get_connection().execute(  # 查询
+        "SELECT request_id, tool_name, resource_summary, risk, status, created_at, decided_by, decided_at"
+        " FROM approval_requests ORDER BY created_at DESC LIMIT ?",
+        (int(limit),),
+    ).fetchall()  # 全部
+    return [dict(row) for row in rows]  # 列表
+
+
 def get_request(request_id: str) -> dict[str, Any] | None:  # 取单条请求
     """按 id 取审批请求（含 args/status）。"""
     row = get_connection().execute(  # 查询

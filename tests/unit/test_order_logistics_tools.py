@@ -11,17 +11,18 @@ from app.agent.tools.catalog import tool_catalog  # 目录
 from app.agent.tools.wiring import describe, unwrap_tool_output  # 描述/还原
 from app.services.logistics import client as logistics_client  # 物流 provider
 from app.services.order import repo as order_repo  # 订单仓储
-from app.services.order.repo import Order  # 订单对象
+from app.services.order.repo import Order, OrderItem  # 订单对象
 
 order_mod = importlib.import_module("app.agent.tools.library.order.query_order")  # 订单工具
 log_mod = importlib.import_module("app.agent.tools.library.logistics.query_logistics")  # 物流工具
 
 
 class _FakeRepo:  # 假订单仓储
-    async def get_order(self, order_id: str):  # 按单号
+    async def get_order_detail(self, order_id: str):  # 订单+商品
         if order_id == "12345":  # 存在
-            return Order(order_id="12345", status="已发货", amount="99.5", pay_method="微信", created_at="2026-11-08", logistics_no="SF123", tenant_id="t")  # 单
-        return None  # 不存在
+            return (Order(order_id="12345", status="已发货", amount="99.5", pay_method="微信", created_at="2026-11-08", logistics_no="SF123", tenant_id="t"),  # 订单
+                    [OrderItem(order_id="12345", sku="S1", name="商品甲", qty=2, price="49.75", amount="99.5")])  # 商品
+        return None, []  # 不存在
 
     async def get_orders_by_phone(self, phone: str):  # 按手机号
         return [Order(order_id="12345", status="已发货", amount="99.5", pay_method="微信", created_at="2026-11-08", logistics_no="SF123", tenant_id="t")]  # 一单
@@ -50,6 +51,7 @@ def test_query_order_by_id() -> None:  # 按订单号查订单
     out = unwrap_tool_output(env)  # 还原
     assert out.ok and out.data["order_id"] == "12345"  # 单号
     assert "已发货" in out.data["status"]  # 状态
+    assert out.data["items"] and out.data["items"][0]["name"] == "商品甲"  # 带商品明细
 
 
 def test_query_order_missing_args() -> None:  # 双缺 → 缺参错

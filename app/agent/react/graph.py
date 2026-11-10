@@ -13,6 +13,8 @@ from langgraph.graph import END, START, StateGraph  # 图原语
 from langgraph.graph.message import add_messages  # 消息累加
 from langgraph.prebuilt import ToolNode  # 工具执行
 
+from langgraph.types import interrupt  # 审批暂停（恢复模式）
+
 from app.agent.react.policies.approval import should_require_approval  # 审批策略
 from app.agent.tools.wiring import describe  # 工具描述符（读 approval）
 
@@ -27,12 +29,28 @@ def approval_stats() -> dict[str, int]:  # 审批统计
     return dict(_approval_stats)  # 拷贝
 
 
+#: 保密提示（仅一行附注，不进审核正文/审计）。
+CONFIDENTIAL_NOTICE = "（订单属保密数据，请勿截图或传播；本次已留痕审计）"  # 提示
+
+
+def _approval_summary(name: str, args: dict[str, Any]) -> str:  # 待确认内容摘要
+    """把将展示给用户的"被审核内容"翻成中文摘要，供用户判断批不批。"""
+    if name == "query_order":  # 订单
+        key = str(args.get("order_id") or args.get("phone") or "?")  # 单号/手机号
+        return f"查看订单 {key} 的『订单状态 / 金额 / 支付方式 / 下单时间』"  # 摘要
+    if name == "query_logistics":  # 物流
+        key = str(args.get("order_id") or args.get("tracking_no") or "?")  # 单号/运单号
+        return f"查看订单 {key} 的『物流轨迹 / 快递公司 / 配送状态』"  # 摘要
+    return f"调用 {name}：{args}"  # 通用
+
+
 class ReactState(TypedDict):  # ReAct 状态
     messages: Annotated[list, add_messages]  # 消息（累加）
     status: Literal["running", "done", "rejected", "expired"]  # 状态
     pending_request_ids: list[str]  # 待审请求
     approval_checked: bool  # 本轮是否已过审批门
     approval_blocked: bool  # 本轮是否因审批被拦截（回 agent 不再执行）
+    approval_pending: list[Any]  # 待审批元信息（request_id/tool_name/summary）→ 上抛路由级弹框
 
 
 def _has_tool_calls(state: ReactState) -> bool:  # 末尾模型是否要调工具
@@ -44,8 +62,15 @@ def build_react(  # 构造自定义 ReAct 图
     model: Any,  # 模型
     tools: list[Any],  # 工具
     system_prompt: str,  # 系统提示
+    *,  # 关键字
+    checkpointer: Any = None,  # 检查点（恢复模式必需）
+    interrupt_on_approval: bool = False,  # 需审批是否真正暂停等待（默认拦截不执行）
 ) -> Any:  # 编译图
-    """agent(LLM) → approval_gate → tools → agent；审批拒绝/过期 → END。"""
+    """agent(LLM) → approval_gate → tools → agent；审批拒绝/过期 → END。
+
+    `interrupt_on_approval` 需配合 `checkpointer`：需审批 → interrupt 暂停，
+    `Command(resume)` 恢复后读审批表：approved→tools、rejected/expired→END、pending→再等。
+    """
     bound = model.bind_tools(tools)  # 绑定工具
     tool_node = ToolNode(tools)  # 执行节点
 
@@ -70,15 +95,15 @@ def build_react(  # 构造自定义 ReAct 图
                 need.append(tc)  # 记
         if not need:  # 无审批需求 → 直通 tools
             return {"approval_checked": True}  # 放行
-        # 需审批：落表(best-effort) + 用 ToolMessage 拦截本次执行，回模型如实说明
+        # 需审批：先落表(best-effort)，再按模式阻断或暂停
         import time as _time  # 时间
 
-        _approval_stats["blocked"] += len(need)  # 计拦截
-        try:  # 落表失败不阻断拦截
+        ids: list[str] = []  # 请求 id
+        try:  # 落表失败不阻断
             from app.agent.approval import repository as approval_repo  # 审批仓储
 
             for tc in need:  # 逐调用
-                approval_repo.create_request(  # 落一条 pending
+                ids.append(approval_repo.create_request(  # 落一条 pending 并取 id
                     thread_id=str(state.get("thread_id") or ""),  # 线程
                     tenant_id=str(state.get("tenant_id") or "default"),  # 租户
                     requester_id=str(state.get("requester_id") or "user"),  # 发起
@@ -89,20 +114,57 @@ def build_react(  # 构造自定义 ReAct 图
                     risk="medium",  # 风险
                     approval_reason="工具策略要求人工审批",  # 原因
                     expires_at=_time.time() + 3600,  # 1 小时
-                )  # 结束
+                ))  # 结束
                 _approval_stats["created"] += 1  # 计登记
         except Exception:  # 未配置库等
-            pass  # 仍拦截
-        blocked: list[Any] = []  # 拦截消息
-        for tc in need:  # 逐调用
-            blocked.append(  # 生成 ToolMessage（不执行该工具）
-                ToolMessage(
-                    content=f"工具 {tc.get('name')} 需要人工审批，已登记待审，本次不执行。",
-                    tool_call_id=str(tc.get("id") or ""),
-                    name=str(tc.get("name") or ""),
-                )
-            )  # 追加
-        return {"messages": blocked, "approval_checked": True, "approval_blocked": True, "status": "running"}  # 回模型
+            pass  # 仍照常走
+
+        if not (checkpointer is not None and interrupt_on_approval):  # 非恢复模式：拦截不执行，但把待审上抛
+            _approval_stats["blocked"] += len(need)  # 计拦截
+            pending_meta: list[Any] = []  # 上抛元信息
+            for rid, tc in zip(ids, need):  # 逐调用
+                pending_meta.append({  # 元信息
+                    "request_id": str(rid),  # 请求 id
+                    "tool_name": str(tc.get("name") or ""),  # 工具
+                    "summary": _approval_summary(str(tc.get("name") or ""), tc.get("args") or {}),  # 待确认内容
+                })  # 追加
+            blocked: list[Any] = []  # 拦截消息
+            for tc in need:  # 逐调用
+                blocked.append(  # 生成 ToolMessage（不执行该工具）
+                    ToolMessage(
+                        content=f"工具 {tc.get('name')} 需要人工审批，已登记待审，本次不执行。",
+                        tool_call_id=str(tc.get("id") or ""),
+                        name=str(tc.get("name") or ""),
+                    )
+                )  # 追加
+            return {  # 回模型
+                "messages": blocked,  # 拦截消息
+                "approval_checked": True,  # 已判
+                "approval_blocked": True,  # 已拦截
+                "approval_pending": pending_meta,  # 上抛待审（路由级弹框用）
+                "status": "running",  # 运行态
+            }  # 结束
+
+        # 恢复模式：interrupt 暂停等待人工决策；恢复后读表定走向
+        interrupt({"request_ids": ids})  # 暂停（恢复时此处返回 resume 值）
+
+        def _status(rid: str) -> str:  # 读审批状态
+            try:  # 读表
+                from app.agent.approval import repository as repo  # 仓储
+
+                row = repo.get_request(rid)  # 取
+                return str((row or {}).get("status") or "pending")  # 状态
+            except Exception:  # 读失败
+                return "pending"  # 视作未决
+
+        statuses = [_status(r) for r in ids]  # 全部状态
+        if any(s == "rejected" for s in statuses):  # 有拒绝
+            return {"status": "rejected"}  # 停
+        if any(s == "expired" for s in statuses):  # 有过期
+            return {"status": "expired"}  # 停
+        if any(s == "pending" for s in statuses):  # 仍未决
+            interrupt({"request_ids": ids})  # 再等一轮
+        return {"approval_checked": True}  # 已批 → 放行执行
 
     # —— 路由边 ——
     def should_continue(state: ReactState) -> str:  # agent → approval or end
@@ -123,4 +185,4 @@ def build_react(  # 构造自定义 ReAct 图
     g.add_conditional_edges("agent", should_continue, {"approval_gate": "approval_gate", END: END})  # agent 分流
     g.add_conditional_edges("approval_gate", after_approval, {"tools": "tools", "agent": "agent", END: END})  # 门分流
     g.add_edge("tools", "agent")  # 工具回模型
-    return g.compile()  # 编译
+    return g.compile(checkpointer=checkpointer)  # 编译（恢复模式需 checkpointer）

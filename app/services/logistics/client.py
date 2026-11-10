@@ -4,6 +4,8 @@ from __future__ import annotations  # 延迟值注解
 
 from typing import Any  # 任意值
 
+import os  # 环境变量兜底
+
 from app.agent.tools.tooling import ToolError  # 业务错
 from app.agent.contracts import ErrorCode  # 错误码
 
@@ -26,8 +28,8 @@ def _logistics_config() -> dict[str, Any]:  # 读后台配置
     except Exception:  # 读失败
         return {}  # 空
     return {  # 映射
-        "endpoint": str(values.get("agent.logistics.endpoint") or ""),  # 接口地址
-        "key": str(values.get("agent.logistics.key") or ""),  # 免费 key
+        "endpoint": str(values.get("agent.logistics.endpoint") or os.environ.get("AGENT_LOGISTICS_ENDPOINT") or ""),  # 接口地址
+        "key": str(values.get("agent.logistics.key") or os.environ.get("AGENT_LOGISTICS_KEY") or ""),  # 免费 key
     }  # 结束
 
 

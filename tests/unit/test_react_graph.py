@@ -4,6 +4,8 @@ from __future__ import annotations  # 延迟值注解
 
 import asyncio  # 跑 async
 
+import pytest  # 跳过/断言
+
 from langchain_core.messages import AIMessage, HumanMessage  # 消息
 
 import app.agent.tools.library as lib  # 内置工具（取 current_time）
@@ -61,7 +63,7 @@ def test_react_graph_approval_intercepts_manual_tool(monkeypatch) -> None:  # ma
     calls: list[str] = []  # 记录工具是否真执行
 
     class _FakeRepo:  # 假订单库（若被调用说明没拦住）
-        async def get_order(self, order_id: str):  # 会被记录
+        async def get_order_detail(self, order_id: str):  # 会被记录
             calls.append(order_id)  # 记
             raise AssertionError("审批未拦截，工具被直接执行")  # 不该发生
 
@@ -104,12 +106,12 @@ def test_end_to_end_approval_flow(fake_root) -> None:  # ReAct→落表→批准
         def __init__(self) -> None:  # 初始化
             self.calls = 0  # 调用次数
 
-        async def get_order(self, order_id: str):  # 按单号
+        async def get_order_detail(self, order_id: str):  # 订单+商品
             self.calls += 1  # 记
-            return Order(order_id=order_id, status="已发货", amount="99.5", pay_method="微信", created_at="x", logistics_no="SF1")  # 单
+            return (Order(order_id=order_id, status="已发货", amount="99.5", pay_method="微信", created_at="x", logistics_no="SF1"), [])  # 单+空商品
 
         async def get_orders_by_phone(self, phone: str):  # 按手机号
-            return [self.get_order("1")]  # 占位
+            return [Order(order_id="1", status="已发货", amount="99.5", pay_method="微信", created_at="x", logistics_no="SF1")]  # 占位
 
     fake_repo = _Repo()  # 实例
     order_repo.set_order_repo(fake_repo)  # 注入

@@ -10,6 +10,7 @@ from app.agent.nodes.clarify.interrupt import clarify_interrupt_node  # 澄清�
 from app.agent.nodes.context.node import load_context  # 上下文
 from app.agent.nodes.dispatch.node import dispatch_node  # 固定路径直调
 from app.agent.nodes.fallback.node import llm_fallback_node  # 兜底子图
+from app.agent.nodes.approval.node import approval_hitl_node  # 审批 HITL（聊天弹框）
 from app.agent.nodes.finalize.node import finalize_node  # 收尾
 from app.agent.nodes.general.node import general_agent_node  # L4e 通用兜底
 from app.agent.nodes.preprocess.node import preprocess_node  # L1 预处理
@@ -36,6 +37,7 @@ def build_route_graph(*, checkpointer: Any = None) -> Any:  # 意图路由父图
     graph.add_node("triage", triage_node)  # L3 分诊
     graph.add_node("dispatch_fixed", dispatch_node)  # 固定路径
     graph.add_node("llm_fallback", llm_fallback_node)  # 兜底子图
+    graph.add_node("approval_hitl", approval_hitl_node)  # 审批弹框（有空才暂停）
     graph.add_node("general_agent", general_agent_node)  # L4e 通用兜底
     graph.add_node("verify", verify_node)  # L5 校验
     graph.add_node("clarify_or_end", clarify_interrupt_node)  # 澄清/拒绝（可暂停）
@@ -94,7 +96,8 @@ def build_route_graph(*, checkpointer: Any = None) -> Any:  # 意图路由父图
             "fallback": END,  # 未知键兜底
         },  # 映射结束
     )  # 条件边结束
-    graph.add_edge("llm_fallback", "verify")  # 兜底后校验
+    graph.add_edge("llm_fallback", "approval_hitl")  # 兜底后过审批点（待审批才弹框）
+    graph.add_edge("approval_hitl", "verify")  # 审批决定后校验
     graph.add_edge("verify", "finalize")  # 校验后收尾
     graph.add_conditional_edges(  # 澄清/暂停后的分支
         "clarify_or_end",  # 来源

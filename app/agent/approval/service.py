@@ -7,12 +7,17 @@ from typing import Any  # 任意值
 
 from app.agent.approval import repository  # 仓储
 
-__all__ = ["decide", "execute_approved", "expire_all", "pending"]  # 导出
+__all__ = ["decide", "execute_approved", "expire_all", "ledger", "pending"]  # 导出
 
 
 def pending(tenant_id: str, *, limit: int = 50) -> list[dict[str, Any]]:  # 待审列表
     """按租户取 pending（新的在前）。"""
     return repository.list_pending(tenant_id, limit=limit)  # 委托
+
+
+def ledger(*, limit: int = 100) -> list[dict[str, Any]]:  # 只读台账
+    """按时间倒序列出审批记录（含状态/决策人）。"""
+    return repository.list_requests(limit=limit)  # 委托
 
 
 def decide(request_id: str, action: str, *, decided_by: str, note: str = "") -> None:  # 决策

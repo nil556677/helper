@@ -50,7 +50,7 @@ async def query_logistics(order_id: str = "", tracking_no: str = ""):  # 异步�
         if not resolved_order_id:  # 单号也没有
             raise ToolError(str(ErrorCode.PROTOCOL_ARG_INVALID), "需提供订单号或运单号")  # 缺参
         repo = get_order_repo()  # 订单仓储
-        order = await repo.get_order(resolved_order_id)  # 查单
+        order, _items = await repo.get_order_detail(resolved_order_id)  # 查单（同步异步由仓储封）
         if order is None:  # 订单不存在
             raise ToolError(str(ErrorCode.PROTOCOL_ARG_INVALID), f"订单 {resolved_order_id} 不存在")  # 业务错
         target = str(getattr(order, "logistics_no", "") or "").strip()  # 运单号

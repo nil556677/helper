@@ -336,6 +336,7 @@ async def run_react(  # 跑单一 ReAct 兜底
         "fragments": fragments,  # 引用（agent 也有资料可点开看全文）
         "gate": gate,  # 门限结论（观测/校验用）
         "note": note,  # 说明
+        "approval_pending": list(result.get("approval_pending") or []),  # 待审批元信息（上抛路由级弹框）
     }  # 返回
 
 

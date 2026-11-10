@@ -15,7 +15,7 @@ def test_order_repo_unconfigured(fake_root) -> None:  # 未配置 MySQL → Tool
     del fake_root  # 只需隔离库
     order_repo.set_order_repo(None)  # 用默认实现
     with pytest.raises(ToolError):  # 期望报错
-        asyncio.run(order_repo.get_order_repo().get_order("12345"))  # 查
+        asyncio.run(order_repo.get_order_repo().get_order_detail("12345"))  # 查
 
 
 def test_logistics_unconfigured(fake_root) -> None:  # 未配置百度快递 → ToolError
@@ -23,3 +23,16 @@ def test_logistics_unconfigured(fake_root) -> None:  # 未配置百度快递 →
     logistics_client.set_provider(None)  # 用默认实现
     with pytest.raises(ToolError):  # 期望报错
         asyncio.run(logistics_client.get_provider().trace("SF123"))  # 查
+
+
+def test_env_fallback_config(monkeypatch) -> None:  # 后台配置缺时走环境变量
+    monkeypatch.delenv("AGENT_MYSQL_HOST", raising=False)  # 清
+    monkeypatch.setenv("AGENT_MYSQL_HOST", "db.local")  # 设
+    monkeypatch.setenv("AGENT_LOGISTICS_ENDPOINT", "https://baidu.example")  # 设
+    from app.services.order.repo import _mysql_config  # 配置
+    from app.services.logistics.client import _logistics_config  # 配置
+
+    m = _mysql_config()  # mysql
+    assert m["host"] == "db.local"  # 环境兜底生效
+    lc = _logistics_config()  # 物流
+    assert lc["endpoint"] == "https://baidu.example"  # 环境兜底生效

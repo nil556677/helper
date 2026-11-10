@@ -263,7 +263,8 @@ def _render_clarify(view: dict[str, Any], data: dict[str, Any]) -> None:  # 澄�
         "border-left: 3px solid var(--hp-accent);"
     ):  # 画
         with ui.row().classes("w-full items-center gap-2"):  # 标题行
-            ui.icon("contact_support" if kind == "input" else "quiz").classes("text-amber-500")  # 图标按类型
+            _icon = "verified_user" if kind == "approve" else ("contact_support" if kind == "input" else "quiz")  # 图标按类型
+            ui.icon(_icon).classes("text-amber-500")  # 图标
             ui.label(str(data.get("title") or "需要确认")).classes("hp-card-title")  # 标题
         if data.get("description"):  # 追问/说明（补参数时这就是问题本身）
             ui.label(str(data["description"])).classes("text-sm opacity-80")  # 轻量正文
@@ -285,7 +286,7 @@ def _render_clarify(view: dict[str, Any], data: dict[str, Any]) -> None:  # 澄�
             hint = (  # 引导语按类型
                 "填写后点确定或回车。"  # 补参数：填
                 if kind == "input"  # 输入型
-                else "点上面的选项继续；也可以直接在下方输入新的描述。"  # 选路由
+                else ("请选择确认或拒绝；确认后将执行并留痕。" if kind == "approve" else "点上面的选项继续；也可以直接在下方输入新的描述。")  # 审批/选路由
             )  # 结束
             ui.label(hint).classes("hp-hint")  # 引导
             ui.button("取消本轮", on_click=lambda: _dismiss(view)).props("flat dense").classes("opacity-60")  # 取消（弱化）

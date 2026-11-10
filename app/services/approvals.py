@@ -7,7 +7,7 @@ from typing import Any  # 任意值
 
 from app.agent.approval import service as approval_service  # 审批服务
 
-__all__ = ["decide", "execute", "expire", "pending"]  # 导出
+__all__ = ["decide", "execute", "expire", "ledger", "pending"]  # 导出
 
 
 def _tenant() -> str:  # 默认租户
@@ -28,3 +28,7 @@ def execute(request_id: str) -> dict[str, Any]:  # 批准后执行（同步壳�
 
 def expire() -> list[str]:  # 超时扫描
     return approval_service.expire_all()  # 委托
+
+
+def ledger(*, limit: int = 100) -> list[dict[str, Any]]:  # 只读台账
+    return approval_service.ledger(limit=limit)  # 委托

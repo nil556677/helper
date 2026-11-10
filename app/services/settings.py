@@ -99,6 +99,21 @@ def set_flag(name: str, value: bool) -> None:
     save_values({name: bool(value)})  # 持久化
 
 
+def get_value(name: str, default: str = "") -> str:
+    """读字符串配置（不 bool 强转；供表单/数据源等）。"""
+    from app.core.config.store import load  # 配置
+
+    value = load().values.get(name, default)  # 值
+    return str(value) if value is not None else default  # 字符串
+
+
+def set_value(name: str, value: str) -> None:
+    """写字符串配置（保持字符串）。"""
+    from app.core.config.store import save_values  # 配置
+
+    save_values({name: str(value)})  # 持久化
+
+
 def set_log_debug(on: bool) -> None:
     """打开/关闭调试模式：写数据库并**立即重建日志 sink**（不用重启生效）。
 
