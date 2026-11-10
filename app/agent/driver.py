@@ -15,6 +15,7 @@ from __future__ import annotations  # 类型注解延迟求值
 import asyncio  # 队列/取消
 import contextlib  # 抑制收尾异常
 import json  # 元数据序列化
+import time  # 计时（super-step 耗时）
 from dataclasses import dataclass  # 数据类
 from typing import Any  # 任意值
 
@@ -219,6 +220,23 @@ def _sink_run_id(emit: Any, run_id: str) -> None:  # 回填 run id
         emit._run_id = run_id  # 回填
 
 
+def _write_node_span(ctx: RunContext, node: str, update: Any, dur_ms: int) -> None:  # 节点 span（带输出）
+    """在 executor 边界自写一条 node span：output=该节点返回的 update（治本：span 有内容）。"""
+    try:  # fail-open
+        if not ctx.run_id:  # 没有 run id
+            return  # 跳过
+        span = trace_store.add_span(  # 开 span
+            ctx.run_id,  # 运行
+            str(node),  # 节点名
+            "node",  # 类型
+            started_at=time.time() - max(0, dur_ms) / 1000.0,  # 开始（回推耗时）
+        )  # 结束
+        if span is not None:  # 有 id
+            trace_store.finish_span(int(span), status="ok", output=update)  # 关 span，带输出
+    except Exception:  # 任何失败不影响主流程
+        pass  # 跳过
+
+
 async def _run_graph(  # 跑父图并驱动状态机
     graph: Any,  # 编译父图
     graph_input: Any,  # 输入（普通 state 或 Command(resume)）
@@ -243,6 +261,7 @@ async def _run_graph(  # 跑父图并驱动状态机
         "recursion_limit": RECURSION_LIMIT,  # 图步上限
     }  # config 结束
     final_state: dict[str, Any] = {}  # 权威最终状态
+    last_tick = time.perf_counter()  # 上一 super-step 结束时刻
     async for mode, chunk in graph.astream(  # 流式观测（双模式）
         graph_input,  # 输入
         config,  # 配置
@@ -270,7 +289,11 @@ async def _run_graph(  # 跑父图并驱动状态机
             for node, update in chunk.items():  # 逐个完成的节点
                 if "__interrupt__" == node:  # 防御：跳过暂停伪节点
                     continue  # 下一个
+                now = time.perf_counter()  # 当前时刻
+                dur_ms = int((now - last_tick) * 1000)  # 本 super-step 耗时
+                last_tick = now  # 更新
                 ctx.step_records.append({"node": node, "update": json.dumps(update, ensure_ascii=False)[:600]})  # 记该步做了什么
+                _write_node_span(ctx, node, update, dur_ms)  # 落 node span（带输出，治本）
                 event = project_event(node, update)  # 节点 → 迁移事件
                 if event is not None and ctx.machine.can(event):  # 有事件且当前状态允许
                     ctx.transition(event)  # driver 统一驱动迁移（发 state 事件）
