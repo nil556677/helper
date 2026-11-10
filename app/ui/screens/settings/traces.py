@@ -109,9 +109,9 @@ def _draw_waterfall(spans: list[Any]) -> None:  # 执行瀑布
                 with ui.element("div").classes("flex-1").style(  # 轨道
                     "height: 12px; background: #e5e7eb; border-radius: 3px; position: relative;"
                 ):  # 轨道
-                    ui.element("div").style(  # 条
-                        f"height: 12px; border-radius: 3px; background: {color};",  # 样式
-                        f"position: absolute; left: {left:.1f}%; width: {width:.1f}%;",  # 位置
+                    ui.element("div").style(  # 条（style 只能传一个字符串，拼接）
+                        f"height: 12px; border-radius: 3px; background: {color}; "
+                        f"position: absolute; left: {left:.1f}%; width: {width:.1f}%;"
                     )  # 条
                 ui.label(_ms(span.duration_ms)).classes("hp-field-help").style("width: 60px;")  # 耗时
                 ui.button("JSON", on_click=lambda _, s=span: _span_json(s)).props("flat dense no-caps")  # 该步 JSON
