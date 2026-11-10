@@ -46,3 +46,13 @@ def test_promote_returns_candidates() -> None:  # 收尾取结论候选
     steps, facts = promote_working(white)  # 收尾
     assert steps == [("x", "ok")]  # 步骤
     assert facts == {"id": "A1"}  # key_facts
+
+
+def test_record_step_caps_history() -> None:  # 记步封顶（防白板无界膨胀）
+    white = blank_working()  # 空白板
+    for i in range(30):  # 记 30 步
+        white = update_working(white, current_step=f"s{i}")  # 设当前步
+        white = record_step_working(white, f"s{i}", "ok")  # 归档
+    assert len(white["past_steps"]) == 20  # 只保留最近 20
+    assert white["past_steps"][-1] == ("s29", "ok")  # 最新步在尾部
+    assert white["past_steps"][0] == ("s10", "ok")  # 最旧的 10 步被裁剪

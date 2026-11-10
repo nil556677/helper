@@ -31,22 +31,24 @@ async def general_agent_node(state: dict[str, Any], config: Any = None) -> dict[
     if model is None:  # 无模型
         return _degrade()  # 模板
     try:  # 用 ContextBuilder 配上下文（含工作记忆/近轮），再调模型
-        from app.agent.contexts.builder import build_context, set_embed  # builder
-        from app.agent.memory import embed_text  # 嵌入
+        from app.agent.contexts.builder import build_context  # builder（嵌入已在图装配时注入一次）
+        facts: list[dict[str, Any]] = list(state.get("memory_facts") or [])  # 优先用 load_context 已召回的
+        profile_text = str(state.get("memory_profile_text") or "")  # 优先用入口画像
+        if not facts:  # 没有 → 兜底召回
+            try:  # 事实取数失败不阻塞
+                from app.agent.memory.manager import recall  # 记忆统一入口
 
-        set_embed(embed_text)  # 注入嵌入（不可用退保底）
-        facts: list[dict[str, Any]] = []  # 长期事实
-        try:  # 事实取数失败不阻塞
-            from app.agent.memory import MemoryStore  # 长期库
-
-            facts = MemoryStore().search(top_k=6)  # 召回
-        except Exception:  # 无表/坏库
-            facts = []  # 空
+                bundle = recall(question, top_k=6)  # 统一召回（事实+画像）
+                facts = list(bundle.facts)  # 语义召回
+                profile_text = "\n".join(bundle.profile_lines) or profile_text  # 画像
+            except Exception:  # 无表/坏库
+                facts = []  # 空
         out = build_context(  # 装配（内容错误不阻塞）
             system=_PROMPT,  # S 引导
             working=state.get("working_memory") or {},  # 锚点
             facts=facts,  # 长期事实
             recent=list(state.get("turns") or []),  # 近轮
+            profile_text=profile_text,  # 画像块（稳定约束）
             question=question,  # 问题
         )  # 结束
         sys_text = out.system or _PROMPT  # system

@@ -1,4 +1,4 @@
-"""维护动作（v1）：目前只保留清理任务的入队入口。"""
+"""维护动作（v1）：清理任务 + 记忆清理的入队入口。"""
 
 from __future__ import annotations
 
@@ -14,5 +14,18 @@ def enqueue_cleanup(reason: str = "manual") -> int:
         Cleanup.key(),
         {"reason": reason},
         dedupe_key="cleanup",
+        priority=PRIORITY_MAINTENANCE,
+    )
+
+
+def enqueue_memory_cleanup(reason: str = "manual") -> int:
+    """排一条记忆清理任务（过期归档；去重，随 cleanup 节奏）。"""
+    from app.core.jobs.model import PRIORITY_MAINTENANCE
+    from app.tasks.memory_cleanup import MemoryCleanup
+
+    return api.enqueue(
+        MemoryCleanup.key(),
+        {"reason": reason},
+        dedupe_key="memory_cleanup",
         priority=PRIORITY_MAINTENANCE,
     )

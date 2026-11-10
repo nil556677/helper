@@ -84,6 +84,118 @@ def render() -> None:
 
                 dc.on_value_change(_t_dc)
 
+        # ---- 用户画像 ----
+        with ui.column().classes("hp-card w-full gap-3"):
+            card_head("person", "用户画像")  # 卡头
+            ui.label("跨会话记住的稳定偏好/约束（语言/时区/篇幅/表格等）。列表实时刷新；编辑=显式覆盖。").classes("hp-field-help")
+            container = ui.column().classes("w-full gap-2")  # 列表容器
+
+            def _render_profile() -> None:  # 渲染画像列表
+                from app.services import memory as memory_service  # 记忆服务门面
+
+                container.clear()  # 清空重建
+                items = memory_service.profile_list()  # 画像条目
+                if not items:  # 空
+                    with container:  # 占位
+                        ui.label("暂无画像条目。").classes("hp-field-help")
+                    return  # 返回
+                with container:  # 有条目
+                    for item in items:  # 逐条
+                        prop_key = item.get("key")  # 画像键（lambda 捕获用局部变量）
+                        value_text = str(item.get("value"))[:60]  # 值显示（截断）
+                        with ui.row().classes("hp-field-row w-full items-center"):  # 一行
+                            ui.label(f"{prop_key} = {value_text}").classes("hp-field-name flex-1")  # 键=值
+                            ui.label(f"来源:{item.get('source')} 置信:{item.get('confidence'):.2f}").classes("hp-field-help")  # 来源/置信
+                            ui.button("编辑", on_click=lambda k=prop_key: _prompt_edit(k)).props("dense size=sm outline").mark("profile-edit")  # 编辑
+                            ui.button("删除", on_click=lambda k=prop_key: _delete_profile(k)).props("dense size=sm outline color=negative").mark("profile-delete")  # 删除
+
+            def _prompt_edit(prop_key: str) -> None:  # 编辑画像值（输入弹窗）
+                from app.services import memory as memory_service  # 记忆服务门面
+
+                def _apply(dialog: Any) -> None:  # 应用新值
+                    val = str(edit_input.value or "").strip()  # 输入值
+                    if not val:  # 空
+                        return  # 不写
+                    memory_service.profile_confirm(prop_key, val)  # 显式覆盖
+                    dialog.close()  # 关弹窗
+                    notify(f"已更新画像 {prop_key}")  # 提示
+                    _render_profile()  # 刷新
+
+                with ui.dialog() as dialog, ui.card().classes("hp-card hp-dialog gap-3 w-96"):  # 输入弹窗
+                    ui.label(f"设置「{prop_key}」的新值").classes("hp-field-name")  # 标题
+                    edit_input = ui.input(placeholder="新值，如 zh / UTC+8 / 简短").classes("w-full").mark("profile-edit-input")  # 输入框
+                    with ui.row().classes("hp-actions w-full justify-end"):  # 按钮行
+                        ui.button("取消", on_click=dialog.close).props("flat dense no-caps").classes("hp-row-button w-auto")  # 取消
+                        ui.button("保存", on_click=lambda: _apply(dialog)).props("unelevated dense no-caps").classes("hp-row-button w-auto").mark("profile-save")  # 保存
+                dialog.open()  # 打开
+
+            def _delete_profile(prop_key: str) -> None:  # 删除画像键
+                from app.services import memory as memory_service  # 记忆服务门面
+
+                memory_service.profile_delete(prop_key)  # 归档
+                notify(f"已删除画像 {prop_key}")  # 提示
+                _render_profile()  # 刷新
+
+            _render_profile()  # 初始渲染
+
+        # ---- 记忆指标 ----
+        with ui.column().classes("hp-card w-full gap-3"):
+            card_head("insights", "记忆指标")  # 卡头
+            ui.label("记忆规模与治理情况（过期/冲突/画像/约束保留）。").classes("hp-field-help")
+
+            def _render_metrics() -> None:  # 渲染指标
+                from app.services import memory as memory_service  # 记忆服务门面
+
+                st = memory_service.stats()  # 统计
+                metric_container.clear()  # 清空
+                labels = [  # 指标行
+                    ("活跃事实", st.get("active", 0)),  # 活跃
+                    ("已归档", st.get("archived", 0)),  # 归档
+                    ("待复核冲突", st.get("contested", 0)),  # 冲突
+                    ("画像条目", st.get("profile_count", 0)),  # 画像
+                ]  # 行
+                with metric_container, ui.row().classes("hp-field-row w-full"):  # 容器 + 一行
+                    for name, value in labels:  # 逐项
+                        with ui.column().classes("hp-field-main gap-0 flex-1"):  # 一格
+                            ui.label(f"{value}").classes("hp-field-name text-xl")  # 数值
+                            ui.label(name).classes("hp-field-help")  # 标签
+
+            metric_container = ui.column().classes("w-full gap-2")  # 指标容器
+            _render_metrics()  # 初始渲染
+
+        # ---- 记忆冲突复核 ----
+        with ui.column().classes("hp-card w-full gap-3"):
+            card_head("confirmation_number", "记忆冲突")  # 卡头
+            ui.label("系统检测到互相矛盾的记忆，可人工裁定：采用新值 或 归档忽略。").classes("hp-field-help")
+            conflict_container = ui.column().classes("w-full gap-2")  # 冲突列表容器
+
+            def _render_conflicts() -> None:  # 渲染冲突列表
+                from app.services import memory as memory_service  # 记忆服务门面
+
+                conflict_container.clear()  # 清空重建
+                conflicts = memory_service.list_conflicts()  # 冲突条目
+                if not conflicts:  # 无冲突
+                    with conflict_container:  # 占位
+                        ui.label("暂无记忆冲突。").classes("hp-field-help")
+                    return  # 返回
+                with conflict_container:  # 有冲突
+                    for item in conflicts:  # 逐条
+                        key = str(item.get("memory_key") or "")  # 冲突槽键
+                        with ui.row().classes("hp-field-row w-full items-center"):  # 一行
+                            ui.label(f"{key}: {item.get('value')}").classes("hp-field-name flex-1")  # 键=值
+                            ui.label(f"来源:{item.get('source')}").classes("hp-field-help")  # 来源
+                            ui.button("采用新值", on_click=lambda k=key: _resolve(k, True)).props("dense size=sm outline").mark("conflict-keep-new")  # 采用新
+                            ui.button("归档忽略", on_click=lambda k=key: _resolve(k, False)).props("dense size=sm outline color=negative").mark("conflict-archive")  # 归档
+
+            def _resolve(memory_key: str, keep_new: bool) -> None:  # 复核操作
+                from app.services import memory as memory_service  # 记忆服务门面
+
+                memory_service.resolve_conflict(memory_key, keep_new=keep_new)  # 裁定
+                notify("已裁定记忆冲突" if keep_new else "已归档忽略该冲突")  # 提示
+                _render_conflicts()  # 刷新
+
+            _render_conflicts()  # 初始渲染
+
         # ---- 本机服务（Qdrant / worker）----
         # 生命周期与主程序一致：启动时拉起、退出时停止（见 app/__main__.py 与 core/proc/services）。
         with ui.column().classes("hp-card w-full gap-3"):

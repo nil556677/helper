@@ -11,6 +11,9 @@ from typing import Any, TypedDict  # 类型
 
 __all__ = ["WorkingMemory", "blank", "promote", "record_step", "set_goal", "touch", "update"]  # 导出
 
+#: 白板最多保留的已完成步数（防 checkpoint 内白板无界膨胀；更早步骤由压缩摘要承载）。
+_MAX_PAST_STEPS = 20
+
 
 class WorkingMemory(TypedDict, total=False):  # 白板形状
     task_goal: str  # 当前任务目标
@@ -45,6 +48,7 @@ def record_step(white: WorkingMemory, name: str, result: str = "") -> WorkingMem
     step = str(out.get("current_step") or name or "")  # 步名
     if step:  # 非空
         past.append((step, str(result or "")))  # 归档
+        past = past[-_MAX_PAST_STEPS:]  # 封顶（防无界膨胀）
     out["past_steps"] = past  # 写回
     out["current_step"] = ""  # 清当前步
     return out  # 返回

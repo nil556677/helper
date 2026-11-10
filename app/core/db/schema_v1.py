@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 
 #: 当前 schema 版本（净室基线，不做迁移链）。
@@ -205,14 +206,35 @@ CREATE TABLE IF NOT EXISTS user_memories (
     confidence      REAL NOT NULL DEFAULT 0.5,  -- 可信度 0..1
     access_count    INTEGER NOT NULL DEFAULT 0,  -- 访问次数（喂回衰减）
     last_access     REAL NOT NULL DEFAULT 0,     -- 最近访问时间戳（衰减用）
-    status          TEXT NOT NULL DEFAULT 'active',  -- 状态（active 活跃 / superseded 被软替代 / contested / uncertain）
+    status          TEXT NOT NULL DEFAULT 'active',  -- 状态（active 活跃 / superseded 被软替代 / contested 冲突待复核 / archived 归档 / uncertain）
     superseded_by   TEXT,               -- 被谁替代（软替代保留内容）
     embedding       BLOB,               -- 事实向量（bge-m3 嵌入，JSON bytes；语义召回用）
     history_versions TEXT NOT NULL DEFAULT '[]',  -- 历史版本（JSON 数组，可追溯）
+    expires_at      REAL,               -- 过期时间戳（秒；NULL=永不过期，TTL 归档用）
+    archived_at     REAL,               -- 归档时间戳（秒；NULL=未归档，遗忘治理用）
     PRIMARY KEY (namespace, memory_key)
 );
 -- 索引：按命名空间 + 状态过滤（召回只取 active 的该租户/用户）。
 CREATE INDEX IF NOT EXISTS idx_user_memories_ns ON user_memories(namespace, status);
+
+-- 表 user_profile：结构化用户画像条目（跨会话稳定偏好/约束；版本化、作用域隔离、置信度治理）。
+CREATE TABLE IF NOT EXISTS user_profile (
+    profile_id   TEXT PRIMARY KEY,                   -- 画像条目 id（uuid 文本）
+    namespace    TEXT NOT NULL,                      -- 作用域（JSON 数组：tenant/user/scope）
+    prop_key     TEXT NOT NULL,                      -- 画像键（language/timezone/verbosity/table_policy/terms…）
+    prop_kind    TEXT NOT NULL DEFAULT 'inferred',   -- 类型（explicit 显式 / inferred 推断 / confirmed 确认）
+    value        TEXT NOT NULL,                      -- 值（JSON）
+    source       TEXT NOT NULL DEFAULT '',           -- 来源（user_explicit 用户显式 / user_correction 用户更正 / inferred 模型推断）
+    confidence   REAL NOT NULL DEFAULT 0.5,          -- 可信度 0..1
+    version      INTEGER NOT NULL DEFAULT 1,         -- 版本号（冲突合并递增）
+    valid_until  REAL,                               -- 有效期（秒级时间戳；NULL=长期）
+    status       TEXT NOT NULL DEFAULT 'active',     -- 状态（active 活跃 / superseded 被替代 / contested 冲突 / archived 归档）
+    created_at   REAL NOT NULL,                      -- 创建时间戳
+    updated_at   REAL NOT NULL,                      -- 更新时间戳
+    UNIQUE(namespace, prop_key, version)             -- 同键多版本共存（回滚依据）
+);
+-- 索引：画像读取按 namespace + active 过滤。
+CREATE INDEX IF NOT EXISTS idx_user_profile_ns ON user_profile(namespace, status);
 
 -- 表 approval_requests：工具调用人工审批请求（幂等落一条，乐观更新）。
 CREATE TABLE IF NOT EXISTS approval_requests (
@@ -501,6 +523,78 @@ def _ensure_user_memories_table(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_user_memories_keys(conn: sqlite3.Connection) -> int:
+    """迁移历史记忆键：清理旧版``extract_eav`` 把值塞进键（形如 ``amount::99.5``）的坏键。
+
+    坏键语义：每次不同值都是不同 key → ``_reconcile`` 永远找不到旧值，矛盾事实各自 active
+    共存（冲突仲裁失效）。迁移把这类行删除（本地单机可接受）；设 ``HELPER_KEEP_OLD_MEMORY=1``
+    时改为归档（status=archived），不物理删，供人工复核。
+
+    返回：受影响（删除/归档）的行数。
+    """
+    keep_old = str(os.environ.get("HELPER_KEEP_OLD_MEMORY", "")).strip() != ""  # 逃生口：保留归档
+    # 旧版 extract_eav 只对这三个属性生成"属性::值"形式的键。
+    target = " OR ".join(
+        "memory_key LIKE ?" for _ in ("order_id", "amount", "date")
+    )  # 占位拼接
+    like_args = ("order_id::%", "amount::%", "date::%")  # 坏键前缀（普通字符串，非 f-string）
+    rows = conn.execute(  # 找出坏键行
+        f"SELECT rowid FROM user_memories WHERE {target}",
+        like_args,
+    ).fetchall()  # 命中行
+    if not rows:  # 没有坏键
+        return 0  # 无事
+    if keep_old:  # 逃生口：归档而非删除
+        conn.execute(  # 归档
+            f"UPDATE user_memories SET status = 'archived' WHERE {target}",
+            like_args,
+        )  # 更新
+    else:  # 默认：删除坏键行（重建语义）
+        conn.execute(  # 删除
+            f"DELETE FROM user_memories WHERE {target}",
+            like_args,
+        )  # 更新
+    return len(rows)  # 影响行数
+
+
+def _ensure_user_memories_columns(conn: sqlite3.Connection) -> None:
+    """给既有库幂等补 user_memories 的 TTL 列（expires_at / archived_at，additive）。
+
+    旧库建表时没有这两列，直接按模块缺列补；新库由 DDL_SQL 一步到位。
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(user_memories)")}  # 现有列
+    additions = {  # 待补列
+        "expires_at": "REAL",  # 过期时间戳（秒；NULL=永不过期）
+        "archived_at": "REAL",  # 归档时间戳（秒；NULL=未归档）
+    }  # 补列表
+    for name, ddl in additions.items():  # 逐列
+        if name not in cols:  # 缺
+            conn.execute(f"ALTER TABLE user_memories ADD COLUMN {name} {ddl}")  # 补
+
+
+def _ensure_user_profile_table(conn: sqlite3.Connection) -> None:
+    """给旧 v1 库幂等补用户画像表（不影响既有数据）。"""
+    conn.executescript(  # 幂等建表
+        "-- 表 user_profile：结构化用户画像条目（版本化、作用域隔离、置信度治理）。\n"
+        "CREATE TABLE IF NOT EXISTS user_profile ("
+        " profile_id TEXT PRIMARY KEY,"
+        " namespace TEXT NOT NULL,"
+        " prop_key TEXT NOT NULL,"
+        " prop_kind TEXT NOT NULL DEFAULT 'inferred',"
+        " value TEXT NOT NULL,"
+        " source TEXT NOT NULL DEFAULT '',"
+        " confidence REAL NOT NULL DEFAULT 0.5,"
+        " version INTEGER NOT NULL DEFAULT 1,"
+        " valid_until REAL,"
+        " status TEXT NOT NULL DEFAULT 'active',"
+        " created_at REAL NOT NULL,"
+        " updated_at REAL NOT NULL,"
+        " UNIQUE(namespace, prop_key, version)"
+        ");"
+        "CREATE INDEX IF NOT EXISTS idx_user_profile_ns ON user_profile(namespace, status);"
+    )
+
+
 def _ensure_approval_tables(conn: sqlite3.Connection) -> None:
     """给旧 v1 库幂等补审批表（不影响既有数据）。"""
     conn.executescript(  # 幂等建表
@@ -648,6 +742,9 @@ def initialize(conn: sqlite3.Connection) -> int:
         _ensure_audit_tables(conn)
         _ensure_conversation_tombstones(conn)
         _ensure_user_memories_table(conn)
+        _migrate_user_memories_keys(conn)
+        _ensure_user_memories_columns(conn)
+        _ensure_user_profile_table(conn)
         _ensure_approval_tables(conn)
         return current
     if current != 0:

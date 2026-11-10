@@ -222,7 +222,11 @@ def load_summary(conversation_id: str) -> dict[str, Any]:
 
 
 def load_segments(conversation_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
-    """读分段摘要（新 → 旧，保留最近 limit 段供上游按 token 预算取用）。"""
+    """读分段摘要（新 → 旧，保留最近 limit 段供上游按 token 预算取用）。
+
+    注意：这是**滚动摘要**——最后一段已包含此前全部内容（append 时带旧摘要重算）。
+    上下文注入应只取 1 段（最新），避免旧段内容重复进 prompt；UI 历史展示才取多段。
+    """
     rows = get_connection().execute(
         "SELECT seg_seq, start_id, end_id, summary, source_refs, created_at FROM summary_segments"
         " WHERE conversation_id = ? ORDER BY seg_seq DESC LIMIT ?",

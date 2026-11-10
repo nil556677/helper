@@ -11,15 +11,15 @@
 
 from __future__ import annotations  # 延迟求值注解
 
-from functools import lru_cache  # 进程级缓存（graph 构建只做一次）
+import ast  # Python 字面量解析（ToolMessage 把 dict 转 repr）
+import json  # 解析工具结果 JSON
 from typing import Any  # 任意值
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # 消息类型
 
-from app.agent.agent_builder import build_react_agent  # 官方 ReAct 构造
 from app.agent.context import current_run  # 当前 run（发 TOOL 事件）
-from app.agent.events import tool as tool_event  # 工具事件
 from app.agent.events import context as context_event  # 上下文事件
+from app.agent.events import tool as tool_event  # 工具事件
 from app.agent.tools.catalog import tool_catalog  # 工具目录（单一来源）
 
 #: 兜底 agent 可调的工具名（时间/天气/检索/订单(需审)/物流）。
@@ -47,24 +47,29 @@ _MAX_TURNS = 6  # 最多带最近 6 轮记忆
 def _state_context(state: dict[str, Any]) -> Any | None:  # 用 ContextBuilder 装配上下文
     """从 state 取工作记忆/近轮/段/事实/问题 → build_context；失败返回 None（退回手拼）。"""
     try:  # 任何失败退回旧路径
-        from app.agent.contexts.builder import build_context, set_embed  # builder
-        from app.agent.memory import MemoryStore, embed_text  # 长期库/嵌入
+        from app.agent.contexts.builder import build_context  # builder（嵌入已在图装配时注入一次）
+        from app.agent.memory.manager import recall  # 记忆统一入口
 
-        set_embed(embed_text)  # 注入 bge-m3 嵌入（不可用则退保底）
         conversation_id = str(state.get("conversation_id") or "")  # 会话
         segments: list[dict[str, Any]] = []  # 段
-        facts: list[dict[str, Any]] = []  # 事实
         try:  # 段取数失败不影响装配
             if conversation_id:  # 有会话
                 from app.services import conversations  # 会话服务
 
-                segments = conversations.load_segments(conversation_id, limit=2)  # 最近段
+                segments = conversations.load_segments(conversation_id, limit=1)  # 最近 1 段（滚动摘要已含此前全部内容，避免重复注入）
         except Exception:  # 无表/坏库
             segments = []  # 空
-        try:  # 事实取数失败不影响装配
-            facts = MemoryStore().search(top_k=6)  # 长期事实
-        except Exception:  # 无表/坏库
-            facts = []  # 空
+        facts: list[dict[str, Any]] = list(state.get("memory_facts") or [])  # 优先用 load_context 已召回的（单轮只查一次）
+        profile_text = str(state.get("memory_profile_text") or "")  # 优先用入口画像
+        if not facts:  # 没有（如独立调用/测试）→ 兜底召回
+            try:  # 兜底召回失败不影响装配
+                from app.agent.memory.manager import recall  # 记忆统一入口
+
+                bundle = recall(str(state.get("question") or ""), top_k=6)  # 召回（事实+画像）
+                facts = list(bundle.facts)  # 事实
+                profile_text = "\n".join(bundle.profile_lines) or profile_text  # 画像（入口没有才用兜底）
+            except Exception:  # 无表/坏库
+                facts = []  # 空
         hints: list[str] = []  # 防追问护栏（候选/确认/追问预算）
         hints.append(f"候选方向（仅供参考，不盲从）：{_candidate_hint(state)}")  # 候选
         confirmed = bool(state.get("intent_confirmed"))  # 意图确认
@@ -81,6 +86,7 @@ def _state_context(state: dict[str, Any]) -> Any | None:  # 用 ContextBuilder �
             segments=segments,  # 段
             recent=list(state.get("turns") or []),  # 近轮
             hints=hints,  # 护栏（防追问循环）
+            profile_text=profile_text,  # 画像块（入口或兜底召回）
             question=str(state.get("question") or ""),  # 问题
         )  # 返回
     except Exception:  # 失败
@@ -279,6 +285,7 @@ async def run_react(  # 跑单一 ReAct 兜底
             pruned=dict(ctx_view.pruned),  # 剪枝
             dropped=dict(ctx_view.dropped),  # 预算丢
             cache_prefix_tokens=ctx_view.cache_prefix_tokens,  # 缓存前缀
+            constraints_kept=float(getattr(ctx_view, "constraints_kept", 0.0) or 0.0),  # 约束保留率（P5 指标）
         )  # 结束
         run.emit(context_event(  # 上下文事件
             len(ctx_view.messages),  # 条数
@@ -288,24 +295,39 @@ async def run_react(  # 跑单一 ReAct 兜底
             cache_prefix_tokens=ctx_view.cache_prefix_tokens,  # 缓存前缀
         ))  # 发送结束
     result = await graph.ainvoke({"messages": messages})  # 跑一轮（到终态））
-    # —— 后置：从最终消息里回放工具调用 → TOOL 事件（时间线可见）——
+    # —— 后置：从最终消息里回放工具调用 → TOOL 事件（时间线可见）+ 工作记忆记步 ——
+    from app.agent.memory import (  # 工作记忆写侧
+        blank_working,  # 空白板
+        record_step_working,  # 记步
+        touch_working,  # 合并关键事实
+        update_working,  # 更新当前步/待办
+    )  # 导入结束
+    white = state.get("working_memory") if isinstance(state.get("working_memory"), dict) else blank_working()  # 读白板
     if run is not None:  # 有事件出口
         for msg in result.get("messages", []):  # 逐条（保持顺序））
             if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):  # 模型要调工具
                 for tc in msg.tool_calls:  # 逐个调用
                     tname = str(tc.get("name") or "")  # 工具名
-                    run.emit(tool_event(name=tname, status="running", variant=_VARIANT.get(tname, "")))  # 运行中
+                    if run is not None:  # 有事件出口
+                        run.emit(tool_event(name=tname, status="running", variant=_VARIANT.get(tname, "")))  # 运行中
+                    white = update_working(white, current_step=f"调用 {tname}")  # 设当前步（进行中）
+                    white = record_step_working(white, f"调用 {tname}")  # 归档为已一步（并清当前步）
             elif isinstance(msg, ToolMessage):  # 工具结果
                 tname = str(msg.name or "")  # 工具名
                 out = _message_text(msg)[:200]  # 输出摘要
                 failed = bool(msg.status and msg.status != "success")  # 是否失败
-                run.emit(tool_event(  # 结果事件
-                    name=tname,  # 工具名
-                    status="failed" if failed else "done",  # 状态
-                    detail=out[:120],  # 摘要
-                    variant=_VARIANT.get(tname, ""),  # 变体
-                    output=out,  # 输出
-                ))  # 发送结束
+                if run is not None:  # 有事件出口
+                    run.emit(tool_event(  # 结果事件
+                        name=tname,  # 工具名
+                        status="failed" if failed else "done",  # 状态
+                        detail=out[:120],  # 摘要
+                        variant=_VARIANT.get(tname, ""),  # 变体
+                        output=out,  # 输出
+                    ))  # 发送结束
+                # 从工具结果结构化 data 挑正确性锚点（白名单式，不整包塞）
+                anchors = _anchor_facts(tname, msg)  # 挑锚点
+                if anchors:  # 有锚点
+                    white = touch_working(white, anchors)  # 合并进 key_facts
     answer = ""  # 最终答案
     for msg in reversed(result.get("messages", [])):  # 从后往前找助手最终文本
         if isinstance(msg, AIMessage) and not getattr(msg, "tool_calls", None):  # 无工具调用的 AIMessage
@@ -333,11 +355,55 @@ async def run_react(  # 跑单一 ReAct 兜底
         "fallback_used": True,  # 标记
         "clarify_count": new_clarify,  # 喂追计数（供下一轮熔断）
         "intent_confirmed": confirmed,  # 意图确认态（跟进轮置真）
+        "working_memory": dict(white),  # 工作记忆（记步 + 关键事实锚点，随 checkpoint 持久化）
         "fragments": fragments,  # 引用（agent 也有资料可点开看全文）
         "gate": gate,  # 门限结论（观测/校验用）
         "note": note,  # 说明
         "approval_pending": list(result.get("approval_pending") or []),  # 待审批元信息（上抛路由级弹框）
     }  # 返回
+
+
+def _anchor_facts(tool_name: str, msg: ToolMessage) -> dict[str, Any]:  # 从工具结果挑正确性锚点
+    """白名单式挑 key_facts（正确性锚点，不是垃圾桶）。
+
+    数据来源优先取 ``msg.content``（content_and_artifact 下它是成功 data 字典）；
+    取不到再退 ``msg.artifact``（完整包络 JSON 字符串）。只挑白名单字段，其余交给审计通道。
+    """
+    anchors: dict[str, Any] = {}  # 结果
+    data: dict[str, Any] = {}  # 结构化数据
+    try:  # 优先 content（模型视角 = 成功 data）
+        if isinstance(msg.content, dict):  # dict 形态
+            data = msg.content  # 直接用
+        elif isinstance(msg.content, str):  # 字符串形态
+            text = msg.content.strip()  # 去空白
+            try:  # 先按 JSON 解析
+                parsed = json.loads(text)  # JSON
+            except Exception:  # 非 JSON → 可能是 Python 字面量（ToolMessage 会把 dict 转 repr）
+                parsed = ast.literal_eval(text)  # Python 字面量
+            if isinstance(parsed, dict):  # 解析出 dict
+                data = parsed  # 用
+    except Exception:  # 解析失败
+        data = {}  # 空
+    if not isinstance(data, dict):  # 非 dict
+        data = {}  # 空
+    if not data:  # content 拿不到，退 artifact
+        try:  # artifact 是完整包络 JSON 字符串
+            raw = getattr(msg, "artifact", None)  # 取 artifact
+            parsed = json.loads(raw) if isinstance(raw, str) else (raw or {})  # 解析
+            data = parsed.get("data") if isinstance(parsed, dict) and isinstance(parsed.get("data"), dict) else {}  # 取 data 段
+        except Exception:  # 解析失败
+            data = {}  # 空
+    anchor_map = {  # 工具 → 锚点字段白名单
+        "query_weather": ("city", "date"),  # 天气：城市+日期
+        "query_order": ("order_id",),  # 订单：单号
+        "query_logistics": ("order_id", "tracking_no"),  # 物流：单号/运单号
+        "current_time": ("value",),  # 时间：当前值
+    }  # 白名单表
+    fields = anchor_map.get(tool_name, ())  # 取该工具白名单
+    for field in fields:  # 逐个字段
+        if field in data and data[field] is not None:  # 存在且非空
+            anchors[field] = data[field]  # 记锚点
+    return anchors  # 返回
 
 
 def _add_citation_marks(answer: str, fragments: list[dict[str, Any]]) -> str:  # 给回答补引用角标

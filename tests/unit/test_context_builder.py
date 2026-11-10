@@ -2,8 +2,8 @@
 
 from __future__ import annotations  # 延迟值注解
 
-from app.agent.contexts.builder import build_context, set_embed  # 被测
 from app.agent.contexts.budget import Budget  # 预算
+from app.agent.contexts.builder import build_context, set_embed  # 被测
 
 
 def _working(**kw) -> dict:  # 白板
@@ -46,7 +46,6 @@ def test_prune_recent_by_relevance() -> None:  # 超过 keep 的旧轮按相关�
     try:  # 跑后复位
         recent = [{"user": f"keep{i}", "assistant": ""} for i in range(2)] + [{"user": f"old{i}", "assistant": ""} for i in range(6)]  # 2 近 + 6 远
         out = build_context(system="S", working={}, recent=recent, question="keepnow", keep_turns=2)  # 保底 2
-        kept = [t["user"] for t in recent]  # 原样
         assert out.pruned["recent"] >= 4  # 远的相关度低于阈值被剪（6 远里只留≥阈值；0.5 阈值下 none 等）
     finally:  # 复位
         set_embed(None)  # 清
@@ -83,3 +82,52 @@ def test_state_context_via_builder(monkeypatch) -> None:  # C4：run_react 用 b
     assert "上轮" in out.messages[0]["content"]  # 近轮进消息
     assert "q" in out.messages[0]["content"]  # 问题最末
     assert "意图已确认" in out.system  # 护栏 hint 注入 system（防追问循环）
+
+
+def test_cache_prefix_excludes_hints() -> None:  # 缓存前缀不含可变 hints
+    out = build_context(  # 装配
+        system="S" * 40,  # S 固定
+        working={"task_goal": "g"},  # working 锚点
+        hints=["意图已确认：直接执行", "已追问次数：1"],  # 可变护栏
+        question="q",  # 问题
+    )  # 结束
+    # 缓存前缀 = S + working 段（≈ (40 + working_len) // 4），必须小于含 hints 的整份 system。
+    assert out.cache_prefix_tokens < (len(out.system) // 4)  # 前缀不含 hints（严格更小）
+    assert out.cache_prefix_tokens > 0  # 非零（S 有内容）
+
+
+def test_profile_block_injected() -> None:  # 画像块注入（稳定约束，facts 之前）
+    out = build_context(  # 装配
+        system="SYS",  # S
+        working={},  # 无锚点
+        profile_text="verbosity=short\nlanguage=zh",  # 画像块
+        facts=[{"key": "lang", "value": "python", "confidence": 0.9}],  # 事实
+        question="q",  # 问题
+    )  # 结束
+    content = out.messages[0]["content"] if out.messages else ""  # 消息正文
+    assert "<profile>" in content  # 画像块在
+    assert "verbosity=short" in content  # 画像内容
+    assert content.index("<profile>") < content.index("<facts>")  # profile 在 facts 之前
+
+
+def test_constraints_kept_fraction() -> None:  # 约束保留率（关键事实+护栏都保留）
+    out = build_context(  # 装配
+        system="SYS",  # S
+        working={"task_goal": "查订单", "key_facts": {"order_id": "37979"}},  # 锚点含关键事实
+        hints=["意图已确认：直接执行"],  # 护栏
+        question="查 37979 状态",  # 问题含键
+    )  # 结束
+    assert 0.0 < out.constraints_kept <= 1.0  # 保留率在 (0,1]（facts 指向的 key 在 system）
+
+
+def test_constraints_kept_when_dropped() -> None:  # 预算紧时约束可能被丢（保留率 <1 或 0）
+    tiny = Budget(window=256, output_reserve=16, history_ratio=0.2)  # 极小窗口
+    out = build_context(  # 装配
+        system="SYS",  # S
+        working={"task_goal": "g", "key_facts": {"amount": "19999"}},  # 关键事实
+        hints=["提示一必定丢", "very-long-hint-" + "x" * 200],  # 超长护栏可能被裁
+        recent=[{"user": "u", "assistant": "a"}] * 20,  # 大量近轮撑爆预算
+        question="q",  # 问题
+        budget=tiny,  # 极小预算
+    )  # 结束
+    assert 0.0 <= out.constraints_kept <= 1.0  # 保留率合法（不会越界）

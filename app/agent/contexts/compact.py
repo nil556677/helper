@@ -9,7 +9,7 @@
 from __future__ import annotations  # 类型注解延迟求值
 
 from collections.abc import Awaitable, Callable, Sequence  # 类型
-from dataclasses import dataclass  # 结果容器
+from dataclasses import dataclass, field  # 结果容器
 from typing import Any  # 任意值
 
 from app.agent.contexts import tokens  # token 估算
@@ -21,12 +21,13 @@ __all__ = ["SummaryResult", "compact", "plan"]  # 对外导出
 
 @dataclass(frozen=True)
 class SummaryResult:  # 压缩结果
-    """新摘要 + 覆盖到哪条 + 计数。"""
+    """新摘要 + 覆盖到哪条 + 计数 + 覆盖消息 id（供落段/蒸馏）。"""
 
     summary: str  # 新滚动摘要
     until_message_id: int  # 覆盖到的最后一条消息 id
     compacted_messages: int  # 并入摘要的消息数
     saved_tokens: int  # 净省 token（消息→摘要）
+    source_refs: list[int] = field(default_factory=list)  # 覆盖消息 id 列表（可回放/蒸馏用）
 
 
 Compactor = Callable[[Sequence[dict[str, Any]], str], Awaitable[str]]  # (旧消息, 旧摘要) -> 新摘要
@@ -66,9 +67,11 @@ async def compact(  # 执行一次滚动压缩
         return None  # 拒绝
     until_id = int(oldest[-1].get("id") or oldest[-1].get("seq") or 0)  # 最后一条老消息
     saved = tokens.count_messages(oldest) - new_cost  # 净省
+    refs = [int(item.get("id") or 0) for item in oldest if item.get("id")]  # 覆盖消息 id（可回放）
     return SummaryResult(  # 返回
         summary=new_summary,  # 新摘要
         until_message_id=until_id,  # 覆盖终点
         compacted_messages=len(oldest),  # 并入条数
         saved_tokens=max(saved, 0),  # 省 token（不小于 0）
+        source_refs=refs,  # 覆盖消息 id
     )

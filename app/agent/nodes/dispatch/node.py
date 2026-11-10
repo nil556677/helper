@@ -2,15 +2,16 @@
 
 from __future__ import annotations  # 延迟求值注解
 
-from typing import Any, Callable  # 类型
+from collections.abc import Callable  # 类型
+from typing import Any
 
-from app.agent.contracts import StageGroup  # 分组（时间线步骤归类）
 from app.agent.context import bind_node_run, current_run  # 当前 run（发事件）
+from app.agent.contracts import StageGroup  # 分组（时间线步骤归类）
 from app.agent.events import tool as tool_event  # 工具事件
+from app.agent.nodes.semantic.node import route_specs  # 路径定义（含必需参数）
 from app.agent.stages import stage  # 过程步骤
 from app.agent.tools.library import current_time, query_weather  # 内置快捷工具（检索已在 ReAct）
 from app.agent.tools.wiring import unwrap_tool_output  # 工具出参还原（content+artifact → Result）
-from app.agent.nodes.semantic.node import route_specs  # 路径定义（含必需参数）
 
 ArgsBuilder = Callable[[str], dict[str, Any]]  # question → 工具参数
 
@@ -123,6 +124,7 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
             payload_options = [{"value": item, "label": item} for item in ask_options] if enum else []  # 枚举才有选项
             if state.get("hitl_enabled"):  # 生产：暂停等用户（重放后 resume 值进 pending_param）
                 from langgraph.types import interrupt  # 原生暂停
+
                 from app.agent.contracts.routing import InterruptPayload  # 负载
 
                 payload = InterruptPayload(  # 追问负载
@@ -174,5 +176,13 @@ async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, 
     data = getattr(envelope, "data", None) or {}  # 结果数据
     text = _format(name, data)  # 模板化
     fragments: list[dict[str, Any]] = []  # 快捷工具不带引用（摘引用走 ReAct）
+    # —— 工作记忆记步：快捷工具调用视为一步（随 checkpoint 持久化）——
+    white = state.get("working_memory") if isinstance(state.get("working_memory"), dict) else None  # 读白板（可能空）
+    if white is not None:  # 已有白板
+        from app.agent.memory import record_step_working  # 记步
+
+        white = record_step_working(white, f"调用 {name}")  # 记步
     update: dict[str, Any] = {"answer": text, "route": route, "fragments": fragments}  # 更新
+    if white is not None:  # 有白板更新
+        update["working_memory"] = dict(white)  # 写回
     return update  # 返回

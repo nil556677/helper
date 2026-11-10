@@ -87,8 +87,11 @@ def test_search_returns_only_active_by_decay(fake_root) -> None:  # 召回只取
 def test_extract_eav_rules() -> None:  # 规则抽 EAV 事实
     facts = extract_eav("订单 37979 金额 99.5 元，昨天处理")  # 一句话
     keys = {f.key for f in facts}  # 键
-    assert "order_id::37979" in keys  # 订单
-    assert "amount::99.5" in keys  # 金额
+    assert "order_id" in keys  # 订单（键=属性，值进 value）
+    assert "amount" in keys  # 金额
+    values = {f.key: f.value for f in facts}  # 键→值
+    assert values["order_id"] == "37979"  # 订单号进 value
+    assert values["amount"] == "99.5"  # 金额进 value
 
 
 def test_cosine_sim() -> None:  # 余弦相似度
@@ -99,10 +102,32 @@ def test_cosine_sim() -> None:  # 余弦相似度
     assert cosine_sim([], [1]) == 0.0  # 坏输入安全
 
 
-def test_search_with_query_embedding_ranks(fake_root) -> None:  # 语义召回：余弦加分排序
+def test_search_with_query_embedding_ranks(fake_root, monkeypatch) -> None:  # 语义召回：余弦加分排序
+    import app.agent.memory.longterm as lt  # 底层（改读开关）
+
+    monkeypatch.setattr(lt, "_vector_retrieval_enabled", lambda: False)  # 关向量检索，测 sqlite 余弦
     store = _store()  # store
     store.put("pref::lang", "python", source="user_explicit", embedding=[1.0, 0.0, 0.0], time_s=time.time())  # 与查询近
     store.put("pref::city", "成都", source="user_explicit", embedding=[0.0, 0.0, 1.0], time_s=time.time())  # 与查询远
     ranked = store.search(query_embedding=[1.0, 0.0, 0.0], top_k=2)  # 按余弦召回
     assert ranked[0]["key"] == "pref::lang"  # 近的排前
     assert all(0 <= r["score"] <= 1 for r in ranked)  # 分合法
+
+
+def test_search_only_returns_rows_get_accessed(fake_root, monkeypatch) -> None:  # 记账只在返回行
+    import app.agent.memory.longterm as lt  # 底层（改读开关）
+
+    monkeypatch.setattr(lt, "_vector_retrieval_enabled", lambda: False)  # 关向量检索，测 sqlite 记账
+    store = _store()  # store
+    store.put("pref::lang", "python", source="user_explicit", embedding=[1.0, 0.0, 0.0], time_s=time.time())  # 近
+    store.put("pref::city", "成都", source="user_explicit", embedding=[0.0, 0.0, 1.0], time_s=time.time())  # 远
+    ranked = store.search(query_embedding=[1.0, 0.0, 0.0], top_k=1)  # 只返回最近一条
+    assert len(ranked) == 1  # 仅 1 条
+    row_lang = get_connection().execute(  # 近的（被召回）
+        "SELECT access_count FROM user_memories WHERE memory_key = 'pref::lang'"
+    ).fetchone()
+    row_city = get_connection().execute(  # 远的（未被召回）
+        "SELECT access_count FROM user_memories WHERE memory_key = 'pref::city'"
+    ).fetchone()
+    assert row_lang["access_count"] >= 1  # 返回行已记账
+    assert (row_city["access_count"] or 0) == 0  # 未返回行不记账

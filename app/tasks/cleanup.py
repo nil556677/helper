@@ -42,5 +42,12 @@ class Cleanup(Task):
                     ctx.add_event("cleanup", f"删除残留失败：{path.name}", str(exc))
         with __import__("contextlib").suppress(Exception):
             purge_old_logs()
+        # 顺带触发记忆过期归档（同周期，不新增定时器；去重由 memory_cleanup 的 dedupe_key 保证）
+        try:
+            from app.services.maintenance import enqueue_memory_cleanup  # 记忆清理入队
+
+            enqueue_memory_cleanup("after_cleanup")  # 排队（幂等去重）
+        except Exception:  # 入队失败不影响本任务
+            pass  # 忽略
         ctx.report(1, 1, "完成")
         return TaskResult(note=f"清理 inbox 残留 {removed} 个（{params.reason}）")

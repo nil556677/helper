@@ -9,8 +9,9 @@
 
 from __future__ import annotations  # 延迟值注解
 
+from collections.abc import Callable  # 类型
 from dataclasses import dataclass, field  # 输入容器
-from typing import Any, Callable  # 类型
+from typing import Any
 
 from app.agent.contexts.budget import Budget  # 预算
 from app.agent.memory.longterm import cosine_sim  # 相关度（近轮剪枝）
@@ -69,6 +70,7 @@ class ContextOut:  # 装配结果（可落 RunContext）
     pruned: dict[str, int] = field(default_factory=dict)  # 各层剪掉计数
     dropped: dict[str, int] = field(default_factory=dict)  # 各层预算丢弃
     cache_prefix_tokens: int = 0  # 稳定前缀(S) token（Prompt Cache 标记用）
+    constraints_kept: float = 0.0  # 关键约束保留率（key_facts+hints 落在终上下文的比例，0..1）
 
     def to_state_dict(self) -> dict[str, Any]:  # 可序列化视图（进 ChatState，供回答节点用）
         """装进 state：system / messages / usage，供 ReAct/dispatch/general 消费。"""
@@ -80,6 +82,7 @@ class ContextOut:  # 装配结果（可落 RunContext）
             "pruned": dict(self.pruned),  # 剪枝
             "dropped": dict(self.dropped),  # 丢弃
             "cache_prefix_tokens": self.cache_prefix_tokens,  # 缓存前缀
+            "constraints_kept": self.constraints_kept,  # 约束保留率
             "estimate": int(count_messages(self.messages)),  # 消息 token
         }  # 结束
 
@@ -168,6 +171,7 @@ def build_context(  # 装配一次
     tools: list[dict[str, Any]] = (),  # 工具结果
     attachments: list[dict[str, Any]] = (),  # 附件
     hints: list[str] = (),  # 护栏提示（候选/意图确认/追问预算，注入 system 防止追问循环）
+    profile_text: str = "",  # 画像块文本（稳定约束，优先级高于可变事实）
     question: str = "",  # 当前问题
     budget: Budget | None = None,  # 预算
     keep_turns: int = KEEP_TURNS,  # 近轮保底
@@ -189,6 +193,8 @@ def build_context(  # 装配一次
     att_lines = _render_attachments(attachments)  # 附件行
 
     blocks: list[Block] = []  # 有序块
+    if profile_text:  # 有画像
+        blocks.append(Block("profile", f"<profile>\n{str(profile_text).strip()}\n</profile>"))  # 画像块（稳定约束最先）
     if fact_lines:  # 有事实
         blocks.append(Block("facts", "<facts>\n" + "\n".join(fact_lines) + "\n</facts>"))  # 事实块
     if seg_lines:  # 有段
@@ -215,10 +221,11 @@ def build_context(  # 装配一次
 
     # —— Compose ——
     system_out = (str(system or "") + (("\n\n" + working_block) if working_block else "")).strip()  # S + working（缓存前缀+锚点）
+    # 稳定前缀 = S + working（hints 每轮可变，不计入缓存前缀；注释口径与需求一致）
+    cache_prefix = (len(str(system or "")) + (len(working_block) + 2 if working_block else 0)) // 4  # 缓存前缀 token（不含 hints）
     hints_lines = [str(h) for h in (hints or []) if str(h).strip()]  # 护栏提示（防追问循环）
     if hints_lines:  # 有护栏
         system_out += "\n\n<hints>\n" + "\n".join(hints_lines) + "\n</hints>"  # 注入 system（锚点区）
-    cache_prefix = len(str(system or "")) // 4  # 稳定前缀(S)估算 token（Prompt Cache）
     non_empty = [b for b in keep_blocks if b.text]  # 去空
     messages: list[dict[str, Any]] = []  # 消息
     if non_empty:  # 有记忆/动态块
@@ -227,6 +234,12 @@ def build_context(  # 装配一次
         messages.append({"role": "user", "content": body + (("\n\n" + q) if q else "")})  # 记忆+问题同一条 user（问题最末）
     else:  # 无块
         messages.append({"role": "user", "content": str(question or "")})  # 仅问题
+    constraints_kept = _constraints_kept_fraction(  # 关键约束保留率（P5 指标）
+        system_out,  # 终 system
+        messages,  # 终消息
+        working.get("key_facts") or {},  # key_facts 锚点
+        hints_lines,  # 护栏提示
+    )  # 计算
     return ContextOut(  # 返回
         system=system_out,  # system
         messages=messages,  # messages
@@ -234,4 +247,31 @@ def build_context(  # 装配一次
         pruned=pruned,  # 剪枝
         dropped=dropped,  # 预算丢弃
         cache_prefix_tokens=cache_prefix,  # 缓存前缀 token
+        constraints_kept=constraints_kept,  # 约束保留率
     )  # 结束
+
+
+def _constraints_kept_fraction(  # 关键约束保留率
+    system_text: str,  # 终 system 文本
+    messages: list[dict[str, Any]],  # 终消息
+    key_facts: dict[str, Any],  # key_facts 锚点
+    hints: list[str],  # 护栏提示
+) -> float:  # 0..1
+    """计算 key_facts 值与 hint 文本落在最终上下文的比例（P5 指标 6.6①）。
+
+    约束集合 = 每个 key_facts 值的文本 + 每条 hint（非空）。全被注入 → 1.0；
+    预算紧被裁掉 → 相应降低，暴露"关键约束被丢"。
+    """
+    pool = str(system_text or "") + " ".join(  # 终上下文全文（system+消息）
+        str(m.get("content") or "") for m in messages  # 各消息
+    )  # 拼接
+    targets: list[str] = []  # 约束集合
+    for value in (key_facts or {}).values():  # 逐关键事实值
+        text = str(value).strip()  # 值文本
+        if text:  # 非空
+            targets.append(text)  # 记
+    targets.extend(str(h).strip() for h in (hints or []) if str(h).strip())  # 护栏提示
+    if not targets:  # 无约束
+        return 1.0  # 空集合视为全保留
+    kept = sum(1 for t in targets if t in pool)  # 落在上下文里的条数
+    return round(kept / len(targets), 4)  # 比例

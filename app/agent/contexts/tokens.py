@@ -6,7 +6,7 @@ from typing import Any  # 任意值
 
 from app.services.chat_stats import estimate_tokens  # 唯一估算实现（界面占用比例同源）
 
-__all__ = ["count_blocks", "count_messages", "count_text"]  # 对外导出
+__all__ = ["count_messages", "count_text"]  # 对外导出
 
 
 def count_text(text: str) -> int:  # 一段文字
@@ -20,13 +20,3 @@ def count_messages(messages: list[dict[str, Any]]) -> int:  # 一组消息
     for item in messages:  # 逐条
         total += estimate_tokens(str(item.get("content") or ""))  # 累加正文
     return total  # 返回
-
-
-def count_blocks(blocks: dict[str, str]) -> dict[str, int]:  # 块名 → token
-    """空块不出现（与“空块不输出”一致）。"""
-    result: dict[str, int] = {}  # 结果
-    for name, body in blocks.items():  # 逐块
-        size = estimate_tokens(body)  # 估算
-        if size:  # 非空
-            result[name] = size  # 记
-    return result  # 返回

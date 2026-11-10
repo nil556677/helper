@@ -16,6 +16,8 @@ class ChatState(TypedDict, total=False):  # 图状态（字段都可缺省）
     conversation_id: str  # 会话 id
     summary: str  # 滚动摘要（load_context 写、装配读）
     working_memory: dict  # 工作记忆白板（WorkingMemory JSON；摘要零触碰，key_facts 永不压缩）
+    memory_facts: list[dict[str, Any]]  # 本轮召回的记忆事实（load_context 写、ReAct/general 装配读；单轮只查一次）
+    memory_profile_text: str  # 本轮召回的画像块文本（load_context 写、装配读；稳定约束）
 
     # 多轮
     turns: list[dict[str, Any]]  # 对话历史（Turn 的 JSON 形态；成对、只喂 done）

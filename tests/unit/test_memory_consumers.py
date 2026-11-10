@@ -27,3 +27,23 @@ def test_guard_from_memory_reads_turn_fields() -> None:  # 护栏读 assistant
     assert count == 1  # 一次追问
     assert confirmed is True  # 已确认
     assert agent_mod.guard_from_memory([]) == (0, False)  # 空历史
+
+
+def test_state_context_prefers_memory_facts(monkeypatch) -> None:  # 装配优先用 load_context 召回的 facts
+    calls: list[str] = []  # 记录 recall 调用
+    import app.agent.memory.manager as mm  # 记忆模块
+
+    def _fake_recall(question: str = "", top_k: int = 6):  # 假召回
+        calls.append(str(question))  # 记录
+        return mm.RecallBundle(facts=[{"key": "lang", "value": "python", "confidence": 0.9, "source": "explicit"}], profile_lines=[])  # 返回
+
+    monkeypatch.setattr(mm, "recall", _fake_recall)  # 顶掉真实召回
+    state = {  # 状态
+        "question": "q",  # 问题
+        "conversation_id": "",  # 无会话
+        "memory_facts": [{"key": "prefer", "value": "x", "confidence": 0.8, "source": "explicit"}],  # 入口已召回
+    }  # 结束
+    out = agent_mod._state_context(state)  # 装配
+    assert out is not None  # 成功
+    assert "prefer" in out.messages[0]["content"] or "prefer" in out.system  # 用入口 facts
+    assert calls == []  # 未再查（单轮只查一次）

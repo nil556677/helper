@@ -6,11 +6,11 @@ from typing import Any  # 任意类型
 
 from langgraph.graph import END, START, StateGraph  # 图原语
 
+from app.agent.nodes.approval.node import approval_hitl_node  # 审批 HITL（聊天弹框）
 from app.agent.nodes.clarify.interrupt import clarify_interrupt_node  # 澄清（可暂停）
 from app.agent.nodes.context.node import load_context  # 上下文
 from app.agent.nodes.dispatch.node import dispatch_node  # 固定路径直调
 from app.agent.nodes.fallback.node import llm_fallback_node  # 兜底子图
-from app.agent.nodes.approval.node import approval_hitl_node  # 审批 HITL（聊天弹框）
 from app.agent.nodes.finalize.node import finalize_node  # 收尾
 from app.agent.nodes.general.node import general_agent_node  # L4e 通用兜底
 from app.agent.nodes.preprocess.node import preprocess_node  # L1 预处理
@@ -20,13 +20,25 @@ from app.agent.nodes.route_llm.node import route_llm_node  # LLM 兜底
 from app.agent.nodes.semantic.node import semantic_node  # 语义层
 from app.agent.nodes.triage.node import triage_node  # L3 分诊
 from app.agent.nodes.verify.node import verify_node  # L5 校验
-from app.agent.routing.edges import after_clarify, after_dispatch, after_pretriage, after_rule, after_semantic, after_triage  # 条件边
+from app.agent.routing.edges import (  # 条件边
+    after_clarify,
+    after_dispatch,
+    after_pretriage,
+    after_rule,
+    after_semantic,
+    after_triage,
+)
 from app.agent.state import ChatState  # 状态
 
 
 def build_route_graph(*, checkpointer: Any = None) -> Any:  # 意图路由父图
     """START → load_context → rule_route →(after_rule)→ semantic_router →(after_semantic)
     → dispatch_fixed | llm_fallback | clarify_or_end → finalize → END。"""
+    # 嵌入函数无状态：图装配时注入一次（供 ContextBuilder 近轮剪枝/事实召回），不再每请求注入。
+    from app.agent.contexts.builder import set_embed  # 注入嘴
+    from app.agent.memory import embed_text  # 嵌入实现
+
+    set_embed(embed_text)  # 注入 bge-m3 嵌入（不可用则退保底剪枝）
     graph = StateGraph(ChatState)  # 状态图
     graph.add_node("load_context", load_context)  # 上下文
     graph.add_node("preprocess", preprocess_node)  # L1 预处理

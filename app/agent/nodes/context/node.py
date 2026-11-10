@@ -101,10 +101,24 @@ async def load_context(state: dict[str, Any], config: RunnableConfig) -> dict[st
     question = str(state.get("question") or "")  # 当前问题
     if question and not (white.get("task_goal") or ""):  # 有问、无目标
         white = set_goal_working(white, question)  # 以当前问题为目标
+    # —— 记忆召回：在入口统一做一次（画像→任务→知识→摘要顺序的入口），装配方不再重复查 ——
+    memory_facts: list[dict[str, Any]] = []  # 召回事实
+    memory_profile_text: str = ""  # 画像块文本
+    try:  # 召回失败不阻断上下文装载
+        from app.agent.memory.manager import recall  # 记忆统一入口
+
+        bundle = recall(question, top_k=6)  # 统一召回（事实+画像）
+        memory_facts = list(bundle.facts)  # 事实
+        memory_profile_text = "\n".join(bundle.profile_lines)  # 画像块（一条一行）
+    except Exception:  # 无表/坏库
+        memory_facts = []  # 空
+        memory_profile_text = ""  # 空
     return {  # 写回（含跨轮护栏）
         "turns": [t.model_dump(mode="json") for t in turns],  # 轮次
         "summary": summary_text,  # 摘要
         "working_memory": dict(white),  # 工作记忆（摘要零触碰，key_facts 保留）
+        "memory_facts": memory_facts,  # 本轮召回记忆（进入口统一召回，避免 ReAct/general 重复查询）
+        "memory_profile_text": memory_profile_text,  # 画像块文本（稳定约束）
         "clarify_count": int(state.get("clarify_count") or 0) or clarify_count,  # 追问计数（记忆反推，取大）
         "intent_confirmed": bool(state.get("intent_confirmed")) or confirmed,  # 意图确认（记忆反推）
     }  # 返回

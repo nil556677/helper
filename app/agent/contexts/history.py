@@ -9,7 +9,7 @@ from app.agent.contexts import tokens  # token 估算
 from app.agent.contexts.budget import Budget  # 预算/裁剪目标
 from app.agent.contracts import Turn, TurnStatus, only_done  # 轮次契约
 
-__all__ = ["messages_from", "project", "trim", "turns_from_rows"]  # 对外导出
+__all__ = ["messages_from", "trim", "turns_from_rows"]  # 对外导出
 
 
 def turns_from_rows(since: int, rows: Sequence[dict[str, Any]], *, limit: int = 200) -> list[Turn]:  # 行 -> 轮次
@@ -51,11 +51,6 @@ def messages_from(turns: Sequence[Turn], *, with_ids: bool = False) -> list[dict
             out.append({"role": "user", "content": turn.user})  # 问题
             out.append({"role": "assistant", "content": turn.assistant or ""})  # 回答
     return out  # 返回
-
-
-def project(summary_text: str, messages: Sequence[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:  # 投影
-    """C1 只做形状：摘要原样 + 消息原样（C4 接压缩，C3 已接裁剪）。"""
-    return str(summary_text or ""), [dict(item) for item in messages]  # 浅拷贝
 
 
 def trim(  # 按 token 裁剪历史

@@ -78,12 +78,17 @@ def _snapshot(conversation_id: str) -> tuple[list[dict[str, Any]], dict[str, Any
 
 
 async def _compact_once(conversation_id: str) -> None:  # 一次压缩到段
-    """读最近消息 → 拆最老一段 → LLM 摘要 → 追加 summary_segment。"""
+    """读最近消息 → 拆最老一段 → LLM 摘要 → 追加 summary_segment。
+
+    压缩核心统一走 `contexts.compact.compact()`（含"摘要未变小拒绝"的正确判断）；
+    蒸馏写回复用其 `source_refs` 覆盖消息 id。
+    """
     from app.agent.contexts.budget import Budget  # 预算
-    from app.agent.contexts.compact import plan  # 拆分
+    from app.agent.contexts.compact import compact as compact_engine  # 压缩引擎
     from app.agent.contexts.history import messages_from, turns_from_rows  # 投影
     from app.agent.contexts.summarize import build_summarizer  # 摘要器
     from app.agent.contexts.tokens import count_messages  # 估算
+    from app.core.db.connection import get_connection  # DB 读原文
     from app.services import conversations  # 会话
 
     budget = Budget()  # 预算（window=1M 推导）
@@ -102,15 +107,15 @@ async def _compact_once(conversation_id: str) -> None:  # 一次压缩到段
     compactor = build_summarizer(None)  # 摘要器（默认 llm；不可用返回 None）
     if compactor is None:  # 摘要模型不可用
         return  # 退回只 trim（主线已做过）
-    _keep, oldest = plan(messages, budget)  # 拆 (保留区, 最老一段)
-    if not oldest:  # 无最老段
+    result = await compact_engine(  # 统一压缩引擎
+        messages,  # 全部消息
+        compactor,  # 摘要生成器
+        summary_text=str(head.get("summary") or ""),  # 旧滚动摘要
+        budget=budget,  # 预算
+    )  # 结束
+    if result is None:  # 无事可压 / 摘要被拒（没变小）
         return  # 跳过
-    new_summary = (await compactor(oldest, str(head.get("summary") or "")) or "").strip()  # 生成
-    if not new_summary:  # 空摘要
-        return  # 拒绝
-    if count_messages(oldest) <= len(new_summary):  # 没变短
-        return  # 拒绝（不劣化）
-    refs = [int(item.get("id") or 0) for item in oldest if item.get("id")]  # source_refs
+    refs = list(result.source_refs)  # 覆盖消息 id
     if not refs:  # 无 id（防御）
         return  # 跳过
     await asyncio.to_thread(  # 写（丢线程，不阻塞事件循环）
@@ -118,23 +123,24 @@ async def _compact_once(conversation_id: str) -> None:  # 一次压缩到段
             conversation_id,  # 会话
             start_id=min(refs),  # 起始 id
             end_id=max(refs),  # 终点 id（= until）
-            summary=new_summary,  # 摘要
+            summary=result.summary,  # 新摘要
             source_refs=refs,  # 可回放引用
         )  # 结束
     )  # 结束
-    # —— 写回跟随摘要同一趟：同一段里规则抽 EAV 事实 → 长期知识库（确定性，后台）——
-    from app.agent.memory import MemoryStore, confidence_for, extract_eav  # 长期库
+    # —— 蒸馏写回经统一入口（manager.record_facts：去重 + PII 脱敏）——
+    from app.agent.memory.longterm import MemoryFact, extract_eav  # 事实抽取
+    from app.agent.memory.manager import record_facts  # 记忆统一写口
 
-    store = MemoryStore()  # 长期记忆仓储（sqlite）
-    for item in oldest:  # 逐条最老消息
-        for fact in extract_eav(str(item.get("content") or "")):  # 规则抽事实
-            fact_key, fact_value, fact_source = fact.key, fact.value, fact.source  # 取字段（闭包安全）
-            await asyncio.to_thread(  # 写（丢线程）
-                lambda: store.put(  # 写回（confested/软替代在 reconcile 内处理）
-                    fact_key,  # key
-                    fact_value,  # value
-                    source=fact_source,  # 来源
-                    confidence=confidence_for(fact),  # 可信度
-                    time_s=fact.time,  # 时间
-                )  # 结束
-            )  # 结束
+    # 按 source_refs 重读原文（避免捕获可变闭包），规则抽 EAV 候选
+    rows = get_connection().execute(  # 读被压缩消息原文
+        "SELECT content FROM messages WHERE conversation_id = ? AND id IN (%s)"
+        % ",".join("?" * len(refs)),
+        (conversation_id, *[int(r) for r in refs]),
+    ).fetchall()
+    facts: list = []  # 候选
+    for row in rows:  # 逐条消息
+        for fact in extract_eav(str(row["content"] or "")):  # 规则抽事实
+            facts.append(MemoryFact(key=fact.key, value=fact.value, source=fact.source, time=fact.time))  # 候选
+    await asyncio.to_thread(  # 写（丢线程）
+        lambda: record_facts(facts, redact_pii=True, conversation_id=conversation_id)  # 统一写回（去重+脱敏）
+    )  # 结束
