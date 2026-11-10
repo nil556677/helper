@@ -2,6 +2,7 @@
 
 from __future__ import annotations  # 延迟值注解
 
+import hashlib  # 稳定幂等键（sha256，跨进程重启一致）
 import json  # 序列化明细
 import time  # 时间戳
 import uuid  # 请求 id
@@ -37,7 +38,11 @@ def create_request(  # 创建审批请求（幂等）
     trace_id: str = "",  # 追踪
 ) -> str:  # 请求 id（新增或已有）
     """同 (thread, ns, 参数hash) 的 pending 只落一条；返回该 id（幂等）。"""
-    hash_key = args_hash or str(hash(json.dumps(args_redacted, sort_keys=True, ensure_ascii=False)))  # 参数指纹
+    # 幂等键必须跨进程重启稳定：Python 内置 hash() 受 PYTHONHASHSEED 随机化影响，
+    # 重启后同参数会算出不同键 → 幂等去重失效；改用 sha256 保证文本指纹确定。
+    hash_key = args_hash or hashlib.sha256(  # 参数指纹（确定、跨重启一致）
+        json.dumps(args_redacted, sort_keys=True, ensure_ascii=False).encode("utf-8")  # 规范 JSON 的字节
+    ).hexdigest()  # 十六进制串
     rid = str(uuid.uuid4())  # 请求 id
     now = _stamp()  # 时间
     with transaction() as conn:  # 单事务
@@ -116,7 +121,7 @@ def list_requests(*, limit: int = 100) -> list[dict[str, Any]]:  # 台账（只�
 def get_request(request_id: str) -> dict[str, Any] | None:  # 取单条请求
     """按 id 取审批请求（含 args/status）。"""
     row = get_connection().execute(  # 查询
-        "SELECT request_id, thread_id, tenant_id, requester_id, tool_name, args_redacted, status"
+        "SELECT request_id, thread_id, tenant_id, requester_id, tool_name, args_redacted, edited_args, status"
         " FROM approval_requests WHERE request_id=?",
         (request_id,),
     ).fetchone()  # 一行

@@ -27,13 +27,10 @@ from typing import Any, Callable  # 类型
 from langchain_core.tools import StructuredTool  # 框架工具（返回包络）
 from pydantic import BaseModel  # 参数契约基类
 
-from app.agent.contracts import Mutation  # 变更画像
-from app.core.error import ResolveError, ok, resolve  # 统一错误基类/成功/分类
+from app.agent.contracts import ErrorCode, Mutation  # 错误码 / 变更画像
+from app.core.error import ResolveError, err, ok, resolve  # 统一错误基类/失败/成功/分类
 from app.agent.tools.cache import TtlCache  # TTL 缓存（窗口内幂等）
 from app.agent.tools.wiring import render, to_content_and_artifact  # 模型视角/审计视角拆分
-
-#: single-flight 等待上限（秒）：领导者没在时限内完成就自己算，避免永久阻塞。
-SINGLEFLIGHT_WAIT_S = 4.0  # 默认等待（工具超时 5s 时留 1s 给收尾）
 
 
 class ToolError(ResolveError):  # 工具业务错
@@ -115,11 +112,17 @@ def _mark_timeout() -> None:  # 记一次超时
 
 
 def _find_hit(cache: TtlCache | None, key: str) -> Any | None:  # 查缓存命中
-    """命中返回包络，否则 None；顺带让命中标记可见（优化点 4）。"""
+    """命中返回包络，否则 None；顺带让命中标记可见（优化点 4）。
+
+    用 ``cache.contains`` 判定"存没存过"，而不是拿 ``get`` 的值判是否 None——因为工具可
+    合法返回 None/空串，这类空结果也要命中（否则每轮穿透后端，缓存形同虚设）。
+    """
     if cache is None:  # 没开缓存
         return None  # 无命中
-    cached = cache.get(key)  # 查
-    return ok(cached, cached=True) if cached is not None else None  # 命中带标记
+    if not cache.contains(key):  # 未存（或已过期被顺手清掉）
+        return None  # 无命中
+    cached = cache.get(key)  # 取（深拷贝；可能是合法空值）
+    return ok(cached, cached=True)  # 命中带标记（含空值也命中）
 
 
 async def _call_async(fn: Callable[..., Any], cache: TtlCache | None, schema: type[BaseModel] | None, wait_s: float, result_schema: type[BaseModel] | None = None, **kwargs: Any) -> Any:  # 异步主入口
@@ -170,11 +173,14 @@ def _call_sync(fn: Callable[..., Any], cache: TtlCache | None, schema: type[Base
         hit = _find_hit(cache, key)  # 它成功后已落缓存
         if hit is not None:  # 命中
             return hit  # 回
-    try:  # 计算（含领导者）
+        # 等待者自算：这里**不清理占位**（占位只由领导者负责 pop/set），否则会把
+        # 还在跑的领导者信号删掉、并提前唤醒其它等待者，single-flight 语义退化。
+        return _compute_sync(fn, cache, key, kwargs, result_schema)  # 自算（写缓存即各族复用）
+    try:  # 领导者计算（含领导者自身）
         return _compute_sync(fn, cache, key, kwargs, result_schema)  # 计算
     finally:  # 一定释放
         with _inflight_lock:  # 加锁
-            _inflight_sync.pop(dkey, None)  # 移除占位
+            _inflight_sync.pop(dkey, None)  # 领导者移除占位
         event.set()  # 唤醒等待者
 
 
@@ -191,19 +197,47 @@ def tool_spec(  # 工具范式装饰器
     risk: str = "low",  # 风险等级（low/medium/high）
     timeout_ms: int = 5000,  # 工具级超时（毫秒；框架可读）
     max_entries: int | None = 1000,  # 缓存容量上限（防长期增长；None=不限）
+    model_view: Callable[[Any], Any] | None = None,  # 成功时的模型视图生成器（见下）
+    error_schema: type[BaseModel] | None = None,  # 错误契约（工具会返回的 code/可重试性）
+    examples: tuple[str, ...] = (),  # 正反示例（何时用/何时不用）
 ) -> Callable[[Callable[..., Any]], StructuredTool]:  # 返回装饰器
-    """包成返回 `(模型视角, 审计视角)` 的 langchain 工具；错误/缓存/并发/元数据在此统一。"""
+    """包成返回 `(模型视角, 审计视角)` 的 langchain 工具；错误/缓存/并发/元数据在此统一。
+
+    `model_view`（可选）：作者提供一个「模型视角裁剪函数」，入参为成功后的 ``data``，
+    返回要给模型的 JSON 可序列化对象。用于 data 里含大字段（如完整证据）但模型只需要
+    摘要/裁剪视图的场景：模型只见裁剪结果，完整 data 仍走审计视角。缺省时用通用
+    ``render``（成功只给 data）。失败始终走通用错误三要素。
+    """
     def deco(fn: Callable[..., Any]) -> StructuredTool:  # 装饰器本体
         cache = TtlCache(ttl=float(ttl), max_entries=max_entries) if ttl is not None else None  # 有界缓存
         wait_s = max(0.1, float(timeout_ms) / 1000.0 - 0.5)  # 等待上限略小于工具超时，留收尾余量
 
+        def _view(env: Any) -> Any:  # 计算给模型的视图
+            """成功且声明了 model_view → 用裁剪视图；否则通用 render（只给 data）。"""
+            if env.ok and model_view is not None:  # 成功且作者给了视图函数
+                return json.dumps(  # 把裁剪对象序列化给模型
+                    model_view(env.data),  # 作者从 data 挑字段（大字段不进模型）
+                    ensure_ascii=False,  # 中文直出
+                    default=str,  # 不可序列化兜底
+                )  # 返回
+            return render(env)  # 通用视图（成功=仅 data；失败=错误三要素）
+
         async def wrapped_async(**kwargs: Any) -> Any:  # 异步入口（真协程函数）
-            env = await _call_async(fn, cache, args_schema, wait_s, result_schema, **kwargs)  # 主路由
-            return to_content_and_artifact(env, render(env))  # 模型只拿 data，审计留完整包络
+            # 用声明的 timeout_ms 强扣整体执行时长（wait_for 超时会取消本次调用），
+            # 超时转 execution.timeout 可重试——避免外部网络/第三方卡死一直挂住。
+            limit_s = max(0.05, float(timeout_ms) / 1000.0)  # 超时门槛（秒）
+            try:  # 限时执行
+                env = await asyncio.wait_for(  # 强制超时
+                    _call_async(fn, cache, args_schema, wait_s, result_schema, **kwargs),  # 主路由（含单飞/缓存）
+                    timeout=limit_s,  # 上限
+                )  # 结束
+            except asyncio.TimeoutError:  # 超时
+                env = err(str(ErrorCode.EXECUTION_TIMEOUT), "工具执行超时，可稍后重试", retryable=True)  # 可重试超时
+            return to_content_and_artifact(env, _view(env))  # 模型只拿收敛视图，审计留完整包络
 
         def wrapped_sync(**kwargs: Any) -> Any:  # 同步入口（真函数）
             env = _call_sync(fn, cache, args_schema, wait_s, result_schema, **kwargs)  # 主路由
-            return to_content_and_artifact(env, render(env))  # 同上
+            return to_content_and_artifact(env, _view(env))  # 同上
 
         common = {  # 公共参数
             "name": fn.__name__,  # 名 = 函数名
@@ -226,6 +260,8 @@ def tool_spec(  # 工具范式装饰器
             "permissions": tuple(permissions),  # 权限
             "result_schema": result_schema,  # 结果契约
             "timeout_ms": int(timeout_ms),  # 工具超时
+            "error_schema": error_schema,  # 错误契约
+            "examples": tuple(examples),  # 正反示例
         }  # 项目元数据结束
         tool.metadata = existing  # 写回（BaseTool.metadata 是合法 pydantic 字段）
         return tool  # 返回工具

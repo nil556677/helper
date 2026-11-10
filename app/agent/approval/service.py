@@ -2,7 +2,6 @@
 
 from __future__ import annotations  # 延迟值注解
 
-import json  # 解析参数
 from typing import Any  # 任意值
 
 from app.agent.approval import repository  # 仓储
@@ -33,11 +32,19 @@ def expire_all() -> list[str]:  # 超时扫描
 
 
 async def execute_approved(request_id: str, *, registry: dict[str, Any] | None = None) -> dict[str, Any]:  # 批准后执行
-    """仅 approved 且未执行过才执行工具（幂等）；拒绝/超时/已执行 → 不执行。"""
+    """仅 approved 且未执行过才执行工具（幂等）；拒绝/超时/已执行 → 不执行。
+
+    执行参数优先取决策时人工编辑过的 `edited_args`（人类审批可能已校正参数），否则用
+    `args_redacted`（创建时快照，含执行所需真实参数）。执行前对能拿到 args_schema 的
+    工具做一次 schema 复核（best-effort：拿不到 schema 就跳过），避免用过期/非法参数执行。
+    """
+    import json as _json  # 解析参数 JSON
+
+    from app.agent.gateway.redact import redact_args  # 审计脱敏视图（读侧不打到执行参数）
     from app.agent.tools.catalog import tool_catalog  # 工具目录
     from app.agent.tools.wiring import unwrap_tool_output  # 还原包络
 
-    row = repository.get_request(request_id)  # 取请求
+    row = repository.get_request(request_id)  # 取请求（含 edited_args）
     if row is None:  # 不存在
         return {"executed": False, "reason": "not_found"}  # 返回
     if str(row.get("status") or "") != "approved":  # 非批准
@@ -48,12 +55,43 @@ async def execute_approved(request_id: str, *, registry: dict[str, Any] | None =
     tool = tools.get(str(row.get("tool_name") or ""))  # 取工具
     if tool is None:  # 工具不存在
         return {"executed": False, "reason": "tool_missing"}  # 返回
+    try:  # 解析并复核参数
+        edited = row.get("edited_args")  # 人工编辑（JSON 文本或 None）
+        base = edited if edited not in (None, "") else (row.get("args_redacted") or "{}")  # 优先人工编辑，否则创建快照
+        args = _json.loads(base) if isinstance(base, str) else dict(base or {})  # 解析成 dict
+        args = dict(args or {})  # 归一为 dict
+        _precheck_args(tool, args, request_id)  # 执行前 schema 复核（最佳努力）
+    except Exception as exc:  # 复核失败（含参数非法）
+        repository.insert_audit(request_id, "execute_blocked", "system", {"error": str(exc)})  # 审计：被拒
+        return {"executed": False, "reason": str(exc)}  # 不执行（返回原因）
     try:  # 执行
-        args = json.loads(str(row.get("args_redacted") or "{}"))  # 参数
-        envelope = await tool.ainvoke(args)  # 调工具
+        envelope = await tool.ainvoke(args)  # 调工具（真实参数）
         out = unwrap_tool_output(envelope)  # 还原
-        repository.insert_audit(request_id, "executed", "system", {"ok": bool(getattr(out, "ok", False))})  # 审计
+        # 审计明细只留脱敏参数视图（真实参数不落明细，降低 PII 扩散）。
+        repository.insert_audit(  # 记录一次执行
+            request_id, "executed", "system",  # 事件/操作者
+            {"ok": bool(getattr(out, "ok", False)), "redacted_args": redact_args(args)},  # 状态 + 脱敏视图
+        )  # 结束
         return {"executed": True, "ok": bool(getattr(out, "ok", False)), "data": getattr(out, "data", None)}  # 结果
     except Exception as exc:  # 失败
         repository.insert_audit(request_id, "execute_failed", "system", {"error": str(exc)})  # 审计
         return {"executed": False, "reason": str(exc)}  # 返回
+
+
+def _precheck_args(tool: Any, args: dict[str, Any], request_id: str) -> None:  # 执行前参数复核
+    """用工具描述符的 args_schema 校验参数（best-effort）。
+
+    拿不到 schema（如测试的假工具/未声明契约）就直接放行，不阻断执行；拿到就严格校验，
+    参数非法抛异常，由 execute_approved 捕获并按"执行被拒"处理。附带契约 version 只在
+    有 version 字段时参考（当前只校验参数形状）。
+    """
+    try:  # 取描述符（可能无 metadata/schema）
+        from app.agent.tools.wiring import describe  # 描述符
+        desc = describe(tool)  # 读契约
+        schema = desc.args_schema  # 参数契约
+    except Exception:  # 描述符取不到
+        return  # 跳过复核（放行）
+    if schema is None:  # 未声明参数契约
+        return  # 跳过
+    if isinstance(schema, type) and hasattr(schema, "model_validate"):  # pydantic 模型
+        schema.model_validate(args)  # 参数非法会抛（由调用方捕获）

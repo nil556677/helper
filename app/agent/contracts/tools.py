@@ -32,6 +32,8 @@ class ToolDescriptor(BaseModel):  # 工具对外契约（描述符）
     risk: Literal["low", "medium", "high"] = "low"  # 风险等级（影响审批超时/可见性）
     permissions: tuple[str, ...] = Field(default_factory=tuple)  # 权限标签
     timeout_ms: int = 5000  # 工具级超时（毫秒；框架执行时可读它做超时）
+    error_schema: type[BaseModel] | dict[str, Any] | None = None  # 错误契约（工具会返回的 code/可重试性）——供模型预判失败形态
+    examples: tuple[str, ...] = Field(default_factory=tuple)  # 正反示例（何时用/何时不用），供工具描述补充
 
 
 class ErrorCode:  # 错误码常量（唯一分类来源）

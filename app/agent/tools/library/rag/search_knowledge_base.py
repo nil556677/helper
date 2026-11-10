@@ -80,6 +80,20 @@ class SearchResultData(BaseModel):  # 结果契约（describe/审计/下游校�
     basis: dict[str, Any] = Field(default_factory=dict)  # 检索依据（计数/档位/路径）
 
 
+def _model_view(data: dict) -> dict:  # 模型视角裁剪（完整 evidence/basis 不进模型上下文）
+    """模型只要已裁剪的编号文本、本次 query/mode 和门限结论；完整 evidence 走审计视角。
+
+    防止「裁剪后的 model_view 与完整原文证据双份灌进模型上下文」——模型只见收敛摘要，
+    结构化 evidence/basis 仍留在互 data 里供 _collect_evidence / 审计取用。
+    """
+    return {  # 裁剪后的模型视图
+        "query": str(data.get("query") or ""),  # 本次查询
+        "mode": str(data.get("mode") or "fast"),  # 检索强度
+        "model_view": str(data.get("model_view") or ""),  # 已裁剪的编号文本（唯一正文）
+        "gate_decision": str((data.get("gate") or {}).get("decision") or ""),  # 门限结论（pass/weak/reject）
+    }  # 返回
+
+
 @tool_spec(  # 统一范式 + 10 分钟幂等缓存
     description=(  # 能力说明（一个工具、一个描述）
         "在本地知识库检索资料并返回带 [编号] 的命中片段。"
@@ -90,6 +104,7 @@ class SearchResultData(BaseModel):  # 结果契约（describe/审计/下游校�
     result_schema=SearchResultData,  # 结果契约
     ttl=600.0,  # 同参 10 分钟内幂等
     timeout_ms=8000,  # 检索可能较慢，给到 8 秒
+    model_view=_model_view,  # 模型只看裁剪视图（收敛正文 + 门限结论），完整证据走审计
 )  # 装饰结束
 async def search_knowledge_base(query: str, mode: str = "fast", top_k: int = 0):  # 异步纯函数（返回 data）
     """成功返回固定 data；检索失败抛给 tool_spec 转带内可重试。"""

@@ -16,12 +16,33 @@ from langgraph.prebuilt import ToolNode  # 工具执行
 from langgraph.types import interrupt  # 审批暂停（恢复模式）
 
 from app.agent.react.policies.approval import should_require_approval  # 审批策略
+from app.agent.react.policies.limits import MAX_PER_TOOL  # 单工具失败熔断阈值
 from app.agent.tools.wiring import describe  # 工具描述符（读 approval）
 
 __all__ = ["ReactState", "approval_stats", "build_react"]  # 导出
 
 #: 进程级审批计数（观测用）。
 _approval_stats: dict[str, int] = {"blocked": 0, "created": 0}  # 计数
+
+
+def _circuit_blocked_names(state: ReactState) -> set[str]:  # 已触发熔断的工具名
+    """统计消息历史里各工具失败的 ToolMessage 次数，≥ MAX_PER_TOOL 视为熔断。
+
+    用 `ToolMessage.status != "success"` 判定失败（与兜底 agent._message 判定一致）。
+    熔断后即拦截该工具，避免模型对它反复失败调用烧 token / 打后端。
+    """
+    counts: dict[str, int] = {}  # 工具 → 失败次数
+    for msg in state.get("messages") or []:  # 逐条消息
+        if not isinstance(msg, ToolMessage):  # 只看工具结果
+            continue  # 跳过
+        name = str(getattr(msg, "name", "") or "")  # 工具名
+        if not name:  # 无名
+            continue  # 跳过
+        st = getattr(msg, "status", None)  # 状态
+        failed = bool(st and str(st) != "success")  # 非 success 即失败
+        if failed:  # 失败
+            counts[name] = counts.get(name, 0) + 1  # 计数
+    return {name for name, c in counts.items() if c >= MAX_PER_TOOL}  # 达标即熔断
 
 
 def approval_stats() -> dict[str, int]:  # 审批统计
@@ -86,13 +107,29 @@ def build_react(  # 构造自定义 ReAct 图
             return {"approval_checked": False}  # 复位，下一轮再判
         call = (state.get("messages") or [])[-1]  # 末尾模型（带 tool_calls）
         need: list[Any] = []  # 需审批的调用
+        fused: list[Any] = []  # 已熔断、本次拦截不执行的调用
+        blocked_names = _circuit_blocked_names(state)  # 已熔断的工具名
         for tc in getattr(call, "tool_calls", None) or []:  # 逐个调用
             tool = next((t for t in tools if t.name == tc.get("name")), None)  # 找工具
             if tool is None:  # 未知工具
                 continue  # 跳过
+            if str(tc.get("name") or "") in blocked_names:  # 该工具已熔断
+                fused.append(tc)  # 拦下不再执行
+                continue  # 不往下判审批
             want, _reason = should_require_approval(describe(tool), args=tc.get("args") or {})  # 判定
             if want:  # 需审
                 need.append(tc)  # 记
+        if fused:  # 有熔断拦截：回模型说明，本轮不执行这些工具
+            fused_msgs: list[Any] = []  # 熔断消息
+            for tc in fused:  # 逐调用
+                fused_msgs.append(  # 生成 ToolMessage（不执行）
+                    ToolMessage(
+                        content=f"工具 {tc.get('name')} 已连续失败多次，已熔断暂停使用；请换一种方式或说明结果。",
+                        tool_call_id=str(tc.get("id") or ""),
+                        name=str(tc.get("name") or ""),
+                    )
+                )  # 追加
+            return {"messages": fused_msgs, "approval_checked": True, "status": "running"}  # 回模型
         if not need:  # 无审批需求 → 直通 tools
             return {"approval_checked": True}  # 放行
         # 需审批：先落表(best-effort)，再按模式阻断或暂停
@@ -108,6 +145,8 @@ def build_react(  # 构造自定义 ReAct 图
                     tenant_id=str(state.get("tenant_id") or "default"),  # 租户
                     requester_id=str(state.get("requester_id") or "user"),  # 发起
                     tool_name=str(tc.get("name") or ""),  # 工具
+                    # args_redacted 存执行所需的真实参数（批准后 execute_approved 用它真跑）；
+                    # 对外的展示/审计需脱敏时由 app.agent.gateway.redact 在读侧处理。
                     args_redacted=dict(tc.get("args") or {}),  # 参数
                     resource_summary=f"需要审批：{tc.get('name')}",  # 摘要
                     mutation="read_only",  # 变更画像

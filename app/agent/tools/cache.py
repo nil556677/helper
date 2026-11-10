@@ -45,6 +45,22 @@ class TtlCache:  # 单调时间 TTL + LRU 缓存
             value = item[1]  # 命中值
         return copy.deepcopy(value)  # 深拷贝防外部改动
 
+    def contains(self, key: tuple) -> bool:  # 键是否已存（含合法空值）
+        """存在且未过期即 True，与缓存里存的值是否为空/None 无关。
+
+        调用方用它区分「存了合法空结果（如 data=None）」与「根本没存过」，避免把
+        None/空串这类合法返回误判为未命中而反复穿透后端。
+        """
+        now = time.monotonic()  # 当前单调钟
+        with self._lock:  # 加锁
+            item = self._store.get(key)  # 查表
+            if item is None:  # 从未放
+                return False  # 非命中
+            if now > item[0]:  # 已过期
+                self._store.pop(key, None)  # 顺手清掉
+                return False  # 非命中
+            return True  # 存在且未过期
+
     def set(  # 存
         self,  # 实例
         key: tuple,  # 键

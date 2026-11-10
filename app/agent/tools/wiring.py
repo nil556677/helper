@@ -98,6 +98,8 @@ def describe(  # 生成工具元数据描述符
         risk=str(meta.get("risk") or "low"),  # 风险等级（tool_spec 声明）
         permissions=tuple(permissions) if permissions is not None else tuple(meta.get("permissions") or ()),  # 权限
         timeout_ms=int(meta.get("timeout_ms", 5000)),  # 工具级超时（tool_spec 声明）
+        error_schema=meta.get("error_schema"),  # 错误契约（tool_spec 声明）
+        examples=tuple(meta.get("examples") or ()),  # 正反示例（tool_spec 声明）
     )  # 描述符结束
 
 
@@ -148,17 +150,33 @@ def to_content_and_artifact(  # 拆分模型视角与审计视角
 
 
 def render(env: Result) -> str:  # 把统一 Result 转成给模型的 JSON 文本
-    """模型视角：成功只给 `data`，失败只给 `{code,message,retryable}`（不再带缓存等框架字段）。"""
-    if env.ok:  # 成功
-        import json  # 只在需要时导入
+    """模型视角：成功只给 `data`，失败只给 `{code,message,retryable}`（不再带缓存等框架字段）。
 
-        return json.dumps(env.data, ensure_ascii=False, default=str)  # 只暴露数据
+    序列化后做**字符硬上限**截断（`RENDER_MAX_CHARS`）：防止某工具未来返回超大 data
+    一次性撑爆模型上下文。超限的尾部被截断并追加提示（当前各工具返回较小，不触发；
+    作为面向未来的上下文护栏）。
+    """
     import json  # 只在需要时导入
 
-    return json.dumps(  # 错误给模型可读的最小信息
-        {"code": env.code, "message": env.message, "retryable": env.retryable},  # 错误三要素
-        ensure_ascii=False,  # 中文直出
-    )  # 返回
+    if env.ok:  # 成功
+        text = json.dumps(env.data, ensure_ascii=False, default=str)  # 只暴露数据
+    else:  # 失败
+        text = json.dumps(  # 错误给模型可读的最小信息
+            {"code": env.code, "message": env.message, "retryable": env.retryable},  # 错误三要素
+            ensure_ascii=False,  # 中文直出
+        )  # 返回
+    return _clip(text)  # 超限截断
+
+
+#: 模型视角单条上限（字符）：超过即截断，防止大 data 撑爆上下文。
+RENDER_MAX_CHARS = 20000  # 字符
+
+
+def _clip(text: str) -> str:  # 超限截断
+    """超长则保留头部并追加提示；未超原样返回。"""
+    if len(text) <= RENDER_MAX_CHARS:  # 未超限
+        return text  # 原样
+    return text[:RENDER_MAX_CHARS] + "…(结果过长已截断，节约上下文预算)"  # 截断 + 提示
 
 
 def unwrap_tool_output(value: Any) -> Result:  # 程序化调用还原完整 Result
