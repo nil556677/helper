@@ -88,33 +88,69 @@ def _span_json(span: Any) -> None:  # 该步全量 JSON（弹窗）
     dlg.open()  # 打开
 
 
-def _draw_waterfall(spans: list[Any]) -> None:  # 执行瀑布
-    """横向时间条：宽度 ∝ 耗时、起点按时间对齐、颜色按类型；点 JSON 看该步。"""
+def _span_payload(span: Any) -> dict[str, Any]:  # span 的可展示内容（永不空）
+    """优先 output_json；空就回退 name/kind/status/duration + 原始 input/output。"""
+    try:  # 解析输出
+        out = json.loads(span.output_json or "{}")  # 输出
+    except Exception:  # 坏 JSON
+        out = {"_raw": str(span.output_json or "")}  # 原样
+    try:  # 解析输入
+        inp = json.loads(span.input_json or "{}")  # 输入
+    except Exception:  # 坏 JSON
+        inp = {"_raw": str(span.input_json or "")}  # 原样
+    return {  # 统一结构
+        "name": span.name,  # 名
+        "kind": span.kind,  # 类型
+        "status": span.status,  # 状态
+        "duration_ms": span.duration_ms,  # 耗时
+        "input": inp,  # 输入
+        "output": out,  # 输出
+    }  # 返回
+
+
+def _render_span_detail(box: Any, span: Any) -> None:  # 右栏：某一步详情
+    box.clear()  # 清
+    with box:  # 画
+        ui.label(str(span.name or "—")).classes("hp-card-title")  # 名
+        ui.label(f"{span.kind} · {span.status} · {_ms(span.duration_ms)}").classes("hp-field-help")  # 元
+        ui.code(  # JSON
+            json.dumps(_span_payload(span), ensure_ascii=False, indent=2),  # 内容
+            language="json",  # 高亮
+        ).classes("w-full q-pa-sm")  # 样式
+
+
+def _draw_waterfall(spans: list[Any], detail_box: Any) -> None:  # 执行瀑布（左列表 + 右详情）
+    """左：横条 ∝ 耗时、按类型配色；点一行 → 右栏显示该步完整 JSON。"""
     if not spans:  # 无
-        return  # 跳过
-    ordered = sorted(spans, key=lambda s: float(s.started_at or 0))  # 按时间排
+        with detail_box:  # 空态
+            ui.label("本轮没有执行步骤数据。").classes("hp-field-help")  # 提示
+        return  # 结束
+    ordered = sorted(spans, key=lambda s: float(s.started_at or 0))  # 按时间
     start, end = _span_scale(ordered)  # 区间
     total = max(1e-6, end - start)  # 总时长
-    with ui.expansion(f"执行瀑布（{len(ordered)} 段）· 横条 ∝ 耗时", icon="timeline", value=True).classes("w-full hp-sources"):
+    with ui.column().classes("w-full gap-1").style("max-height: 52vh; overflow: auto;"):  # 左栏
         for span in ordered:  # 逐段
             dur = float(span.duration_ms or 0) / 1000  # 秒
             left = (float(span.started_at or 0) - start) / total * 100.0  # 起点 %
-            width = max(0.5, dur / total * 100.0)  # 宽度 %
-            color = _KIND_COLOR.get(span.kind or "", "#9ca3af")  # 类型色
-            with ui.row().classes("w-full items-center gap-2 no-wrap"):  # 一行
-                ui.label(str(span.kind or "—")).classes("hp-field-help").style("width: 52px;")  # 类型
-                ui.label(str(span.name or "—")).classes("hp-field-name").style(  # 名
-                    "width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            width = max(0.6, dur / total * 100.0)  # 宽 %
+            color = _KIND_COLOR.get(span.kind or "", "#9ca3af")  # 色
+            row = ui.row().classes("w-full items-center gap-2 no-wrap hp-row-item px-1").style(  # 行
+                "cursor: pointer; min-height: 26px;"
+            )  # 行
+            with row:  # 内容
+                ui.label(str(span.name or "—")).classes("hp-field-help").style(  # 名
+                    "width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
                 )  # 名
                 with ui.element("div").classes("flex-1").style(  # 轨道
-                    "height: 12px; background: #e5e7eb; border-radius: 3px; position: relative;"
+                    "height: 10px; background: #e5e7eb; border-radius: 3px; position: relative;"
                 ):  # 轨道
-                    ui.element("div").style(  # 条（style 只能传一个字符串，拼接）
-                        f"height: 12px; border-radius: 3px; background: {color}; "
+                    ui.element("div").style(  # 条
+                        f"height: 10px; border-radius: 3px; background: {color}; "
                         f"position: absolute; left: {left:.1f}%; width: {width:.1f}%;"
                     )  # 条
-                ui.label(_ms(span.duration_ms)).classes("hp-field-help").style("width: 60px;")  # 耗时
-                ui.button("JSON", on_click=lambda _, s=span: _span_json(s)).props("flat dense no-caps")  # 该步 JSON
+                ui.label(_ms(span.duration_ms)).classes("hp-field-help").style("width: 58px;")  # 耗时
+            row.on("click", lambda _=None, s=span: _render_span_detail(detail_box, s))  # 点行看详情
+    _render_span_detail(detail_box, ordered[0])  # 默认展示第一段
 
 
 #: 决策链各阶段的人话标签。
@@ -225,7 +261,14 @@ def _detail(run_id: str) -> None:  # 详情弹窗
                 )  # 输入+输出
                 _kpi_tile(str(len(view.hits)), "命中")  # 命中数
                 _kpi_tile(str(len(view.spans)), "节点")  # 时间线段数
-            _draw_waterfall(view.spans)  # 执行瀑布
+            if view.spans:  # 执行瀑布：左条 / 右该步详情
+                with ui.row().classes("w-full gap-3 no-wrap items-start"):  # 两栏
+                    wf_left = ui.column().classes("flex-1 gap-1").style("min-width: 420px;")  # 左栏
+                    wf_right = ui.column().classes("flex-1 gap-1").style("min-width: 380px;")  # 右栏
+                with wf_left:  # 左：瀑布列表
+                    _draw_waterfall(view.spans, wf_right)  # 画（点行更新右栏）
+            else:  # 没有步骤
+                ui.label("本轮没有执行步骤数据（可能刚创建或未落 span）。").classes("hp-field-help")  # 兜底
             if run.normalized_query or run.rewritten_query:  # 有查询归一/改写
                 ui.label(  # 查询链
                     f"查询：{run.normalized_query or run.question}"  # 归一
@@ -288,19 +331,6 @@ def _detail(run_id: str) -> None:  # 详情弹窗
             if not (view.spans or view.hits or view.events or run.answer):  # 什么都没有
                 ui.label("这一轮没有留下过程数据（可能刚创建或已被清理）。").classes("hp-field-help")  # 兜底
 
-            if view.spans:  # 时间线
-                with ui.expansion(f"时间线（{len(view.spans)} 段）", icon="timeline").classes("w-full hp-sources"):
-                    for span in view.spans:  # 逐段
-                        with ui.row().classes("w-full items-center gap-2 no-wrap"):  # 一行
-                            ui.label(span.name or "—").classes("hp-field-name").style("width: 168px;")  # 名字
-                            ui.label(_ms(span.duration_ms)).classes("hp-field-help").style("width: 68px;")  # 耗时
-                            ui.label(span.status).classes("hp-field-help").style("width: 60px;")  # 状态
-                            ui.space()  # 撑开
-                            if span.output_json and span.output_json != "{}":  # 有输出摘要
-                                ui.label(span.output_json[:140]).classes("hp-field-help").style(
-                                    "flex: 1; overflow: hidden; text-overflow: ellipsis;"
-                                )  # 摘要
-
             if view.hits:  # 命中
                 with ui.expansion(f"命中（{len(view.hits)} 条）", icon="search").classes("w-full hp-sources"):
                     for hit in view.hits:  # 逐条
@@ -331,7 +361,7 @@ def _detail(run_id: str) -> None:  # 详情弹窗
                 )  # 弱化
                 ui.button("关闭", on_click=close).props("flat dense no-caps")  # 关闭
 
-    dialog, _close = custom(title="检索追踪 · 详情", content=_body, width="760px")  # 统一壳（放宽宽度）
+    dialog, _close = custom(title="检索追踪 · 详情", content=_body, width="1080px")  # 统一壳（加宽，瀑布两栏）
     dialog.open()  # custom() 只建壳，不自动打开
 
 
