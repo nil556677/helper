@@ -1,6 +1,6 @@
 """L3 分诊节点：读 L1/L2 产物 → 写 `triage`（统一执行计划）。"""
 
-from __future__ import annotations  # 延迟求值注解
+from langchain_core.runnables import RunnableConfig  # 节点 config 类型（LangGraph）
 
 from typing import Any  # 任意值
 
@@ -31,7 +31,7 @@ def _flags_of(state: dict[str, Any]) -> dict[str, Any]:  # 取 flags
     return {}  # 空
 
 
-def triage_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
+def triage_node(state: dict[str, Any], config: RunnableConfig | None = None) -> dict[str, Any]:  # 图节点
     """零 LLM：短路 + 意图判定 → TriageDecision；条件边直读本对象。"""
     del config  # 不用图配置
     pre = state.get("preprocessed") or {}  # 预处理

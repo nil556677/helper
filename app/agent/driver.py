@@ -57,7 +57,14 @@ def _mark_cancelled(ctx: RunContext) -> None:  # 收敛到取消终态
         ctx.transition(RunEvent.CANCEL_ACK)  # 进入 CANCELLED
 
 
-async def _persist(ctx: RunContext, question: str, answer: str) -> None:  # 落库（异步优先）
+async def _persist(  # 落库（异步优先）
+    ctx: RunContext,  # 运行上下文
+    question: str,  # 问题
+    answer: str,  # 已产出内容（失败/取消时可能是部分答案）
+    *,  # 仅关键字
+    note: str = "",  # 说明（失败/取消给"已停止"等，不再硬编码空串）
+    note_kind: str = "plain",  # 说明样式
+) -> None:  # 无返回
     """取消/失败也落一轮；ctx 挂了 AsyncDB 就异步落库（单一异步写者），否则同步。"""
     from app.agent.persist import persist_turn, persist_turn_async  # 落库
 
@@ -67,8 +74,9 @@ async def _persist(ctx: RunContext, question: str, answer: str) -> None:  # 落�
             conversation_id=ctx.conversation_id,
             question=question,
             answer=answer,
-            note="",
-            fragments=[],
+            note=note,  # 说明（带"已停止/中断"等文案）
+            note_kind=note_kind,  # 样式
+            fragments=[],  # 中断无引用
         )  # 结束
     else:  # 同步回退
         persist_turn(
@@ -76,8 +84,9 @@ async def _persist(ctx: RunContext, question: str, answer: str) -> None:  # 落�
             conversation_id=ctx.conversation_id,
             question=question,
             answer=answer,
-            note="",
-            fragments=[],
+            note=note,  # 说明
+            note_kind=note_kind,  # 样式
+            fragments=[],  # 中断无引用
         )  # 结束
 
 
@@ -145,62 +154,60 @@ def _route_json(state: dict[str, Any]) -> str:  # 真实路由 JSON(不再写死
     return '{"mode": "none"}'  # 都没有 → 未知
 
 
-def _update_trace(ctx: RunContext, state: dict[str, Any]) -> None:  # 补 trace 摘要
+def _trace_payload(ctx: RunContext, state: dict[str, Any]) -> dict[str, Any]:  # 计算 trace 统一载荷（同步/异步共用）
+    """同步与异步 trace 只拼这一份载荷，避免双写漂移（单一来源）。"""
+    usage = dict(state.get("usage") or {})  # 用量（只读 state）
+    gate = dict(state.get("gate") or {})  # 门限（只读 state）
+    basis = dict(state.get("basis") or {})  # 依据（只读 state）
+    status = str(state.get("status") or ctx.machine.state.value)  # 终态
+    metadata = {  # 元数据（E 的对账会用）
+        "turn_id": str(state.get("turn_id") or ctx.turn_id),  # 轮次 id
+        "status": status,  # 运行状态
+        "attempt": int(state.get("attempt") or 1),  # 尝试次数
+        "usage": usage,  # 用量
+        "gate": gate,  # 门限判决
+        "basis": basis,  # 检索依据
+        "tools": _tools_summary(ctx),  # 工具调用汇总（可观测）
+        "metrics": _metrics_of(ctx, state),  # 指标汇总（可观测）
+        "decisions": _decision_chain(state),  # 决策链（排障）
+        "steps": list(ctx.step_records),  # 逐步骤（节点做了什么）
+    }  # 元数据结束
+    return {  # 统一载荷
+        "route_json": _route_json(state),  # 真实路由
+        "answer": str(state.get("answer") or ctx.partial_answer),  # 已生成
+        "ttft_ms": ctx.first_token_ms or 0,  # 首 token
+        "metadata_json": json.dumps(metadata, ensure_ascii=False),  # 元数据
+    }  # 返回
+
+
+def _update_trace(ctx: RunContext, state: dict[str, Any]) -> None:  # 补 trace 摘要（同步）
     """补 run 级汇总：route/answer/model/TTFT + 元数据；优先读最终 state（E3）。"""
     with contextlib.suppress(Exception):  # trace 失败不影响
-        usage = dict(state.get("usage") or {})  # 用量（只读 state）
-        gate = dict(state.get("gate") or {})  # 门限（只读 state）
-        basis = dict(state.get("basis") or {})  # 依据（只读 state）
-        status = str(state.get("status") or ctx.machine.state.value)  # 终态
-        metadata = {  # 元数据（E 的对账会用）
-            "turn_id": str(state.get("turn_id") or ctx.turn_id),  # 轮次 id
-            "status": status,  # 运行状态
-            "attempt": int(state.get("attempt") or 1),  # 尝试次数
-            "usage": usage,  # 用量
-            "gate": gate,  # 门限判决
-            "basis": basis,  # 检索依据
-            "tools": _tools_summary(ctx),  # 工具调用汇总（可观测）
-            "metrics": _metrics_of(ctx, state),  # 指标汇总（可观测）
-            "decisions": _decision_chain(state),  # 决策链（排障）
-            "steps": list(ctx.step_records),  # 逐步骤（节点做了什么）
-        }  # 元数据结束
+        payload = _trace_payload(ctx, state)  # 统一载荷
         trace_store.update_run(  # 写
             ctx.run_id,  # run
-            route_json=_route_json(state),  # 真实路由
-            answer=str(state.get("answer") or ctx.partial_answer),  # 已生成
+            route_json=payload["route_json"],  # 真实路由
+            answer=payload["answer"],  # 已生成
             model="llm",  # 模型槽位
-            ttft_ms=ctx.first_token_ms or 0,  # 首 token
-            metadata_json=json.dumps(metadata, ensure_ascii=False),  # 元数据
+            ttft_ms=payload["ttft_ms"],  # 首 token
+            metadata_json=payload["metadata_json"],  # 元数据
         )  # 写结束
 
 
-async def _update_trace_async(ctx: RunContext, state: dict[str, Any]) -> None:  # 补 trace（异步）
-    """与 ``_update_trace`` 同内容，经 ``ctx.db`` 异步写（单一异步写者）。"""
+async def _update_trace_async(ctx: RunContext, state: dict[str, Any]) -> None:  # 补 trace 摘要（异步）
+    """与 `_update_trace` 同内容，经 `ctx.db` 异步写（单一异步写者）。"""
     with contextlib.suppress(Exception):  # trace 失败不影响
-        usage = dict(state.get("usage") or {})  # 用量（只读 state）
-        gate = dict(state.get("gate") or {})  # 门限（只读 state）
-        basis = dict(state.get("basis") or {})  # 依据（只读 state）
-        status = str(state.get("status") or ctx.machine.state.value)  # 终态
-        metadata = {  # 元数据
-            "turn_id": str(state.get("turn_id") or ctx.turn_id),  # 轮次 id
-            "status": status,  # 状态
-            "attempt": int(state.get("attempt") or 1),  # 尝试
-            "usage": usage,  # 用量
-            "gate": gate,  # 门限
-            "basis": basis,  # 依据
-            "decisions": _decision_chain(state),  # 决策链（排障）
-            "steps": list(ctx.step_records),  # 逐步骤（节点做了什么）
-        }  # 结束
+        payload = _trace_payload(ctx, state)  # 统一载荷
         from app.core.trace import store as _store  # 异步写
 
         await _store.update_run_async(  # 异步写
             ctx.db,  # 异步连接
             ctx.run_id,  # run
-            route_json=_route_json(state),  # 真实路由
-            answer=str(state.get("answer") or ctx.partial_answer),  # 已生成
+            route_json=payload["route_json"],  # 真实路由
+            answer=payload["answer"],  # 已生成
             model="llm",  # 模型槽位
-            ttft_ms=ctx.first_token_ms or 0,  # 首 token
-            metadata_json=json.dumps(metadata, ensure_ascii=False),  # 元数据
+            ttft_ms=payload["ttft_ms"],  # 首 token
+            metadata_json=payload["metadata_json"],  # 元数据
         )  # 写结束
 
 
@@ -299,11 +306,12 @@ async def _run_graph(  # 跑父图并驱动状态机
                     ctx.transition(event)  # driver 统一驱动迁移（发 state 事件）
         else:  # values：完整状态快照
             final_state = dict(chunk)  # 收敛为最新（reducer 已合并）
-    # 非流式图（dispatch/general/兜底）不产出 DELTA：收尾前把最终答案/引用/说明补发给前端
+    # 收尾下发：正文 REPLACE 只在"非流式"时补；引用/说明与是否流式无关，DONE 即发
     answer = str(final_state.get("answer") or "")  # 最终答案
-    if ctx.machine.state is RunState.DONE and answer and not ctx.partial_answer:  # 没流过字才补
+    if ctx.machine.state is RunState.DONE and answer and not ctx.partial_answer:  # 没流过字才整段补
         emit(events.replace(answer))  # 整段下发（UI 会替换正文区）
         ctx.partial_answer = answer  # 记为已产出（落库/对账共用）
+    if ctx.machine.state is RunState.DONE:  # 引用/说明：流式与否都要发（流式时正文走 DELTA）
         fragments = [item for item in (final_state.get("fragments") or []) if isinstance(item, dict)]  # 引用
         if fragments:  # 有引用
             emit(events.citation(fragments))  # 引用事件
@@ -375,13 +383,13 @@ async def drive(  # 驱动图
         except RunCancelled:  # 用户取消
             session.set_status("cancelled")  # trace
             _mark_cancelled(ctx)  # 收敛状态
-            await _persist(ctx, question, ctx.partial_answer)  # 保存部分
+            await _persist(ctx, question, ctx.partial_answer, note="已停止生成。")  # 保留部分 + 说明
             emit(events.cancelled("user"))  # 事件
             status = "cancelled"  # 终态
         except asyncio.CancelledError:  # 任务被取消
             session.set_status("cancelled")  # trace
             _mark_cancelled(ctx)  # 收敛状态
-            await _persist(ctx, question, ctx.partial_answer)  # 保存部分
+            await _persist(ctx, question, ctx.partial_answer, note="生成已中断。")  # 保留部分 + 说明
             emit(events.cancelled("task"))  # 事件
             status = "cancelled"  # 终态
         except GraphRecursionError as exc:  # 工具循环超限
@@ -390,7 +398,7 @@ async def drive(  # 驱动图
             if ctx.machine.can(RunEvent.FAIL):  # 可迁移
                 ctx.transition(RunEvent.FAIL, reason="recursion_limit")  # 失败
             emit(events.error("recursion_limit", "工具循环超过上限，已停止。", "run"))  # 事件
-            await _persist(ctx, question, ctx.partial_answer)  # 保存部分
+            await _persist(ctx, question, ctx.partial_answer, note="工具循环超过上限，已停止。")  # 保存部分
             status = "failed"  # 终态
             error = exc  # 错误
         except Exception as exc:  # 其他失败
@@ -399,7 +407,7 @@ async def drive(  # 驱动图
             if ctx.machine.can(RunEvent.FAIL):  # 可迁移
                 ctx.transition(RunEvent.FAIL, reason=str(exc)[:120])  # 失败
             emit(events.error("run_failed", str(exc)[:300], "run"))  # 事件
-            await _persist(ctx, question, ctx.partial_answer)  # 保存部分
+            await _persist(ctx, question, ctx.partial_answer, note="生成失败，以上为已生成的内容。")  # 保存部分
             status = "failed"  # 终态
             error = exc  # 错误
         finally:  # 中间件收尾

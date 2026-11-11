@@ -14,8 +14,10 @@ def test_confidence_bands() -> None:  # 三态置信度
     assert 0.0 <= confidence_of(None) <= 1.0  # 空也安全
 
 
-def test_should_enhance() -> None:  # 低置信才增强
-    assert should_enhance({"decision": "reject"}) is True  # reject → 增强
+def test_should_enhance() -> None:  # 低置信才增强；reject/无证据绝不增强
+    assert should_enhance({"decision": "reject"}) is False  # reject → 不增强（改写/HyDE 造不出数据）
+    assert should_enhance({"decision": "reject", "top1": 0.1}) is False  # 无证据 → 不增强
+    assert should_enhance({"decision": "weak", "top1": 0.4}) is True  # 弱但低置信 → 增强
     assert should_enhance({"decision": "pass", "top1": 1.0}) is False  # 高置信 → 不增强
 
 

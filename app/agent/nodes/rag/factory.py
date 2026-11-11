@@ -8,11 +8,11 @@ from app.rag import retrieval  # 纯函数
 
 
 def real_steps() -> RagSteps:  # 真实步骤
-    """质量优先：精排保持开启。"""
+    """质量优先：精排保持开启；关键词走多字段 BM25（字段加权合并）。"""
     return RagSteps(  # 组装
         embed=retrieval.embed_query,  # 查询向量
         dense=retrieval.dense_search,  # 语义召回
-        sparse=retrieval.sparse_search,  # 关键词召回
+        sparse=retrieval.sparse_search_multi_field,  # 多字段关键词召回（字段加权）
         fuse=retrieval.fuse_hits,  # RRF
         backfill=retrieval.backfill,  # 父块回填
         rerank=retrieval.rerank,  # 精排

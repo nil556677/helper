@@ -4,7 +4,7 @@
 命中就直接给目标，跳过规则/语义/LLM 三层路由。判断依据是结构化字段，不是 query 语义。
 """
 
-from __future__ import annotations  # 延迟值注解
+from langchain_core.runnables import RunnableConfig  # 节点 config 类型（LangGraph）
 
 from typing import Any  # 任意值
 
@@ -51,7 +51,7 @@ def _result(**fields: Any) -> dict[str, Any]:  # 包 PreTriageResult
     return PreTriageResult(**fields).model_dump(mode="json")  # 序列化
 
 
-def pretriage_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
+def pretriage_node(state: dict[str, Any], config: RunnableConfig | None = None) -> dict[str, Any]:  # 图节点
     """按结构化字段短路；命中写 `pretriage` 与目标所需字段。"""
     del config  # 不用图配置
     pre = state.get("preprocessed") if isinstance(state.get("preprocessed"), dict) else {}  # 预处理

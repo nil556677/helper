@@ -1,6 +1,6 @@
 """`dispatch_fixed` 节点：按 route 白名单直调工具并模板化成回复（不调 LLM）。"""
 
-from __future__ import annotations  # 延迟求值注解
+from langchain_core.runnables import RunnableConfig  # 节点 config 类型（LangGraph）
 
 from collections.abc import Callable  # 类型
 from typing import Any
@@ -98,7 +98,7 @@ def _format(name: str, data: dict[str, Any]) -> str:  # 模板化回复
 
 
 @bind_node_run
-async def dispatch_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
+async def dispatch_node(state: dict[str, Any], config: RunnableConfig | None = None) -> dict[str, Any]:  # 图节点
     """按 `route` 取白名单工具，直调并模板化；越界/失败给带内说明。"""
     del config  # 不用图配置
     route = state.get("route") or {}  # 决策 JSON

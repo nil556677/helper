@@ -48,6 +48,37 @@ def truncation_count() -> int:
     return _truncated
 
 
+#: 计数字数的分词器（懒加载；只数，不做前向/填充）。
+_COUNT_TOKENIZER = None
+
+
+def _count_tokenizer():
+    """取用于 token 计数的分词器（懒加载一次；失败返回 None 表示不可数）。"""
+    global _COUNT_TOKENIZER
+    if _COUNT_TOKENIZER is None:  # 还没加载
+        try:  # 惰性导入避免环，失败据此走"不可数→原样"
+            from app.core import paths  # 数据目录（取 tokenizer.json 路径）
+
+            _COUNT_TOKENIZER = load(paths.models_dir() / "tokenizer.json")  # 加载计数分词器
+        except Exception:  # 加载失败
+            return None  # 视为不可数
+    return _COUNT_TOKENIZER  # 返回（可能为缓存的分词器）
+
+
+def count_tokens(text: str) -> int:
+    """数一段文本的 token 数（**不触发嵌入、不做截断**；用于检索侧超长预检）。
+
+    返回 0 表示"分词器不可用/空文本"（调用方据此把该文本当作不需要处理或原样放行）。
+    """
+    tokenizer = _count_tokenizer()  # 计数分词器
+    if tokenizer is None:  # 不可用
+        return 0  # 视为无需处理
+    try:  # 编码失败按 0 处理（别让预检阻断检索）
+        return len(tokenizer.encode(str(text or "")).ids)  # token 数
+    except Exception:  # 编码异常
+        return 0  # 兜底
+
+
 def reset_truncation_count() -> None:
     """清零累计（测试用：避免用例之间互相影响）。"""
     global _truncated, _truncated_logged_at

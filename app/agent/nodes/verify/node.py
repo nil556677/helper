@@ -1,6 +1,6 @@
 """L5 校验节点：对最终答案做引用校验 + PII 脱敏，写 `verify`。"""
 
-from __future__ import annotations  # 延迟求值注解
+from langchain_core.runnables import RunnableConfig  # 节点 config 类型（LangGraph）
 
 from typing import Any  # 任意值
 
@@ -12,7 +12,7 @@ __all__ = ["verify_node"]  # 导出
 
 
 @bind_node_run
-def verify_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
+def verify_node(state: dict[str, Any], config: RunnableConfig | None = None) -> dict[str, Any]:  # 图节点
     """校验答案；越界角标删除；覆盖不足给一句说明（不静默）。"""
     del config  # 不用图配置
     answer = str(state.get("answer") or "")  # 答案

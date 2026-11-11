@@ -1,6 +1,6 @@
 """L2 LLM 兜底节点：ambiguous 时补一次轻量意图分类，写 `intent`。"""
 
-from __future__ import annotations  # 延迟求值注解
+from langchain_core.runnables import RunnableConfig  # 节点 config 类型（LangGraph）
 
 from typing import Any, Callable  # 类型
 
@@ -25,7 +25,7 @@ def _model() -> Any | None:  # 取模型（统一走 llm.provider，测试注入
     return get_chat_model()  # 生产走统一入口
 
 
-async def route_llm_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
+async def route_llm_node(state: dict[str, Any], config: RunnableConfig | None = None) -> dict[str, Any]:  # 图节点
     """读语义候选 → 轻量分类 → 写 `intent`；依赖链 LLM 兜底仅窄缝触发。"""
     del config  # 不用图配置
     question = str(state.get("question") or "")  # 问题

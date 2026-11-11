@@ -94,12 +94,27 @@ def _state_context(state: dict[str, Any]) -> Any | None:  # 用 ContextBuilder �
 
 
 def _build_graph(model: Any, prompt: str) -> Any:  # 构造 ReAct 图
-    """模型实例 + 系统提示 → 编译好的自定义 ReAct 图（agent→审批门→tools）。"""
+    """模型实例 + 系统提示 → 编译好的自定义 ReAct 图（agent→审批门→tools）。
+
+    真流式 sink 在这里自建（用 ``current_run()``），不改变 run_react 对外的两参调用，
+    因此测试桩 ``(model, prompt)`` 依然兼容；无 run（单测/独立调用）时退回非流式。
+    """
+    from app.agent.context import current_run  # 当前 run
+    from app.agent.events import delta as delta_event  # 增量事件
     from app.agent.react.graph import build_react  # 自定义图（含审批门）
 
+    token_sink: Any = None  # 默认非流式
+    run = current_run()  # 事件出口（图内 agent 节点发 DELTA 需要）
+    if run is not None:  # 有 UI 消费者才流式
+        def _token_sink(token: str) -> None:  # 逐 token 透传
+            if run.first_token_at is None:  # 还没标首 token
+                run.mark_first_token()  # 记录（修活 ttft 指标）
+            run.partial_answer += token  # 累加部分答案（失败/取消保留、REPLACE 不再重复）
+            run.emit(delta_event(token))  # 发增量给前端（真流式正文）
+        token_sink = _token_sink  # 挂上
     catalog = tool_catalog()  # 工具目录
     tools = [catalog[name] for name in TOOL_NAMES if name in catalog]  # 取 3 工具
-    return build_react(model, tools, prompt)  # 自定义图（审批门内联，当前工具 approval=none 直通）
+    return build_react(model, tools, prompt, token_sink=token_sink)  # 自定义图（审批门内联，当前工具 approval=none 直通）
 
 
 def _format_memory(state: dict[str, Any]) -> str:  # 把对话历史格式成文本
@@ -273,8 +288,8 @@ async def run_react(  # 跑单一 ReAct 兜底
         if ctx_view is not None:  # 装配成功
             messages = [HumanMessage(content=str(item.get("content") or "")) for item in ctx_view.messages if item.get("content")]  # 用 builder messages
             system_prompt = ctx_view.system  # 用 builder system（含 working 锚点）
-    graph = _build_graph(model, system_prompt)  # 图（不缓存））
     run = current_run()  # 事件出口
+    graph = _build_graph(model, system_prompt)  # 图（不缓存）——流式 sink 在 _build_graph 内自建
     if ctx_view is not None and run is not None:  # C5：上下文事件带剪枝/丢弃/缓存前缀
         from app.agent.contexts.assembler import ContextUsage  # 上下文占用
         from app.agent.contexts.budget import Budget  # 预算
@@ -344,12 +359,15 @@ async def run_react(  # 跑单一 ReAct 兜底
     fragments, gate = await _collect_evidence(result.get("messages", []))  # 回收证据
     note = ""  # 说明
     decision = str((gate or {}).get("decision") or "")  # pass/weak/reject
+    searched = bool(gate) or bool(fragments)  # 是否真发起了知识检索（gate 非空才可能 reject）
     if fragments:  # 有引用
         answer = _add_citation_marks(answer, fragments)  # 给模型回答补角标（保持可追溯）
     if decision == "weak" and not _is_question(answer):  # 证据弱
         note = "证据较弱：以上回答请对照引用原文核对。"  # 提示
-    elif decision == "reject" and fragments:  # 门禁判不足
-        note = "资料不足以下结论，请以引用原文为准。"  # 提示
+    elif decision == "reject" and searched:  # 门禁判不足：强制不凭空作答（不假装有据）
+        if not _is_question(answer):  # 别把追问顶掉
+            answer = "本地资料里没找到足够回答这个问题的内容。换个说法试试，或告诉我你想查的方向（时间/天气/本地资料）。"  # 诚实说明（不臆造）
+        note = "未检索到足够依据，已如实说明。"  # 说明（reject 即"不值得依据回答"）
     return {  # 写回父图
         "answer": answer or "已尝试，但未能完成，请换一种方式描述。",  # 兜底话术
         "fallback_used": True,  # 标记

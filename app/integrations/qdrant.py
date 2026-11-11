@@ -62,37 +62,72 @@ def qdrant_client(*, url: str | None = None, api_key: str | None = None) -> Any:
         return _client
 
 
-def ensure_collection(client: Any | None = None, *, dims: int = DENSE_DIMS) -> None:
-    """保证 ``kb_chunks`` 存在（幂等）+ payload 索引。"""
-    client = client or qdrant_client()
+def _wanted_sparse_config() -> dict[str, Any]:  # 期望的稀疏向量配置
+    """单 ``sparse``（兼容旧 store）+ 每字段命名稀疏向量。"""
+    from qdrant_client import models  # 向量参数
+
+    from app.core.sparse import fields as kw_fields  # 字段名
+
+    cfg: dict[str, Any] = {SPARSE: models.SparseVectorParams()}  # 兼容单 sparse
+    for field in kw_fields.INDEX_FIELDS:  # 每个索引字段
+        cfg[kw_fields.sparse_vector_name(field)] = models.SparseVectorParams()  # 命名稀疏
+    return cfg  # 返回
+
+
+def _create_collection_with_indexes(client: Any, *, dims: int) -> None:  # 新建集合 + payload 索引
+    """建 ``kb_chunks``（dense + sparse + 每字段命名稀疏）并建 payload 索引。"""
     from qdrant_client import models
 
-    if client.collection_exists(COLLECTION):
+    client.create_collection(  # 建集合
+        collection_name=COLLECTION,  # 集合
+        vectors_config={  # dense
+            DENSE: models.VectorParams(size=dims, distance=models.Distance.COSINE)  # dense 参数
+        },  # dense 结束
+        sparse_vectors_config=_wanted_sparse_config(),  # 稀疏（single + 每字段）
+    )  # 建集合结束
+    for field, schema in (  # payload 索引
+        ("metadata.doc_id", models.PayloadSchemaType.INTEGER),  # 文档
+        ("metadata.version", models.PayloadSchemaType.INTEGER),  # 版本
+        ("metadata.status", models.PayloadSchemaType.KEYWORD),  # 状态
+        ("metadata.chunk_key", models.PayloadSchemaType.KEYWORD),  # 块键
+        ("metadata.role", models.PayloadSchemaType.KEYWORD),  # 角色
+        ("metadata.fetch_mode", models.PayloadSchemaType.INTEGER),  # 取数模式
+        ("metadata.table_uid", models.PayloadSchemaType.KEYWORD),  # 表
+        ("metadata.row_uid", models.PayloadSchemaType.KEYWORD),  # 行
+        ("metadata.segment_index", models.PayloadSchemaType.INTEGER),  # 段位
+        ("status", models.PayloadSchemaType.KEYWORD),  # 顶层状态
+    ):  # 遍历
+        client.create_payload_index(  # 建索引
+            collection_name=COLLECTION,  # 集合
+            field_name=field,  # 字段
+            field_schema=schema,  # 类型
+        )  # 建索引结束
+
+
+def ensure_collection(client: Any | None = None, *, dims: int = DENSE_DIMS) -> None:
+    """保证 ``kb_chunks`` 具有期望的稀疏向量（幂等）。
+
+    不存在则新建；已存在但缺期望的命名稀疏向量时**重建**（本 Qdrant 版本无法增量加命名
+    稀疏向量）。重建会清空集合数据——多字段升级期的既定行为（数据由部署方重灌）。
+    """
+    client = client or qdrant_client()
+    if not client.collection_exists(COLLECTION):
+        _create_collection_with_indexes(client, dims=dims)  # 新建
         return
-    client.create_collection(
-        collection_name=COLLECTION,
-        vectors_config={
-            DENSE: models.VectorParams(size=dims, distance=models.Distance.COSINE)
-        },
-        sparse_vectors_config={SPARSE: models.SparseVectorParams()},
+    # 已存在：核对稀疏向量是否齐全（本版本 update_collection 不能加命名稀疏 → 缺则重建）
+    existing = client.get_collection(COLLECTION).config.params.sparse_vectors  # 现有稀疏向量
+    existing = existing or {}  # 兼容 None
+    wanted = _wanted_sparse_config()  # 期望
+    missing = {name for name in wanted if str(name) not in existing}  # 缺失的命名向量
+    if not missing:  # 已齐
+        return  # 无事
+    from loguru import logger  # 日志
+
+    logger.warning(  # 留痕
+        "稀疏向量缺 {}，重建集合 {}（旧数据清空，由部署方重灌）", sorted(missing), COLLECTION  # 信息
     )
-    for field, schema in (
-        ("metadata.doc_id", models.PayloadSchemaType.INTEGER),
-        ("metadata.version", models.PayloadSchemaType.INTEGER),
-        ("metadata.status", models.PayloadSchemaType.KEYWORD),
-        ("metadata.chunk_key", models.PayloadSchemaType.KEYWORD),
-        ("metadata.role", models.PayloadSchemaType.KEYWORD),
-        ("metadata.fetch_mode", models.PayloadSchemaType.INTEGER),
-        ("metadata.table_uid", models.PayloadSchemaType.KEYWORD),
-        ("metadata.row_uid", models.PayloadSchemaType.KEYWORD),
-        ("metadata.segment_index", models.PayloadSchemaType.INTEGER),
-        ("status", models.PayloadSchemaType.KEYWORD),
-    ):
-        client.create_payload_index(
-            collection_name=COLLECTION,
-            field_name=field,
-            field_schema=schema,
-        )
+    client.delete_collection(COLLECTION)  # 删（旧数据弃用）
+    _create_collection_with_indexes(client, dims=dims)  # 重建新 schema
 
 
 def build_stores(

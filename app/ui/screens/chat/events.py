@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio  # 打字效果的推进任务
 import time
 from typing import Any
 
@@ -23,6 +24,15 @@ from app.ui.screens.chat.live import (
 )
 from app.ui.screens.chat.state import _RENDER_INTERVAL_S, _alive
 from app.ui.state.chat_model import Fragment, Process, Step, Turn
+
+#: 打字游标。
+_CURSOR = " ▍"  # 出字中的光标
+
+#: 打字速度（每帧推进的字符数）。
+_REVEAL_PER_STEP = 6  # 每步 6 字符
+
+#: 打字步进间隔（秒）。
+_REVEAL_STEP_S = 0.04  # 40ms 一步 → 最快 ~150 字/秒
 
 #: 工具类别 → 人话标题（扩展点：新增工具类别加一行即可）。
 _TOOL_TITLES: dict[str, str] = {
@@ -56,7 +66,11 @@ def _fragment_list(items: list[dict[str, Any]]) -> list[Fragment]:  # 事件转 
 
 
 def _render_answer(view: dict[str, Any], *, force: bool = False) -> None:  # 画答案
-    """合并渲染：最多 20 次/秒；终态用 force 保证最后一帧不丢。"""
+    """合并渲染：最多 20 次/秒；终态用 force 保证最后一帧不丢。
+
+    ``answer_text`` 始终保留**完整**答案（数据与渲染解耦）；显示用 ``answer_shown`` 游标
+    逐字揭示（打字效果），未启用揭示（REPLACE/历史）时游标默认取全长。
+    """
     if not view.get("answer_dirty"):  # 没有新内容
         return  # 跳过
     if view.get("answer_md") is None or not _alive(view):  # 没有可画的 DOM
@@ -65,12 +79,72 @@ def _render_answer(view: dict[str, Any], *, force: bool = False) -> None:  # 画
     now = time.perf_counter()  # 当前时刻
     if not force and now - view.get("answer_at", 0.0) < _RENDER_INTERVAL_S:  # 还没到下一帧
         return  # 先攒着
-    view["answer_md"].content = view["answer_text"] + (  # 累积全文；出字中在末尾加光标
-        " ▍" if view.get("streaming") and view["answer_text"] else ""  # 让用户看到"还在写"
+    full = str(view.get("answer_text") or "")  # 完整答案
+    shown = view.get("answer_shown")  # 已揭示游标
+    if shown is None:  # 未启用揭示（历史/REPLACE）
+        shown = len(full)  # 全显
+    text = full[: int(shown)]  # 只显示前缀
+    view["answer_md"].content = text + (  # 前缀 + 出字光标
+        _CURSOR if view.get("streaming") and text else ""  # 出字中才带光标
     )  # 内容结束
     view["answer_md"].update()  # 下发 DOM
     view["answer_at"] = now  # 记时刻
     view["answer_dirty"] = False  # 清标记
+
+
+def _render_frame(view: dict[str, Any]) -> None:  # 打字效果逐帧渲染（绕过节流，保证流畅）
+    """揭示游标前进时直接更新 DOM（不走 _render_answer 的 20fps 节流）。"""
+    if view.get("answer_md") is None or not _alive(view):  # DOM 没了
+        return  # 停
+    full = str(view.get("answer_text") or "")  # 完整答案
+    shown = int(view.get("answer_shown") or 0)  # 游标
+    text = full[:shown]  # 前缀
+    view["answer_md"].content = text + (  # 前缀 + 光标
+        _CURSOR if view.get("streaming") and text else ""  # 出字中
+    )  # 内容结束
+    view["answer_md"].update()  # 下发
+
+
+async def _typewriter_loop(view: dict[str, Any]) -> None:  # 打字效果后台任务
+    """逐字推进 ``answer_shown`` 直到追平 ``answer_text`` 或出字结束。"""
+    try:  # 任何异常都不能拖垮事件流
+        while _alive(view):  # 视图还活着
+            full = str(view.get("answer_text") or "")  # 目标
+            shown = int(view.get("answer_shown") or 0)  # 当前
+            if shown < len(full):  # 还没追平
+                view["answer_shown"] = min(shown + _REVEAL_PER_STEP, len(full))  # 前进
+                _render_frame(view)  # 画一帧
+                await asyncio.sleep(_REVEAL_STEP_S)  # 等一拍
+            elif view.get("streaming"):  # 追平但还在出字
+                await asyncio.sleep(_REVEAL_STEP_S)  # 等更多 delta
+            else:  # 追平且已出完
+                break  # 收工
+    except Exception:  # 被取消/异常
+        pass  # 静默
+
+
+def _start_typewriter(view: dict[str, Any]) -> None:  # 确保打字效果在跑
+    """"``answer_shown`` 默认 0（从头揭示）；没在跑就起一个后台任务。"""
+    if view.get("answer_shown") is None:  # 新一轮首次 delta
+        view["answer_shown"] = 0  # 从头揭示
+    if view.get("_typewriter_task") is None or view["_typewriter_task"].done():  # 没有任务
+        try:  # 起任务（跑在 nicegui 事件循环）
+            view["_typewriter_task"] = asyncio.get_running_loop().create_task(_typewriter_loop(view))  # 起
+        except RuntimeError:  # 没有 loop（异常路径）
+            view["answer_shown"] = None  # 回退全显
+            view["answer_dirty"] = True  # 标脏
+            _render_answer(view, force=True)  # 立即全显
+
+
+def _finish_typewriter(view: dict[str, Any]) -> None:  # 打字收尾：取消任务 + 立即全显
+    """"终态/停写：取消后台循环，游标拉到全文，一次渲染兜底。"""
+    task = view.get("_typewriter_task")  # 任务
+    if task is not None and not task.done():  # 还在跑
+        task.cancel()  # 取消
+    view["_typewriter_task"] = None  # 清引用
+    view["answer_shown"] = len(str(view.get("answer_text") or ""))  # 全显
+    view["answer_dirty"] = True  # 标脏
+    _render_answer(view, force=True)  # 兜底渲染
 
 
 def _render_live_reasoning(view: dict[str, Any]) -> None:  # 画思考（实时）
@@ -178,8 +252,7 @@ def _apply_live_event(view: dict[str, Any], event: EventEnvelope) -> None:  # �
             return  # 跳过
         view["answer_text"] += text  # 累积（数据必须完整，与渲染解耦）
         view["streaming"] = True  # 还在出字（末尾显示光标）
-        view["answer_dirty"] = True  # 标脏
-        _render_answer(view)  # 按间隔合并刷新
+        _start_typewriter(view)  # 起/续打字效果（后台逐字揭示）
         return  # 结束
     if event.type is EventType.CITATION:  # 引用
         view["citations"] = list(payload.items)  # 记录
@@ -191,7 +264,8 @@ def _apply_live_event(view: dict[str, Any], event: EventEnvelope) -> None:  # �
         return  # 结束
     if event.type is EventType.REPLACE:  # 整段替换
         view["answer_text"] = payload.text  # 换掉已经流出的正文
-        view["answer_dirty"] = True  # 标脏
+        view["streaming"] = False  # 替换视为整段（不再打字）
+        _finish_typewriter(view)  # 取消打字 + 全显
         _render_answer(view, force=True)  # 立即重画
         return  # 结束
     if event.type is EventType.VERIFY:  # 引用校验结论
@@ -212,6 +286,7 @@ def _apply_live_event(view: dict[str, Any], event: EventEnvelope) -> None:  # �
         return  # 结束
     if event.type is EventType.DONE:  # 完成
         view["streaming"] = False  # 不再出字（去掉末尾光标）
+        _finish_typewriter(view)  # 收尾：取消打字 + 全显
         view["answer_dirty"] = True  # 强制重画一次，光标才会消失
         _render_answer(view, force=True)  # 最后一帧必须落地
         view["total_ms"] = payload.total_ms  # 耗时
@@ -224,6 +299,7 @@ def _apply_live_event(view: dict[str, Any], event: EventEnvelope) -> None:  # �
         return  # 结束
     if event.type is EventType.CANCELLED:  # 停止
         view["streaming"] = False  # 不再出字
+        _finish_typewriter(view)  # 收尾：取消打字 + 全显已生成部分
         view["answer_dirty"] = True  # 强制重画（去光标）
         _render_answer(view, force=True)  # 已生成的部分要先画出来
         view["run_state"] = "cancelled"  # 状态
@@ -236,6 +312,7 @@ def _apply_live_event(view: dict[str, Any], event: EventEnvelope) -> None:  # �
         return  # 结束
     if event.type is EventType.ERROR:  # 失败
         view["streaming"] = False  # 不再出字
+        _finish_typewriter(view)  # 收尾：取消打字 + 全显已生成部分
         view["answer_dirty"] = True  # 强制重画（去光标）
         _render_answer(view, force=True)  # 错误前已生成的部分不能丢
         view["run_state"] = "error"  # 状态

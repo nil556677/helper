@@ -368,6 +368,22 @@ AGENT: tuple[Param, ...] = (
         cast=str,
     ),
     _p(
+        "agent.context_builder_enabled",
+        "ContextBuilder 注入",
+        True,
+        Aspect.QUERY,
+        help_text="ReAct / general 节点是否用 ContextBuilder 装配上下文（工作记忆/近轮/事实/画像）。关闭则各节点退回旧手拼提示。",
+        cast=bool,
+    ),
+    _p(
+        "agent.dispatch_context_enabled",
+        "dispatch 上文拼接",
+        False,
+        Aspect.QUERY,
+        help_text="固定路径 dispatch 检索时，把上一轮用户问题拼进当前查询，便于连续追问。长会话可能超长，超限会回退为当前问。",
+        cast=bool,
+    ),
+    _p(
         "memory.profile.infer_threshold",
         "画像推断置信度阈值",
         0.7,

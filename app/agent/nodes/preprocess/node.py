@@ -1,6 +1,6 @@
 """L1 预处理节点：把原始问题规范化为可检索/可分诊的 `preprocessed`。"""
 
-from __future__ import annotations  # 延迟求值注解
+from langchain_core.runnables import RunnableConfig  # 节点 config 类型（LangGraph）
 
 from typing import Any  # 任意值
 
@@ -12,7 +12,7 @@ from app.agent.preprocess.timeparse import resolve_time  # 时间
 __all__ = ["preprocess_node"]  # 导出
 
 
-def preprocess_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
+def preprocess_node(state: dict[str, Any], config: RunnableConfig | None = None) -> dict[str, Any]:  # 图节点
     """零 LLM：抽实体、解析时间、收 flags、按需一次改写；写 `preprocessed`。"""
     del config  # 不用图配置
     raw = str(state.get("question") or "")  # 原始问题

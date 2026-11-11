@@ -183,7 +183,12 @@ def _write_batch(
                 ids.append(str(uuid.uuid5(uuid.NAMESPACE_URL, f"helper:{key}")))
                 metas.append(meta)
     try:
-        writer.add(docs, ids, metas)
+        # 写入：有 add_multi_field（多字段 BM25）则用它，否则回退 add（FakeWriter/旧写器兼容）
+        add_multi = getattr(writer, "add_multi_field", None)  # 多字段写口
+        if callable(add_multi):  # 支持多字段
+            add_multi(docs, ids)  # 多字段 BM25 写
+        else:  # 旧写口
+            writer.add(docs, ids, metas)  # 写
     except Exception:
         with __import__("contextlib").suppress(Exception):
             writer.delete_version(doc_id, version)

@@ -82,8 +82,10 @@ SYSTEM_PROMPT = get(REWRITE_SYSTEM_UID).render()  # 渲染统一改写提示
 #: 缓存：成功 30 天 / 失败 60 秒（按条 ttl），容量 1024 防内存无限增长。
 _CACHE = TtlCache(ttl=CACHE_TTL, max_entries=1024)  # 共享缓存原语
 
-#: 改写统一走模型网关；**不重试**（改写是可选增强，任何失败都回退原句）。
-_GATEWAY = ModelGateway(slot="llm", policy=RetryPolicy(max_retries=0))  # 网关（无重试）
+#: 改写统一走模型网关；临时性失败（限流/5xx/超时/连接）重试并发 RETRY 事件到前端，配置错不重试。
+from app.rag._emit import forward as _forward_emit  # 事件转发（有 run 才发）
+
+_GATEWAY = ModelGateway(slot="llm", policy=RetryPolicy(), emit=_forward_emit)  # 网关（瞬时错误可重试 + 事件）
 
 #: 改写专用参数：温度 0、小输出、800ms 超时。
 _REWRITE_PARAMS = DEFAULT_PARAMS.with_overrides(  # 派生

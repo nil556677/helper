@@ -13,7 +13,7 @@ from app.agent import (
 )
 from app.agent.context import RunContext  # 上下文
 from app.agent.driver import drive  # 驱动器（图驱动 + 终态收敛）
-from app.agent.fsm.states import RunEvent  # 状态事件（暂停态取消）
+from app.agent.fsm.states import RunEvent, RunState  # 状态事件（暂停态取消 / 重建现场）
 from app.services import attachments  # 附件公开字段
 
 SENTINEL = object()  # 队列结束标记
@@ -21,6 +21,7 @@ SENTINEL = object()  # 队列结束标记
 #: 是否让 `_run` 自动为每轮开 AsyncDB（单一异步写者）。
 #: 默认 **False**：pytest 多事件循环下开连接会挂，测试走同步回退；
 #: 真实 worker 由 ``worker_cp.setup_loop`` 置 True（单事件循环，安全）。
+#: 注：9）已核实"ack 后挂住"在当前代码下不再复现；是否正式在 worker 侧开启异步落库由部署方决定。
 ASYNC_DB_ENABLED = False
 
 #: 终态事件集合：一个 run 只允许出现一次，且必须是最后一帧（契约层定义）。
@@ -199,3 +200,49 @@ def start_stream(  # 启动
     handle = StreamHandle(run_id=ctx.run_id, ctx=ctx, events=queue)  # 句柄
     handle.task = asyncio.create_task(_run(handle))  # 后台跑
     return handle  # 返回
+
+
+async def resume_paused_run(  # 跨重启续跑：按 run_id 重建一个可恢复的 handle
+    run_id: str,  # 暂停中的 run id
+    value: Any,  # 用户补的选择/输入（Command(resume) 的 resume 值）
+    *,
+    graph: Any | None = None,  # 注入图（测试用；默认取进程图）
+    conversation_id: str = "",  # 会话（缺省从 trace_runs 反查）
+    question: str = "",  # 原问题（缺省从 trace_runs 反查）
+) -> StreamHandle:  # 重建的 handle（事件从 events 队列取）
+    """worker 崩溃重启后恢复被暂停的 HITL 运行（任务 7）。
+
+    langgraph checkpoint 已持久化该会话的 interrupt；这里补的是**运行时重建**：
+    按 run_id 从 ``trace_runs`` 反查会话/原问题 → 重建 `RunContext` 并把状态机 seed 到
+    ``WAITING``（这样 ``can(RESUME)`` 成立、driver 走恢复分支而非误走 START）→ 重建事件
+    队列 → 用 ``Command(resume=value)`` 驱动 checkpoint 图继续。未被 checkpoint 或反查不到
+    的 run 抛 ``RuntimeError``（调用方据此返回"不可恢复"）。
+    """
+    from app.core.trace import store as trace_store  # 延迟导入避免环
+
+    detail = trace_store.detail(run_id)  # 反查 run 记录（含会话/原问题）
+    conv = conversation_id or str((getattr(detail, "conversation_id", None) or ""))  # 会话
+    if not conv:  # 找不到会话
+        raise RuntimeError(f"run {run_id} 未找到，无法恢复（trace_runs 无此 run）")  # 不可恢复
+    q = question or str(getattr(detail, "question", None) or "")  # 原问题
+    queue: asyncio.Queue = asyncio.Queue()  # 事件队列
+    sink = _EventSink(queue)  # 事件出口（终态后闭嘴）
+    ctx = RunContext(run_id=run_id, question=q, conversation_id=conv, emit=sink)  # 上下文
+    ctx.machine.state = RunState.WAITING  # **重建现场**：seed 到"停在 HITL 等用户"
+    sink._run_id = run_id  # 盖章
+    handle = StreamHandle(run_id=run_id, ctx=ctx, events=queue)  # 句柄
+    handle.graph = graph if graph is not None else _graph()  # 图（worker 注入的是 checkpointed 图）
+    handle.thread_id = conv  # 恢复用线程
+    handle.task = asyncio.create_task(_run_resume(handle, value))  # 后台驱动恢复
+    return handle  # 返回
+
+
+async def _run_resume(h: StreamHandle, resume_value: Any) -> None:  # 驱动恢复
+    """用 ``Command(resume)`` 从 checkpoint 续跑；任何路径保证 sentinel。"""
+    h.started = True  # 标记已开始
+    try:  # 驱动
+        result = await drive(h.graph, h.ctx, initial_state={}, emit=h.ctx.emit, resume_value=resume_value)  # 恢复
+        h.paused = result.status == "waiting"  # 是否仍暂停
+    finally:  # 收尾
+        if not getattr(h, "paused", False):  # 不是仍暂停
+            h.events.put_nowait(SENTINEL)  # 结束标记

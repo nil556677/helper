@@ -6,7 +6,7 @@ import asyncio  # 跑 async
 
 import pytest  # 跳过/断言
 
-from langchain_core.messages import AIMessage, HumanMessage  # 消息
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage  # 消息
 
 import app.agent.tools.library as lib  # 内置工具（取 current_time）
 from app.agent.react.graph import approval_stats, build_react  # 自定义图 + 计数
@@ -26,6 +26,35 @@ class _Model:  # 桩模型：两次调用（先调工具，再给终答）
         resp = self._responses[self._i]  # 取
         self._i += 1  # 步进
         return resp  # 返回
+
+
+class _StreamModel:  # 桩模型：只支持 astream（真流式）
+    def __init__(self, chunks):  # 分块序列
+        self._chunks = list(chunks)  # 存
+        self._i = 0  # 步
+
+    def bind_tools(self, tools, **kwargs):  # 绑定（原样返回）
+        del tools, kwargs  # 不用
+        return self  # 自身
+
+    async def astream(self, messages):  # 流式产出
+        del messages  # 不用
+        while self._i < len(self._chunks):  # 逐块
+            yield self._chunks[self._i]  # 吐
+            self._i += 1  # 步进
+
+
+def test_react_graph_streams_tokens() -> None:  # 真流式：逐 token 透传 sink，最终还原成完整 AIMessage
+    model = _StreamModel([AIMessageChunk(content="你"), AIMessageChunk(content="好，")])  # 分块
+    got: list[str] = []  # sink 收集
+    graph = build_react(model, [lib.current_time], "sys", token_sink=got.append)  # 接流式回调
+    result = asyncio.run(graph.ainvoke({  # 跑
+        "messages": [HumanMessage(content="hi")], "status": "running", "pending_request_ids": [], "approval_checked": False,
+    }))  # 结束
+    assert "".join(got) == "你好，"  # 每个文本 token 都被透传给 sink
+    last = result["messages"][-1]  # 终答
+    assert isinstance(last, AIMessage)  # 必须是完整 AIMessage（不能是 chunk）
+    assert str(last.content or "") == "你好，"  # 正文汇聚完整
 
 
 def test_react_graph_single_tool_roundtrip() -> None:  # 工具调用 → 无审批直通 → 回模型

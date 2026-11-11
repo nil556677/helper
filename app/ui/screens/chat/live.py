@@ -45,6 +45,8 @@ def _build_live(live_state: _LiveState, box: Any, scroll: Any = None) -> dict[st
         "streaming": False,  # 是否还在出字（末尾显示光标）
         "answer_at": 0.0,  # 上次把文本画进 markdown 的时刻
         "answer_dirty": False,  # 有新文本还没画
+        "answer_shown": None,  # 打字揭示游标（None=全显；DELTA 起打字）
+        "_typewriter_task": None,  # 打字后台任务（终态取消）
         "citations": [],  # 引用
         "note": "",  # 说明
         "note_kind": "plain",  # 说明样式

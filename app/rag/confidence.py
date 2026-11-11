@@ -24,5 +24,14 @@ def confidence_of(gate: dict[str, Any] | None) -> float:  # 置信度 0..1
 
 
 def should_enhance(gate: dict[str, Any] | None, threshold: float = ENHANCE_THRESHOLD) -> bool:  # 是否触发增强
-    """置信度低于阈值 → 值得 full 档多路召回。"""
-    return confidence_of(gate) < float(threshold)  # 低置信
+    """**只有「已召回到东西但融合/精排弱」才值得烧 LLM 多路；reject/无证据绝不触发。**
+
+    改写(HyDE/PAR)改善的是「有候选但质量弱」的召回，对「压根没有可用证据」毫无帮助——
+    改写变体造不出本来就不存在的数据。所以拒答/reject（no_evidence/low_score/qa_low）一律不触发，
+    避免白烧一次 generate；只有 weak 且低置信（fusion 弱、caught 但置信不足）才值得增强。
+    """
+    data = dict(gate or {})  # 判决
+    decision = str(data.get("decision") or "").lower()  # pass/weak/reject
+    if decision == "reject":  # 已判定不可答 → 增强无益
+        return False  # 不触发（改写/HyDE 造不出数据）
+    return confidence_of(gate) < float(threshold)  # 其余档：低置信才增强

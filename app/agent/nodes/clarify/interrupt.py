@@ -4,7 +4,7 @@
 否则退化为模板化澄清，保证无 checkpointer 的调用/测试不被阻塞。
 """
 
-from __future__ import annotations  # 延迟求值注解
+from langchain_core.runnables import RunnableConfig  # 节点 config 类型（LangGraph）
 
 from typing import Any  # 任意值
 
@@ -22,7 +22,7 @@ def _recall(state: dict[str, Any]) -> dict[str, Any]:  # 取语义召回
     return value if isinstance(value, dict) else {}  # 兜底空
 
 
-def clarify_interrupt_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
+def clarify_interrupt_node(state: dict[str, Any], config: RunnableConfig | None = None) -> dict[str, Any]:  # 图节点
     """需要用户选择时 `interrupt(payload)`；恢复值作为选择，映射回路由。"""
     if not state.get("hitl_enabled"):  # 未启用 HITL
         return clarify_node(state, config)  # 退化为模板澄清

@@ -24,7 +24,9 @@ _SYSTEM = (  # 系统提示
     "只写这一段，不要解释、不要声明、不要编号；不超过 120 字。"
 )  # 结束
 
-_GATEWAY = ModelGateway(slot="llm", policy=RetryPolicy(max_retries=0))  # 网关（无重试）
+from app.rag._emit import forward as _forward_emit  # 事件转发（有 run 才发）
+
+_GATEWAY = ModelGateway(slot="llm", policy=RetryPolicy(), emit=_forward_emit)  # 网关（瞬时错误可重试 + 事件）
 
 _PARAMS = DEFAULT_PARAMS.with_overrides(  # 参数
     temperature=0.0,  # 稳

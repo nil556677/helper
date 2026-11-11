@@ -1,6 +1,6 @@
 """规则层节点 `rule_route`：纯函数匹配，命中即写 route，未定则交给语义层。"""
 
-from __future__ import annotations  # 延迟求值注解
+from langchain_core.runnables import RunnableConfig  # 节点 config 类型（LangGraph）
 
 from typing import Any  # 任意值
 
@@ -22,7 +22,7 @@ def _default_rules():  # 懒加载内置规则
 
 
 @bind_node_run
-def rule_route_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
+def rule_route_node(state: dict[str, Any], config: RunnableConfig | None = None) -> dict[str, Any]:  # 图节点
     """命中唯一且 exact → 写 `route`（direct）+ rule_hits；否则 route=None（走语义层）。"""
     del config  # 不用图配置
     question = str(state.get("question") or "")  # 问题

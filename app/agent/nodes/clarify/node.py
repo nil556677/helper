@@ -6,7 +6,7 @@
 ③ 候选为空 → 拒绝/降级 + 人工入口。
 """
 
-from __future__ import annotations  # 延迟求值注解
+from langchain_core.runnables import RunnableConfig  # 节点 config 类型（LangGraph）
 
 from typing import Any  # 任意值
 
@@ -65,7 +65,7 @@ def clarify_text(options: ClarifyOptions) -> str:  # 模板化话术
 
 
 @bind_node_run
-def clarify_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
+def clarify_node(state: dict[str, Any], config: RunnableConfig | None = None) -> dict[str, Any]:  # 图节点
     """写 clarify_options + 模板 answer；不调模型。"""
     del config  # 不用图配置
     attempt = int(state.get("clarify_attempt") or 0) + 1  # 本次是第几次

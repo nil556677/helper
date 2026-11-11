@@ -68,6 +68,18 @@ def test_reconcile() -> None:  # 启动收敛
     assert machine.reconcile() is RunState.INTERRUPTED  # 终态不变
 
 
+def test_resume_rebuild_seeds_waiting() -> None:  # 跨重启续跑：重建态机的 WAITING 前提（任务7）
+    """worker 崩溃后重建 RunContext 时，把全新状态机 seed 到 WAITING 即可恢复续跑。
+
+    迁移表里有 ``(WAITING, RESUME) → GENERATING``，所以重建态机只要让 ``state`` 为 WAITING，
+    ``can(RESUME)`` 就成立，driver 的恢复分支（而非误走 START）才能正确执行。
+    """
+    machine = RunMachine()  # 全新状态机（模拟重启后的重建）
+    machine.state = RunState.WAITING  # seed：恢复到"停在 HITL 等用户"的现场
+    assert machine.can(RunEvent.RESUME)  # 允恢复
+    assert machine.transition(RunEvent.RESUME) is RunState.GENERATING  # 恢复后进入生成
+
+
 def test_listener_called() -> None:  # 监听器
     """每次迁移通知一次。"""
     seen: list[str] = []  # 记录

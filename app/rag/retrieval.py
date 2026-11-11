@@ -142,6 +142,77 @@ def sparse_search(text: str, k: int = SPARSE_CANDIDATES) -> list[dict[str, Any]]
     return hits  # 返回
 
 
+def sparse_search_multi_field(  # 多字段 BM25 召回（字段加权合并）
+    text: str,  # 查询
+    k: int = SPARSE_CANDIDATES,  # 候选数
+    *,
+    candidate_per_field: int | None = None,  # 每字段召回数（缺省取 k）
+) -> list[dict[str, Any]]:  # 命中列表
+    """对每个索引字段命名稀疏向量分别召回，用字段权重加权合并成一条候选序列。
+
+    需集合已按多字段稀疏向量建/重建（``ensure_collection`` 的新 schema）。无检索词的字段
+    跳过；合并后按加权分排序取 top-k，产出与 ``sparse_search`` 同形状的 hits 供 RRF 融合。
+    """
+    from qdrant_client import models  # 命名稀疏向量类型（本体：SparseVector）
+
+    from app.core.retrieval.tokenize import to_tokens  # 分词（查询同源）
+    from app.core.retrieval.synonyms import expand_tokens  # 同义词扩展（运行时）
+    from app.core.sparse import fields as kw_fields  # 字段名/权重/命名向量
+    from app.core.sparse.bm25 import encode_query  # 查询侧 idf
+    from app.integrations.qdrant import COLLECTION, qdrant_client  # 集合/客户端
+    from app.rag.normalize import normalize  # 统一归一
+
+    _dense, _sparse, sparse_emb = _stores()  # 取稀疏统计（term_stats/n）
+    store = getattr(sparse_emb, "_store", None)  # SparseTermStore
+    if store is None:  # 找不到 store
+        return []  # 无法召回
+    query = normalize(text)  # 归一
+    tokens = expand_tokens(to_tokens(query).split())  # 分词 + 同义词双向扩展
+    if not tokens:  # 空
+        return []  # 空
+    client = qdrant_client()  # 客户端
+    per = int(candidate_per_field) if candidate_per_field else k  # 每字段召回数
+    n = store.n()  # 全局文档数
+    agg: dict[str, dict[str, Any]] = {}  # point id → {scores:{字段:score}, payload:...}
+    active = active_filter()  # active 过滤（本版 Qdrant: query_filter）
+    for field in kw_fields.INDEX_FIELDS:  # 每个建索引字段
+        qvec = encode_query(  # 该字段查询向量（idf，df 全局共享）
+            tokens=tokens, term_stats=store.term_stats(tokens), n=n  # 词/统计
+        )  # 结束
+        if qvec is None or not qvec.indices:  # 无词
+            continue  # 该字段跳过
+        try:  # 查询该字段命名稀疏向量（本版 Qdrant 用 query_points + using=字段名）
+            res = client.query_points(  # 命名稀疏查询
+                collection_name=COLLECTION,  # 集合
+                query=qvec.to_qdrant(),  # 稀疏向量
+                using=kw_fields.sparse_vector_name(field),  # 该字段向量名
+                limit=per,  # 每字段候选
+                with_payload=True,  # 带 payload
+                query_filter=active,  # 只 active
+            )  # 查询结束
+            results = res.points if hasattr(res, "points") else (res or [])  # 点列表
+        except Exception:  # Qdrant 未建字段向量（未重建）→ 该字段跳过
+            continue  # 不阻断其它字段
+        for hit in results:  # 逐命中
+            entry = agg.setdefault(str(hit.id), {"scores": {}})  # 该点档案
+            entry["scores"][field] = float(hit.score)  # 记该字段分
+            if "payload" not in entry and getattr(hit, "payload", None):  # 还没 payload
+                entry["payload"] = dict(hit.payload)  # 记 payload（供组装）
+    ranked: list[tuple[float, dict[str, Any]]] = []  # (合并分, 档案)
+    for pid, entry in agg.items():  # 逐 point 合并
+        combined = kw_fields.combine_field_scores(entry["scores"])  # 字段加权和
+        ranked.append((combined, entry))  # 暂存
+    ranked.sort(key=lambda pair: pair[0], reverse=True)  # 按加权分降序
+    out: list[dict[str, Any]] = []  # 命中
+    for combined, entry in ranked[:k]:  # 前 k 条
+        payload = entry.get("payload") or {}  # payload
+        meta = dict(payload.get("metadata") or {})  # 元数据
+        meta["score"] = combined  # 加权分
+        meta["score_kind"] = "bm25_multi"  # 分数语义
+        out.append({"text": str(payload.get("text") or ""), "metadata": meta})  # 命中
+    return out  # 返回
+
+
 def fuse_hits(  # 融合
     dense_hits: list[dict[str, Any]],  # 语义
     sparse_hits: list[dict[str, Any]],  # 关键词

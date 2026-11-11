@@ -39,10 +39,18 @@ class OnnxReranker(BaseDocumentCompressor):
         kept: list[Document] = []
         for doc, score in ranked:
             value = float(score)
+            # 已按降序：一旦低于闸门，后面的只会更低 → 直接停（等价于原 continue 但更早退出）
             if self.min_score is not None and value < self.min_score:
-                continue
+                break
             doc.metadata = {**(doc.metadata or {}), "rerank_score": value}
             kept.append(doc)
             if len(kept) >= self.top_n:
                 break
+        # 保底：非空输入绝不压成空表——否则所有候选都低于闸门时，下游 gate 拿到「空 ranked」
+        # 会直接 no_evidence/reject，明明库里有资料也「搜到了却什么都没给」（4b 实测根因）。
+        # 全低分时保留最高分那一条（带上 rerank_score），交由门限判 weak/pass，而不是凭空消失。
+        if not kept and ranked:
+            best_doc, best_score = ranked[0]  # 降序第一个 = 最高分
+            best_doc.metadata = {**(best_doc.metadata or {}), "rerank_score": float(best_score)}
+            kept = [best_doc]
         return kept

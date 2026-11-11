@@ -57,5 +57,10 @@ class LocalBackend:  # worker 内部后端
 
     async def resume(self, run_id: str, value: Any) -> None:  # HITL 恢复
         handle = self._handles.get(run_id)  # 找
-        if handle is not None and hasattr(handle, "resume"):  # 有且支持
-            await handle.resume(value)  # 恢复（走 driver）
+        if handle is not None and hasattr(handle, "resume"):  # 进程内还有活 handle
+            await handle.resume(value)  # 恢复（走 driver，保留 FSM/事件）
+        else:  # handle 缺失（worker 崩溃/重启后）→ 重建一个可恢复的 handle 续跑
+            from app.agent import stream as agent_stream  # 重建入口
+
+            rebuilt = await agent_stream.resume_paused_run(run_id, value)  # 按 run_id 重建 + 驱动恢复
+            self._handles[run_id] = rebuilt  # 登记（供 UI 事件流续取）

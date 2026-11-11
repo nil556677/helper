@@ -3,7 +3,7 @@
 运行时：query 只 embed 一次 → 与启动期预计算的 route 矩阵算余弦 → 三态。
 """
 
-from __future__ import annotations  # 延迟求值注解
+from langchain_core.runnables import RunnableConfig  # 节点 config 类型（LangGraph）
 
 from typing import Any, Sequence  # 类型
 
@@ -66,7 +66,7 @@ def decide(  # 纯函数：向量 → 三态
 
 
 @bind_node_run
-async def semantic_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
+async def semantic_node(state: dict[str, Any], config: RunnableConfig | None = None) -> dict[str, Any]:  # 图节点
     """写 `semantic_recall`；若判定 direct，同时写 `route` 供 dispatch_fixed 使用。"""
     del config  # 不用图配置
     from app.agent.contracts import StageGroup  # 分组

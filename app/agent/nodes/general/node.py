@@ -1,6 +1,6 @@
 """L4e 通用兜底节点（general_agent）：纯 LLM、无工具、不闲聊，只做能力引导。"""
 
-from __future__ import annotations  # 延迟求值注解
+from langchain_core.runnables import RunnableConfig  # 节点 config 类型（LangGraph）
 
 from typing import Any  # 任意值
 
@@ -15,15 +15,30 @@ _PROMPT = (  # 提示
 )  # 提示结束
 
 
+def _chunk_text(chunk: Any) -> str:  # 流式块 → 文本
+    """兼容 content 为 str 或多段（AIMessageChunk）。"""
+    content = getattr(chunk, "content", "")  # 内容
+    if isinstance(content, str):  # 纯字符串
+        return content  # 返回
+    if isinstance(content, list):  # 多段
+        return "".join(str(p.get("text") or "") for p in content if isinstance(p, dict))  # 只拼文本块
+    return ""  # 认不出
+
+
 def _degrade() -> dict[str, Any]:  # 无模型降级
     return {"answer": "我是资料问答助手：可以帮你在本地资料中检索并据资料回答。请描述你想查的资料问题。", "note": ""}  # 模板
 
 
 @bind_node_run
-async def general_agent_node(state: dict[str, Any], config: Any = None) -> dict[str, Any]:  # 图节点
-    """有模型才生成引导话术；无模型/失败用模板，绝不假装有数据。"""
+async def general_agent_node(state: dict[str, Any], config: RunnableConfig | None = None) -> dict[str, Any]:  # 图节点
+    """有模型才生成引导话术；无模型/失败用模板，绝不假装有数据。
+
+    有 run 时逐 token 流式下发（DELTA + 标首 token + 累加 partial_answer），无 run 退回一次性。
+    """
     del config  # 不用图配置
     from app.agent.contracts import StageGroup  # 分组
+    from app.agent.context import current_run  # 当前 run（发 DELTA）
+    from app.agent.events import delta as delta_event  # 增量事件
     from app.agent.stages import stage  # 过程步
 
     model = get_chat_model()  # 统一入口
@@ -53,9 +68,23 @@ async def general_agent_node(state: dict[str, Any], config: Any = None) -> dict[
         )  # 结束
         sys_text = out.system or _PROMPT  # system
         human = out.messages[-1]["content"] if out.messages else question  # 人类消息
+        run = current_run()  # 事件出口
+        parts: list[str] = []  # 生成的文本块（流式汇聚）
         with stage("生成回答", group=StageGroup.GENERATE):  # 过程区可见
-            response = await model.ainvoke([("system", sys_text), ("human", human)])  # 请求
+            try:  # 支持流式才逐 token；不支持回退一次性
+                async for chunk in model.astream([("system", sys_text), ("human", human)]):  # 流式
+                    text = _chunk_text(chunk)  # 取纯文本
+                    if text:  # 非空块
+                        parts.append(text)  # 收集
+                        if run is not None:  # 有 run
+                            if run.first_token_at is None:  # 还没标首 token
+                                run.mark_first_token()  # 记录（修活 ttft）
+                            run.partial_answer += text  # 累加部分（失败能保留、REPLACE 不重复）
+                            run.emit(delta_event(text))  # 发增量（真流式正文）
+            except Exception:  # 流式不可用（旧模型/桩）
+                response = await model.ainvoke([("system", sys_text), ("human", human)])  # 一次性
+                parts.append(str(getattr(response, "content", "") or ""))  # 收整段
     except Exception:  # 装配/调用失败
         return _degrade()  # 模板
-    text = str(getattr(response, "content", "") or "").strip()  # 正文
-    return {"answer": text or _degrade()["answer"]}  # 返回
+    text = "".join(parts).strip() or _degrade()["answer"]  # 汇聚正文（空则模板）
+    return {"answer": text}  # 返回
