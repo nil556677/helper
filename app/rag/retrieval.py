@@ -7,6 +7,7 @@ from functools import lru_cache  # 复用 store
 from typing import Any  # 任意值
 
 from langchain_core.documents import Document  # 文档形状
+from loguru import logger  # 日志（查询失败留痕，不再静默吞错）
 
 from app.core.trace.recorder import trace_hit  # 命中留痕
 from app.integrations.embeddings import OnnxBgeM3Embeddings  # 查询嵌入
@@ -153,10 +154,9 @@ def sparse_search_multi_field(  # 多字段 BM25 召回（字段加权合并）
     需集合已按多字段稀疏向量建/重建（``ensure_collection`` 的新 schema）。无检索词的字段
     跳过；合并后按加权分排序取 top-k，产出与 ``sparse_search`` 同形状的 hits 供 RRF 融合。
     """
-    from qdrant_client import models  # 命名稀疏向量类型（本体：SparseVector）
 
-    from app.core.retrieval.tokenize import to_tokens  # 分词（查询同源）
     from app.core.retrieval.synonyms import expand_tokens  # 同义词扩展（运行时）
+    from app.core.retrieval.tokenize import to_tokens  # 分词（查询同源）
     from app.core.sparse import fields as kw_fields  # 字段名/权重/命名向量
     from app.core.sparse.bm25 import encode_query  # 查询侧 idf
     from app.integrations.qdrant import COLLECTION, qdrant_client  # 集合/客户端
@@ -191,7 +191,11 @@ def sparse_search_multi_field(  # 多字段 BM25 召回（字段加权合并）
                 query_filter=active,  # 只 active
             )  # 查询结束
             results = res.points if hasattr(res, "points") else (res or [])  # 点列表
-        except Exception:  # Qdrant 未建字段向量（未重建）→ 该字段跳过
+        except Exception as exc:  # 查询该字段失败
+            # 之前把一切异常都当"字段未建"静默吞掉：认证/连接/集合缺失也被吞，返回残缺
+            # 结果却不留痕、排障靠猜。现改成记 warning（仍 continue 不阻断其它字段）：
+            # "字段未建"只在重建过渡期短暂出现，稳态下命中这里的就是真错，应当可见。
+            logger.warning("多字段稀疏检索字段 {} 查询失败（跳过该字段）：{}", field, exc)  # 留痕
             continue  # 不阻断其它字段
         for hit in results:  # 逐命中
             entry = agg.setdefault(str(hit.id), {"scores": {}})  # 该点档案
@@ -199,7 +203,7 @@ def sparse_search_multi_field(  # 多字段 BM25 召回（字段加权合并）
             if "payload" not in entry and getattr(hit, "payload", None):  # 还没 payload
                 entry["payload"] = dict(hit.payload)  # 记 payload（供组装）
     ranked: list[tuple[float, dict[str, Any]]] = []  # (合并分, 档案)
-    for pid, entry in agg.items():  # 逐 point 合并
+    for _pid, entry in agg.items():  # 逐 point 合并（_pid 不参与打分）
         combined = kw_fields.combine_field_scores(entry["scores"])  # 字段加权和
         ranked.append((combined, entry))  # 暂存
     ranked.sort(key=lambda pair: pair[0], reverse=True)  # 按加权分降序

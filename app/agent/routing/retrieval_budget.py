@@ -3,7 +3,8 @@
 from __future__ import annotations  # 延迟求值注解
 
 from dataclasses import dataclass  # 数据类
-from typing import Any  # 任意值
+
+from app.agent.routing.triage import AGENTIC_MARKERS, MULTI_MARKERS  # 词表单一来源
 
 __all__ = ["RetrievalPlan", "plan_for", "plan_for_top_k"]  # 导出
 
@@ -41,9 +42,11 @@ COMPLEX = RetrievalPlan(  # 复杂
     sparse_weight=1.3,  # 复杂多关键词 → 抬 sparse
 )  # 结束
 
-#: 多跳/对比/复杂意图信号。
-_COMPLEX_MARKERS: tuple[str, ...] = (  # 依赖链/多跳
-    "为什么", "原因", "导致", "排查", "根因", "如果", "那么", "原理", "怎么才能", "步骤", "对比", "区别", "清单", "分别", "各自", "如何实现",
+#: 复杂意图信号 = 分诊的 agentic + multi 词表并集（检索预算与分诊**同口径**，避免两处漂移）。
+#: 由 :data:`triage.AGENTIC_MARKERS` + :data:`triage.MULTI_MARKERS` 推导；另补 triage 未列、
+#: 但检索确实吃重的「如何实现」。改词只改 triage，这里自动跟随。
+_COMPLEX_MARKERS: tuple[str, ...] = tuple(
+    dict.fromkeys((*AGENTIC_MARKERS, *MULTI_MARKERS, "如何实现"))  # 并集 + 补充，去重保序
 )  # 标记
 
 

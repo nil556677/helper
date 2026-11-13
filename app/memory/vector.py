@@ -11,6 +11,7 @@ UI 不直连。
 from __future__ import annotations  # 延迟值注解
 
 import time  # 时间戳
+import uuid  # 稳定点 id
 from typing import Any  # 任意类型（客户端惰性）
 
 from app.memory.model import FINGERPRINT_KEY  # 指纹键
@@ -22,6 +23,20 @@ MEMORY_COLLECTION = "user_memories"  # 记忆集合
 
 #: 单查询上限（防过量召回）。
 SEARCH_LIMIT = 50  # Qdrant 一次召回上限
+
+#: 点 id 的固定命名空间（**必须保持不变**，否则所有已落点的 id 全变、无法覆盖）。
+_POINT_ID_NS = uuid.UUID("6f8a1b2c-3d4e-5f60-a1b2-c3d4e5f60718")  # 固定无业务含义
+
+
+def _point_id(namespace: str, memory_key: str) -> uuid.UUID:  # 稳定点 id
+    """用固定命名空间 + 键的 uuid5 生成点 id：跨进程/重启稳定，同键同点、不碰撞。
+
+    早期用内置 ``hash()``：Python 对 str 的哈希按进程加盐（``PYTHONHASHSEED``），
+    重启后同键会落到不同点 id，upsert 变成新增重复点；且 ``& 0x7FFFFFFF`` 只留 31 位，
+    碰撞互相覆盖会静默丢数据。换成确定性 uuid5 后：同 ``namespace:memory_key``
+    永远得到同一个点 id（搜索/删除本就按 payload 过滤，不依赖点 id 值）。
+    """
+    return uuid.uuid5(_POINT_ID_NS, f"{namespace}:{memory_key}")  # 确定性
 
 
 def _client() -> Any:  # Qdrant 客户端（延迟导入）
@@ -141,7 +156,7 @@ def upsert_memory_points(  # 批量写向量点
             continue  # 跳过
         payloads.append(  # 点
             models.PointStruct(  # 点结构
-                id=hash(f"{namespace}:{item.get('memory_key')}") & 0x7FFFFFFF,  # 稳定点 id（同键同点）
+                id=_point_id(namespace, item.get("memory_key") or ""),  # 稳定点 id（同键同点）
                 vector=list(vec),  # 向量
                 payload={  # 负载（检索侧过滤）
                     "namespace": namespace,  # 作用域

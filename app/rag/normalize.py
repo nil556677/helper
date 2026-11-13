@@ -52,13 +52,3 @@ def _fold_dates(text: str) -> str:  # 日期归一
         value = f"{year}-{month:02d}"  # 年到月
         return f"{value}-{int(day):02d}" if day else value  # 补日
     return _DATE.sub(swap, text)  # 替换
-
-
-def _fold_numbers(text: str) -> str:  # 中文数字
-    """把"叁万元""三十"这类转成阿拉伯数字；失败就原样返回。"""
-    try:  # cn2an 对怪输入会抛
-        import cn2an  # 已在依赖里
-
-        return str(cn2an.transform(text, "cn2an"))  # 转换
-    except Exception:  # 转不了
-        return text  # 原样

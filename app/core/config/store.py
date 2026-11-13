@@ -89,9 +89,9 @@ def load() -> Config:
                 "agent.",
                 "chunk.",
                 "embed.",
+                "memory.",
                 "retrieval.",
                 "rerank.",
-                "tokenize.",
                 "vector.",
                 "tools.",
             )
@@ -241,17 +241,6 @@ def clear_fingerprints() -> None:
         conn.execute(
             "DELETE FROM index_meta WHERE key = ? OR key = ? OR key LIKE ?",
             (KEY_VECTOR_FINGERPRINT, KEY_LEXICAL_FINGERPRINT, f"{PER_ITEM_PREFIX}%"),
-        )
-
-
-def _upsert_meta(key: str, value: str, now: float = 0.0) -> None:
-    """upsert 一条 ``index_meta``（进程内幂等由调用方决定）。"""
-    with transaction() as conn:
-        conn.execute(
-            "INSERT INTO index_meta(key, value, updated_at) VALUES (?, ?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value,"
-            " updated_at = excluded.updated_at",
-            (key, value, now or time.time()),
         )
 
 

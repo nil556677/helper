@@ -1,4 +1,7 @@
-"""审批策略：应否要求审批（纯函数，供 M3 审批门复用）。"""
+"""确认策略：某次工具调用是否需先经用户确认（纯函数，供确认门复用）。
+
+区别于"后台审批"——这里是**用户侧确认**：查敏感/写改前问一句、告知要做什么、留一面记账。
+"""
 
 from __future__ import annotations  # 延迟值注解
 
@@ -18,9 +21,9 @@ def should_require_approval(  # 判定
     threshold: float = 0,  # 自动审批阈值（预留）
 ) -> tuple[bool, str]:  # (是否审批, 原因)
     """manual → 必经；auto → 按规则(当前一律放行占位)；mutation 不可逆 → 审；其余不审。"""
-    approval = str(getattr(descriptor, "approval", "") or "")  # 审批策略
-    if approval == "manual":  # 需人工
-        return True, "策略要求人工审批"  # 审
+    approval = str(getattr(descriptor, "approval", "") or "")  # 确认策略
+    if approval == "manual":  # 需用户确认
+        return True, "需用户确认后执行"  # 问一句
     if approval == "auto":  # 自动化决策（占位：可加金额阈值）
         amount = float((args or {}).get("amount") or 0) if args else 0.0  # 金额
         if threshold and amount > threshold:  # 超阈值
@@ -28,5 +31,5 @@ def should_require_approval(  # 判定
         return False, ""  # 放行
     use_mutation = str(mutation or getattr(descriptor, "mutation", Mutation.READ_ONLY) or Mutation.READ_ONLY)  # 变更画像
     if use_mutation == Mutation.NON_IDEMPOTENT_WRITE:  # 不可逆写
-        return True, "不可逆写入"  # 审
-    return False, ""  # 不审
+        return True, "不可逆操作，需用户确认后执行"  # 需确认
+    return False, ""  # 不问

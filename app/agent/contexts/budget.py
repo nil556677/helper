@@ -41,11 +41,6 @@ class Budget:  # 预算参数
         return min(_HEADROOM_MAX, max(_HEADROOM_MIN, self.window // 8))  # 夹
 
     @property
-    def hard_threshold(self) -> int:  # 硬阈值
-        """超过它就要强压（DSH 公式）。"""
-        return min(int(self.window * 0.8), self.window - self.output_reserve - self.headroom)  # 硬阈值
-
-    @property
     def retain(self) -> int:  # 压缩后逐字保留
         """不超过软预算的 80%，也不超过窗口的 16%。"""
         by_budget = int(self.history_budget * 0.8)  # 软预算口径
@@ -64,10 +59,6 @@ class Budget:  # 预算参数
         if turns_since_last < self.min_turns:  # 还没过滞回
             return False  # 不压
         return history_tokens > self.history_budget  # 超预算才压
-
-    def should_force(self, prompt_tokens: int) -> bool:  # 硬触发判定
-        """整份 prompt 超硬阈值。"""
-        return prompt_tokens > self.hard_threshold  # 判
 
 
 __all__ = ["WINDOW", "Budget"]  # 对外导出

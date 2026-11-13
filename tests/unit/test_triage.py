@@ -36,6 +36,12 @@ def test_triage_node_and_edge() -> None:  # 节点 + 边
         {"question": "为什么这样", "preprocessed": {"query": "为什么这样"}, "intent": _intent().model_dump(), "flags": {}}  # 输入
     )  # 结束
     assert out["triage"]["path_type"] == "agentic"  # 路径
-    assert after_triage(out) == "llm_fallback"  # 边 → ReAct
+    assert out["triage"]["complexity"] == "complex"  # 复杂（含"为什么"标记）
+    assert after_triage(out) == "plan_execute"  # 边 → 计划+执行
+    simple = triage_node(  # 简单问题
+        {"question": "现在几点了", "preprocessed": {"query": "现在几点了"}, "intent": _intent().model_dump(), "flags": {}}  # 输入
+    )  # 结束
+    assert simple["triage"]["complexity"] == "simple"  # 简单
+    assert after_triage(simple) == "llm_fallback"  # 边 → 单 ReAct
     empty = triage_node({"question": "x"})  # 无意图
     assert empty["triage"]["path_type"] == "agentic"  # 默认一律 ReAct

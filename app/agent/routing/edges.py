@@ -53,15 +53,19 @@ def after_clarify(state: dict[str, Any]) -> str:  # 澄清之后
 
 
 def after_triage(state: dict[str, Any]) -> str:  # 分诊之后
-    """只读 `triage`：general_agent→兜底；fast_single→固定；多源/专家→子图；其余→澄清。"""
+    """只读 `triage`：general_agent→兜底；agentic 且 complex→plan+execute（开关开时）；否则 ReAct。"""
     triage = state.get("triage") or {}  # 分诊 JSON
     if isinstance(triage, dict) and triage.get("agent") == "general_agent":  # 通用兜底
         return "general_agent"  # 兜底节点
     path = triage.get("path_type") if isinstance(triage, dict) else None  # 路径
-    if path == "fast_single":  # 单源快速
+    if path == "fast_single":  # 单源快速（固定路径如时间/天气/补参）
         return "dispatch_fixed"  # 固定路径
     if path in ("fast_multi", "agentic"):  # 多源/专家
-        return "llm_fallback"  # 兜底子图
+        from app.agent.contexts.feature import plan_execute_enabled  # 灰度开关
+
+        if triage.get("complexity") == "complex" and plan_execute_enabled():  # 复杂且开关开
+            return "plan_execute"  # 计划+执行
+        return "llm_fallback"  # 单 ReAct
     if path in ("fast_action", "expert_action"):  # 本期不做
         return "clarify_or_end"  # 先走澄清（显式，不静默）
     return "clarify_or_end"  # clarify / unsupported

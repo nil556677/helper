@@ -1,6 +1,6 @@
-"""设置 · 审批台账（只读）：列出审批记录与状态，决策只在聊天框。
+"""设置 · 操作确认台账（只读）：列出需用户确认的记录与状态，决定只在聊天框。
 
-读写（create/decide/execute）保留给聊天 HITL 用；本页不落任何决策。
+读写（create/decide/execute）保留给聊天 HITL 用；本页不落任何决定。
 """
 
 from __future__ import annotations  # 延迟值注解
@@ -37,7 +37,7 @@ def render() -> None:  # 画分区
             with box:  # 重建
                 rows = approvals_service.ledger()  # 台账
                 if not rows:  # 空
-                    ui.label("暂无审批记录").classes("hp-field-help")  # 提示
+                    ui.label("暂无确认记录").classes("hp-field-help")  # 提示
                 for item in rows:  # 逐条
                     status = str(item.get("status") or "unknown")  # 状态
                     st_label, st_cls = _STATUS.get(status, ("—", "bg-grey-600"))  # 文案+色

@@ -141,7 +141,9 @@ def _health(port: int | None = None) -> bool:
     try:
         headers: dict[str, str] = {}
         api_key = str(params_store.load()["vector.api_key"] or "").strip()
-        if api_key and port is None:
+        if api_key:
+            # 两条健康检查路径（配置 URL / 本机 sidecar 显式端口）都带 key：
+            # 此前显式端口分支不带 key，key 保护的 Qdrant 会被 watchdog 反复误杀重启。
             headers["api-key"] = api_key
         request = urllib.request.Request(target, headers=headers) if headers else target
         with urllib.request.urlopen(request, timeout=0.6) as resp:

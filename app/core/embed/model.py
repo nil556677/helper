@@ -228,29 +228,3 @@ def embed_text(text: str) -> np.ndarray:
     """
     matrix = embed_texts([text])
     return np.asarray(matrix[0], dtype=np.float32)
-
-
-def embed_for_comparison(texts: list[str], *, same_shape_as: str = "") -> np.ndarray:
-    """编码**要与已有语料比较**的文本，把"必须同形状"这条约束变成显式参数。
-
-    为什么需要它：向量只有在**同一次前向的形状**下才逐位可比（见模块说明第 4、5 条）。
-    在检索之外还有几处"找相似的"（P2.9 行内相似、记忆召回），调用方很容易顺手用
-    :func:`embed_text` 去编一批语料，然后在"1 行形状"与"16 行形状"之间比分数——
-    实测那样会翻 top-5 顺序。这个函数只做一件事：把"我要和谁比"写进调用点。
-
-    参数：
-        texts: 要编码的文本。
-        same_shape_as: 一个**说明性**标签（进日志与指纹，便于排查"这批向量是谁算的"）。
-            留空表示"就是给检索用的语料/查询"（走标准 :func:`embed_texts`）。
-    返回：``(len(texts), 768)``。
-    """
-    if same_shape_as:
-        from loguru import logger
-
-        logger.debug(
-            "按与 {} 相同的形状编码 {} 条文本（{} 行批）",
-            same_shape_as,
-            len(texts),
-            DEFAULT_BATCH_SIZE,
-        )
-    return embed_texts(texts)

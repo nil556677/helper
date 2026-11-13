@@ -1,11 +1,15 @@
 """画像 LLM 结构化抽取：从一段对话抽稳定偏好/约束（用默认 `llm` 槽位）。
 
+放在 **agent 层**：抽取要用 agent 的大模型网关（``ModelGateway`` + ``StructuredModel``），
+而 ``app/memory`` 域按域纪律不得反向依赖 agent（该边界原先由 ``app/memory/extract.py``
+违规 import agent 造成，这里把这块整体上移，域包只留纯数据与映射）。
+
 **遵守 AGENTS.md 例外条款**：字段只写 `Field(description="中文")`，不写行尾注释
 （description 会随 JSON Schema 发给模型）；每个字段都有默认值（模型没提到 → 空串/空表），
 禁止硬凑。
 
-本模块是画像写的**第三条通道**（附 C：①显式 ②行为统计 ③LLM 推断，能不用就不用③）。
-`extract_profile` 降到同步壳：memory_distill 是同步 Task，内部跑模型调用。
+本通道是画像写的**第三条通道**（附 C：①显式 ②行为统计 ③LLM 推断，能不用就不用③）。
+``extract_profile`` 降到同步壳：memory_distill 是同步 Task，内部跑模型调用。
 """
 
 from __future__ import annotations  # 延迟值注解
@@ -20,7 +24,7 @@ from app.agent.llm.params import DEFAULT_PARAMS  # 默认参数
 from app.agent.llm.schema import StructuredModel  # 结构化输出基类
 from app.agent.llm.types import ModelRequest  # 请求契约
 from app.core.result import Result  # 结构化信封
-from app.memory.model import PROFILE_KEYS  # 画像键白名单
+from app.memory.model import PROFILE_KEYS  # 画像键白名单（从 memory 域取，方向正确）
 
 __all__ = ["ProfileExtraction", "extract_profile", "profile_candidates"]  # 导出
 

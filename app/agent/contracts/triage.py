@@ -73,6 +73,7 @@ class IntentDecision(BaseModel):  # L2 意图决策（模型结构化输出）
     confidence: float = Field(default=0.0, description="置信度 0..1")  # 置信
     source: Literal["rule", "semantic", "llm"] = Field(default="rule", description="谁判的")  # 来源
     reason: str = Field(default="", description="一句路由理由")  # 理由
+    complexity: Literal["simple", "complex"] = Field(default="simple", description="执行复杂度：simple=一次完成；complex=需多步/跨域，走计划+执行")  # 复杂度
 
 
 class TriageDecision(BaseModel):  # L3 分诊决策（模型结构化输出）
@@ -82,6 +83,7 @@ class TriageDecision(BaseModel):  # L3 分诊决策（模型结构化输出）
     domain: str = Field(default="", description="业务域")  # 域
     path_type: PathType = Field(default="unsupported", description="执行路径；unsupported 表示无对应能力")  # 路径
     agent: str = Field(default="", description="目标专家；path_type 为 agentic/expert_action 时非空")  # 专家
+    complexity: Literal["simple", "complex"] = Field(default="simple", description="执行复杂度：simple=单 ReAct；complex=多步计划+执行（only 当 path_type 为 agentic）")  # 复杂度
     approval_required: bool = Field(default=False, description="是否需人工审批（HITL）")  # 审批
     missing_entities: list[str] = Field(default_factory=list, description="缺失的必要实体，触发澄清")  # 缺参
     clarify_options: list[Candidate] = Field(default_factory=list, description="澄清候选项")  # 候选

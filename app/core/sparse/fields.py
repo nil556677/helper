@@ -24,7 +24,7 @@ INDEX_FIELDS: tuple[str, ...] = (FIELD_TITLE, FIELD_KWD, FIELD_ENTITY, FIELD_CON
 
 def sparse_vector_name(field: str) -> str:  # 字段 → Qdrant 命名稀疏向量名
     """``content`` → ``s_content``；与集合 sparse_vectors_config 的键一致。"""
-    return f"s_{str(field)}"  # 加前缀避免与 dense 撞名
+    return f"s_{field!s}"  # 加前缀避免与 dense 撞名
 
 #: 每字段权重（检索加权合并用；正文为 1x 基准）。
 FIELD_WEIGHTS: dict[str, float] = {
@@ -36,7 +36,7 @@ FIELD_WEIGHTS: dict[str, float] = {
 }  # 权重结束
 
 #: 每字段 k1（词频饱和；各字段统一 1.2）。
-FIELD_K1: dict[str, float] = {name: 1.2 for name in FIELDS}  # 统一
+FIELD_K1: dict[str, float] = dict.fromkeys(FIELDS, 1.2)  # 统一
 
 #: 每字段 b（长度归一；短字段压低避免过度惩罚）。
 FIELD_B: dict[str, float] = {
@@ -72,12 +72,9 @@ def per_field_params() -> dict[str, dict[str, float]]:  # 每字段 (k1, b)
 
 def combine_field_scores(  # 多字段加权合并（检索侧打分）
     scores: dict[str, float],  # {字段名: 该字段对当前 chunk 的 BM25 分}
-    *,
-    unknown_weight: float = 1.0,  # 未知字段默认权重
 ) -> float:  # 加权和
     """``final = Σ field_weight × score_field``（未知字段按默认权重）。"""
     total = 0.0  # 累加
     for field, score in scores.items():  # 逐字段
         total += field_weight(str(field)) * float(score)  # 加权累加
-    del unknown_weight  # 占位：field_weight 已带未知字段兜底（1.0）
     return total  # 返回

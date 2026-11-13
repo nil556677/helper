@@ -2,7 +2,7 @@
 
 from __future__ import annotations  # 延迟值注解
 
-from app.memory.extract import ProfileExtraction, profile_candidates  # 被测
+from app.agent.memory.llm_profile import ProfileExtraction, profile_candidates  # 被测
 
 
 def test_profile_candidates_scalar_fields() -> None:  # 标量字段收敛
@@ -28,7 +28,7 @@ def test_profile_candidates_empty() -> None:  # 空数据 → 空候选
 
 
 def test_extract_profile_returns_list(monkeypatch) -> None:  # 模型不可用 → 安全空
-    import app.memory.extract as ext  # 被测
+    import app.agent.memory.llm_profile as ext  # 被测
 
     monkeypatch.setattr(ext, "_avail", lambda *a, **k: False)  # 禁用模型
     assert ext.extract_profile("用户说一句") == []  # 降级空

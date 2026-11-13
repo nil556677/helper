@@ -84,8 +84,10 @@ _SIZE_TIERS: tuple[tuple[float, int], ...] = ((1.6, 1), (1.35, 2), (1.15, 3))
 #: 标题不会太长（比这长的多半是正文段落）
 _MAX_HEADING_CHARS = 60
 
-#: 标题一般不以句末标点结尾（以它结尾的多半是正文）
-_SENTENCE_END = "。！？；!?;…"
+#: 标题一般不以句末标点结尾（以它结尾的多半是正文）。**含 ASCII 句号**：
+#: 与 :mod:`app.core.parse.pdf` / :mod:`app.core.chunk._shared` 保持一致，否则英文正文
+#: 短行以 `.` 结尾时会被启发式误判成标题/作者行。
+_SENTENCE_END = "。！？；.!?;…"
 
 #: 作者/单位行：必须很短，且不能是这些"前置信息"（摘要、关键词、分类号…）
 _BYLINE_MAX_CHARS = 60

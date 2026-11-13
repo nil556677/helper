@@ -7,7 +7,6 @@ from __future__ import annotations  # 延迟求值注解
 
 import hashlib  # 稳定性哈希
 from dataclasses import dataclass  # 策略
-from typing import Sequence  # 序列
 
 
 @dataclass(frozen=True)
@@ -39,7 +38,3 @@ def resolve_policy(  # 按请求键确定性分桶
     digest = hashlib.sha256(str(request_key).encode("utf-8")).hexdigest()  # 稳定哈希
     bucket = int(digest[:8], 16) % 1000 / 1000.0  # 0..1
     return candidate if bucket < candidate_weight else DEFAULT_POLICY  # 分桶
-
-
-def policy_index(policies: Sequence[PolicySpec]) -> dict[str, PolicySpec]:  # 版本 → 策略
-    return {policy.version: policy for policy in policies}  # 建索引

@@ -3,6 +3,42 @@
 本文件记录面向用户的改动轨迹。内部方案文档在 `docs/`、不进版本控制，因此公开可查的变更历史只有这一份 ——
 **版本发布时必须在 `CHANGELOG.md` 补一条**，发布步骤见 [README.md 的「发布流程」](#发布流程)。
 
+## 未发布
+
+- **多轮指代消解 / 焦点管理**：实现《指代消解与焦点管理补充方案》——在 `preprocess_node` 内合入
+  "实体抽取 → 话题切换(五信号) → 指代消解(实体/序数/链回溯) → 焦点栈维护"，跨轮随 State(checkpointer)
+  持久化，产出 `resolved_query` + `anchor_entities` 供路由/执行；模型复用默认大模型、只在 ambiguous
+  一趟附带消解。
+  - 模块：`contracts/focus.py`、`preprocess/focus/{extract,topic,stack,resolve,store}.py`；`focus_events`
+    审计表同步写 SQLite（只追加）+ `correct_binding`（纠正回滚走 `update_state`）。
+  - **实现修订**：焦点合进 `preprocess`（而非独立图节点）——实测在热路由链插新节点会让 LangGraph
+    把 `rule_route`/`dispatch_fixed` 调度进同一 superstep 抛 `InvalidUpdateError`。
+  - 单测：`test_focus.py`（抽取硬约束/栈/话题/消解/端到端"第二个呢"绑定67890）、`test_focus_store.py`。
+  - 全部单测绿。
+
+- **执行分层（简单 ReAct / 复杂 Plan+Execute）**：实现《执行分层方案》——`triage` 在"要走 agent 的那批"里
+  加一个 `complexity`（simple/complex）判定，简单问题走原单 ReAct，复杂/多步问题走**计划+执行**子图
+  （规划 → 分步执行 → 重规划，见 `app/agent/fallback/`）。
+  - 路由/编排：`nodes/plan_execute` 节点 + `routing/edges.after_triage` 分流 + 节点级事件（`plan` STAGE）；
+  - **每计划独立预算** `fallback/budget.PlanBudget`（步/重规划/token/工具/超时/cost，逐计划独立、不共享）；
+  - **完成判定/推进可见**：`contracts/plan_status` 的 `step.status` / `plan_status` / `completion`
+    （区分"真正完成"与"止损"，不把 is_done 一律当成功）；
+  - **无用重试去重**：同一步尝试超限即停（`max_attempts_per_step`）+ 无进展循环检测；
+  - **敏感步前置审批**：不可逆/涉敏感步骤执行前被拦（`make_sensitive_approver`）；
+  - **可恢复内层子图**：`fallback/plan_subgraph` 提供内层可 checkpoint 子图 + `resume_state`
+    （崩溃后"从下一步续跑、不重跑已完成步"，挂 checkpointer 由真 worker 决定，遵循 `checkpoint.py` 说明）；
+  - **灰度回退**：`HELPER_PLAN_EXECUTE=off` 全部回现状单 ReAct；计划决策进 `escalate_reason`（`complex_plan`）便于离线归因。
+  - **确认→查询→留痕（用户侧，非后台审批）**：订单/敏感查询在真正执行前先落一条 `approval_requests`（pending），
+    弹框**告知**要查什么 + 确认/拒绝；确认 → 记录 approved → 才查订单 + 写 `approval_audit` 的 executed 留痕；
+    拒绝/超时 → rejected/expired 不执行。判定由工具元数据（`approval="manual"`）+ 记录状态驱动，不靠文字关键词。
+  - **执行/确认可恢复**：确认走 LangGraph `interrupt`/`Command(resume)`（生产父图挂 `AsyncSqliteSaver`）；
+    `decide_and_execute` 对"已 approve 但未 executed"（确认后崩在执行前）恢复时幂等补跑；
+    `approval_service.catchup_approved()` 在 worker 启动时补齐这类残留记录；
+    计划路径确认后通过内联 `interrupt` 处理器**继续跑剩余步**（不再停在确认那一步）。
+  - 全部单测绿（含 `test_consent_recovery`）。
+  - 全部单测绿（含 `test_complexity / test_budget / test_plan_status / test_dedupe / test_feature_plan /
+    test_plan_approval / test_plan_execute / test_plan_subgraph`）。
+
 ## 0.2.0 — 2026-10-22
 
 - **净室重写**：编排层迁到 LangChain 1.4.7 + LangGraph 1.2.16（`StateGraph`、`interrupt`、

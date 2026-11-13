@@ -7,7 +7,7 @@ from __future__ import annotations  # 延迟求值注解
 
 from dataclasses import dataclass, field  # 结果容器
 from pathlib import Path  # 金标集路径
-from typing import Any, Callable  # 类型
+from typing import Any  # 类型
 
 import yaml  # 金标集
 
@@ -18,7 +18,6 @@ from app.agent.routing.rules._schema import RuleSpec  # 规则
 from app.agent.routing.rules.loader import match  # 规则匹配
 
 Embed = EmbedFn  # 别名
-Metrics = Callable[[float], bool]  # 预留：阈值切片用
 
 #: 金标集：{问题 -> 期望路由}；期望为 None 表示「应当未命中（回兜底/澄清）」。
 GoldenSet = dict[str, str | None]  # 类型别名

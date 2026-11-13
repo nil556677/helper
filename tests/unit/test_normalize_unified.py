@@ -26,6 +26,8 @@ def test_hard_amount_aligned() -> None:  # 金额单位四种写法都归一到"
     assert extract("罚款5万元")["amount"] == ["50000"]  # 数字+万元
     assert extract("罚款50000元")["amount"] == ["50000"]  # 元
     assert extract("罚款五万")["amount"] == ["50000"]  # 中文数字+万
+    assert extract("违约金三万亿元")["amount"] == ["3000000000000"]  # 万亿（复合单位，不能贪成「万」）
+    assert extract("违约金1.5亿元")["amount"] == ["150000000"]  # 亿仍正确
 
 
 def test_hard_date_aligned() -> None:  # 日期写法对齐

@@ -38,31 +38,34 @@ def _cap(text: str | None, limit: int = _JSON_CAP) -> str:
     return text[: max(0, limit - 1)] + "…"
 
 
-def create_run(
+# ---- trace_runs 的写：同步 / 异步共用同一份 SQL 与参数，避免两处漂移 ----
+
+#: 建 run 的 INSERT（sync/async 共用一条，改字段只改这一处）。
+_CREATE_RUN_SQL = (
+    "INSERT INTO trace_runs(id, parent_run_id, conversation_id, kind, question,"
+    " started_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)"
+)
+
+
+def _create_run_tuple(
     run_id: str,
-    *,
+    parent_run_id: str | None,
+    conversation_id: str,
+    kind: str,
     question: str,
-    conversation_id: str = "",
-    parent_run_id: str | None = None,
-    kind: str = "chat",
-    started_at: float | None = None,
-    metadata: dict | None = None,
-) -> None:
-    stamp = time.time() if started_at is None else started_at
-    with transaction() as conn:
-        conn.execute(
-            "INSERT INTO trace_runs(id, parent_run_id, conversation_id, kind, question,"
-            " started_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                run_id,
-                parent_run_id,
-                conversation_id,
-                kind,
-                _cap(question, 4000),
-                stamp,
-                _json(metadata) or "{}",
-            ),
-        )
+    stamp: float,
+    metadata: dict | None,
+) -> tuple:
+    """建 run 的绑定参数（sync/async 共用，裁剪/序列化逻辑只写一处）。"""
+    return (  # 顺序与 _CREATE_RUN_SQL 的占位一致
+        run_id,  # id
+        parent_run_id,  # 父 run
+        conversation_id,  # 会话
+        kind,  # 类型
+        _cap(question, 4000),  # 问题（截断）
+        stamp,  # 开始时间
+        _json(metadata) or "{}",  # 元数据 JSON
+    )  # 结束
 
 
 #: update_run 允许更新的列（白名单，防注入）。
@@ -77,13 +80,82 @@ _RUN_FIELDS: dict[str, str] = {
 }
 
 
+def _update_clause(fields: dict[str, object]) -> tuple[str | None, list[object]]:
+    """按白名单拼 ``SET`` 子句与值；无合法字段返回 ``(None, [])``（sync/async 共用）。"""
+    allowed = {key: value for key, value in fields.items() if key in _RUN_FIELDS}  # 白名单
+    if not allowed:  # 空
+        return None, []  # 无更新
+    sets = ", ".join(f"{_RUN_FIELDS[key]} = ?" for key in allowed)  # SET 子句
+    values = [str(value) for value in allowed.values()]  # 值（全部转字符串）
+    return sets, values  # 返回
+
+
+#: 收尾 run 的 UPDATE（sync/async 共用一条）。
+_FINISH_RUN_SQL = (
+    "UPDATE trace_runs SET status = ?, error_kind = ?, error_detail = ?,"
+    " finished_at = ?, duration_ms = ?, ttft_ms = COALESCE(?, ttft_ms), prompt_tokens = ?,"
+    " completion_tokens = ?, total_tokens = ?, cache_hit = ? WHERE id = ?"
+)
+
+
+def _finish_run_tuple(
+    stamp: float,
+    started: float,
+    status: str,
+    error_kind: str,
+    error_detail: str,
+    ttft_ms: int | None,
+    prompt_tokens: int,
+    completion_tokens: int,
+    total_tokens: int | None,
+    cache_hit: bool,
+    run_id: str,
+) -> tuple:
+    """收尾 run 的绑定参数（sync/async 共用；时长/总 token 计算只写一处）。"""
+    duration = int((stamp - started) * 1000)  # 耗时
+    total = (  # 总 token
+        total_tokens  # 给定
+        if total_tokens is not None  # 有
+        else int(prompt_tokens) + int(completion_tokens)  # 计算
+    )  # 结束
+    return (  # 顺序与 _FINISH_RUN_SQL 一致
+        status,  # 状态
+        _cap(error_kind, 60),  # 失败类型
+        _cap(error_detail, 2000),  # 失败详情
+        stamp,  # 结束时间
+        duration,  # 耗时
+        ttft_ms,  # 首 token（COALESCE 保留旧值）
+        int(prompt_tokens),  # 输入 token
+        int(completion_tokens),  # 输出 token
+        int(total),  # 总 token
+        1 if cache_hit else 0,  # 命中
+        run_id,  # run id
+    )  # 结束
+
+
+def create_run(
+    run_id: str,
+    *,
+    question: str,
+    conversation_id: str = "",
+    parent_run_id: str | None = None,
+    kind: str = "chat",
+    started_at: float | None = None,
+    metadata: dict | None = None,
+) -> None:
+    stamp = time.time() if started_at is None else started_at
+    with transaction() as conn:
+        conn.execute(
+            _CREATE_RUN_SQL,
+            _create_run_tuple(run_id, parent_run_id, conversation_id, kind, question, stamp, metadata),
+        )
+
+
 def update_run(run_id: str, **fields: object) -> None:
     """按白名单更新运行摘要字段（route/query/answer/model/metadata）。"""
-    allowed = {key: value for key, value in fields.items() if key in _RUN_FIELDS}
-    if not allowed:
-        return
-    sets = ", ".join(f"{_RUN_FIELDS[key]} = ?" for key in allowed)
-    values = [str(value) for value in allowed.values()]
+    sets, values = _update_clause(fields)  # 白名单 + SET 子句
+    if sets is None:  # 无合法字段
+        return  # 跳过
     with transaction() as conn:
         conn.execute(f"UPDATE trace_runs SET {sets} WHERE id = ?", [*values, run_id])
 
@@ -107,28 +179,11 @@ def finish_run(
             "SELECT started_at FROM trace_runs WHERE id = ?", (run_id,)
         ).fetchone()
         started = float(row["started_at"]) if row else stamp
-        duration = int((stamp - started) * 1000)
-        total = (
-            total_tokens
-            if total_tokens is not None
-            else int(prompt_tokens) + int(completion_tokens)
-        )
         conn.execute(
-            "UPDATE trace_runs SET status = ?, error_kind = ?, error_detail = ?,"
-            " finished_at = ?, duration_ms = ?, ttft_ms = COALESCE(?, ttft_ms), prompt_tokens = ?,"
-            " completion_tokens = ?, total_tokens = ?, cache_hit = ? WHERE id = ?",
-            (
-                status,
-                _cap(error_kind, 60),
-                _cap(error_detail, 2000),
-                stamp,
-                duration,
-                ttft_ms,
-                int(prompt_tokens),
-                int(completion_tokens),
-                int(total),
-                1 if cache_hit else 0,
-                run_id,
+            _FINISH_RUN_SQL,
+            _finish_run_tuple(
+                stamp, started, status, error_kind, error_detail,
+                ttft_ms, prompt_tokens, completion_tokens, total_tokens, cache_hit, run_id,
             ),
         )
 
@@ -144,16 +199,15 @@ async def create_run_async(  # 异步建 run（全库单异步写者用）
     started_at: float | None = None,  # 开始时间
     metadata: dict | None = None,  # 元数据
 ) -> None:  # 无返回
-    """与同步 ``create_run`` 同 SQL；事务用 db.write_lock + BEGIN IMMEDIATE。"""
+    """与同步 ``create_run`` 共用同一个 INSERT+参数（事务用 db.write_lock + BEGIN IMMEDIATE）。"""
     stamp = time.time() if started_at is None else started_at  # 时间戳
     async with db.write_lock:  # 串行写
         conn = db.conn  # 连接
         try:  # 事务
             await conn.execute("BEGIN IMMEDIATE")  # 拿写锁
             await conn.execute(  # 插入
-                "INSERT INTO trace_runs(id, parent_run_id, conversation_id, kind, question,"
-                " started_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (run_id, parent_run_id, conversation_id, kind, _cap(question, 4000), stamp, _json(metadata) or "{}"),
+                _CREATE_RUN_SQL,  # 共用 SQL
+                _create_run_tuple(run_id, parent_run_id, conversation_id, kind, question, stamp, metadata),  # 共用参数
             )  # 插入结束
             await conn.commit()  # 提交
         except BaseException:  # 失败
@@ -162,12 +216,10 @@ async def create_run_async(  # 异步建 run（全库单异步写者用）
 
 
 async def update_run_async(db: AsyncDB, run_id: str, **fields: object) -> None:  # 异步更新
-    """与同步 ``update_run`` 同白名单；事务用异步连接。"""
-    allowed = {key: value for key, value in fields.items() if key in _RUN_FIELDS}  # 白名单
-    if not allowed:  # 空
+    """与同步 ``update_run`` 共用白名单/SET；事务用异步连接。"""
+    sets, values = _update_clause(fields)  # 白名单 + SET 子句
+    if sets is None:  # 无合法字段
         return  # 跳过
-    sets = ", ".join(f"{_RUN_FIELDS[key]} = ?" for key in allowed)  # SET 子句
-    values = [str(value) for value in allowed.values()]  # 值
     async with db.write_lock:  # 串行写
         conn = db.conn  # 连接
         try:  # 事务
@@ -193,7 +245,7 @@ async def finish_run_async(  # 异步收尾 run
     total_tokens: int | None = None,  # 总数
     cache_hit: bool = False,  # 缓存命中
 ) -> None:  # 无返回
-    """与同步 ``finish_run`` 同 SQL；事务用异步连接。"""
+    """与同步 ``finish_run`` 共用同一个 UPDATE+参数；事务用异步连接。"""
     stamp = time.time() if finished_at is None else finished_at  # 时间戳
     async with db.write_lock:  # 串行写
         conn = db.conn  # 连接
@@ -205,21 +257,12 @@ async def finish_run_async(  # 异步收尾 run
                 )  # 查询结束
             ).fetchone()  # 取
             started = float(row["started_at"]) if row else stamp  # 开始时间
-            duration = int((stamp - started) * 1000)  # 耗时
-            total = (  # 总 token
-                total_tokens  # 给定
-                if total_tokens is not None  # 有
-                else int(prompt_tokens) + int(completion_tokens)  # 计算
-            )  # 结束
             await conn.execute(  # 更新终态
-                "UPDATE trace_runs SET status = ?, error_kind = ?, error_detail = ?,"
-                " finished_at = ?, duration_ms = ?, ttft_ms = COALESCE(?, ttft_ms), prompt_tokens = ?,"
-                " completion_tokens = ?, total_tokens = ?, cache_hit = ? WHERE id = ?",
-                (
-                    status, _cap(error_kind, 60), _cap(error_detail, 2000), stamp, duration,
-                    ttft_ms, int(prompt_tokens), int(completion_tokens), int(total),
-                    1 if cache_hit else 0, run_id,
-                ),
+                _FINISH_RUN_SQL,  # 共用 SQL
+                _finish_run_tuple(  # 共用参数
+                    stamp, started, status, error_kind, error_detail,
+                    ttft_ms, prompt_tokens, completion_tokens, total_tokens, cache_hit, run_id,
+                ),  # 参数结束
             )  # 更新结束
             await conn.commit()  # 提交
         except BaseException:  # 失败

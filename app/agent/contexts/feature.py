@@ -6,11 +6,11 @@
 
 from __future__ import annotations  # 延迟值注解
 
-from typing import Any  # 任意值
+import os  # 环境变量（灰度开关）
 
 from app.agent.context import current_run  # 当前 run
 
-__all__ = ["builder_enabled", "dispatch_context_enabled"]  # 导出
+__all__ = ["builder_enabled", "dispatch_context_enabled", "plan_execute_enabled"]  # 导出
 
 
 def _feature(key: str) -> bool:  # 读单特性位
@@ -30,3 +30,10 @@ def builder_enabled() -> bool:  # 是否启用 ContextBuilder 注入（ReAct/gen
 def dispatch_context_enabled() -> bool:  # 是否启用 dispatch 上文拼接
     """独立于 ReAct：避免 ReAct 一开、dispatch 被连带开启上文的副作用。"""
     return _feature("dispatch_context")  # 特性位
+
+
+def plan_execute_enabled() -> bool:  # 是否启用复杂分流走 Plan+Execute（灰度开关，环境变量）
+    """`HELPER_PLAN_EXECUTE` 缺省 on；置 off 全部回现状单 ReAct，天然可回退。
+    用环境变量而非 RunContext：路由层在节点装配前就要读，靠 run 特性位来不及。"""
+    value = os.environ.get("HELPER_PLAN_EXECUTE", "on").strip().lower()  # 取值
+    return value in ("1", "true", "yes", "on")  # 判断

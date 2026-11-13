@@ -1,4 +1,4 @@
-"""订单查询工具（MySQL 后台配置）；读敏感单：需人工审批 + 落表。"""
+"""订单查询工具（MySQL 后台配置）；读敏感单：需用户确认 + 留痕。"""
 
 from __future__ import annotations  # 延迟值注解
 
@@ -31,15 +31,15 @@ class OrderResult(BaseModel):  # 结果契约
     text: str = ""  # 一句话
 
 
-@tool_spec(  # 统一范式：读敏感单，需人工审批
+@tool_spec(  # 统一范式：读敏感单，需用户确认后查询
     description=(  # 能力说明
         "按订单号或手机号查询订单状态、金额、支付方式、下单时间。"
         "不返回物流轨迹（用 query_logistics），不返回政策条款（用 search_knowledge_base）。"
-        "查询会触发人工审批。"
+        "查询前会先请您确认（告知将查询哪些信息），确认后执行并留痕。"
     ),  # 说明结束
     args_schema=OrderQuery,  # 参数契约
     result_schema=OrderResult,  # 结果契约
-    approval="manual",  # 必经人工审批
+    approval="manual",  # 必经用户确认
     risk="medium",  # 中风险
     timeout_ms=8000,  # 库查询给足
 )  # 装饰结束

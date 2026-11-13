@@ -541,6 +541,8 @@ def iter_units(path: Path) -> Iterator[Unit]:
                     blocks.append(block)
                     continue
                 # 文字块在这里才补页号：_paragraph_blocks 只处理单页，不知道自己是第几页
+                # ⚠ line_coords 必须带上：它在 _close_paragraph 里是逐行 bbox，漏带会让
+                #   引用高亮永远退回整块 coords（loc.py 依赖 line_coords 与 text 行对齐）。
                 blocks.append(
                     Block(
                         text=block.text,
@@ -550,6 +552,7 @@ def iter_units(path: Path) -> Iterator[Unit]:
                         line_from=block.line_from,
                         line_to=block.line_to,
                         coords=block.coords,
+                        line_coords=block.line_coords,
                         font_size=block.font_size,  # P1.2 启发式的原料
                         bold=block.bold,
                     )

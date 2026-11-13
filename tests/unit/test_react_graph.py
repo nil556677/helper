@@ -4,8 +4,6 @@ from __future__ import annotations  # 延迟值注解
 
 import asyncio  # 跑 async
 
-import pytest  # 跳过/断言
-
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage  # 消息
 
 import app.agent.tools.library as lib  # 内置工具（取 current_time）
@@ -116,13 +114,55 @@ def test_react_graph_approval_intercepts_manual_tool(monkeypatch) -> None:  # ma
     finally:  # 复位
         order_repo.set_order_repo(None)  # 清
     msgs = result["messages"]  # 全部消息
-    assert any(isinstance(m, ToolMessage) and "需要人工审批" in str(m.content) for m in msgs)  # 被拦截
+    assert any(isinstance(m, ToolMessage) and "需要您确认" in str(m.content) for m in msgs)  # 被确认门拦截
     assert calls == []  # 工具未被真正执行
     assert str(result["messages"][-1].content or "")  # 回了模型并给终答
     assert approval_stats()["blocked"] > before_blocked  # 审批拦截计数增长
 
 
-def test_end_to_end_approval_flow(fake_root) -> None:  # ReAct→落表→批准→执行
+def test_approval_gate_reevaluates_next_round(monkeypatch) -> None:  # 隔轮审批门回归
+    """安全工具先执行一轮后，模型下一轮调 manual 工具也必须再过审批门（不许"隔一轮直通"）。"""
+    from langchain_core.messages import ToolMessage  # 找拦截消息
+
+    from app.services.order import repo as order_repo  # 订单仓储
+
+    calls: list[str] = []  # 记录 manual 工具是否真执行
+
+    class _FakeRepo:  # 假订单库（若被直接调用说明第二轮的审批门失效）
+        async def get_order_detail(self, order_id: str):  # 会记账
+            calls.append(order_id)  # 记
+            raise AssertionError("第二轮 manual 调用未被审批拦截，被直接执行")  # 越权
+
+        async def get_orders_by_phone(self, phone: str):  # 同
+            calls.append(phone)  # 记
+            raise AssertionError("第二轮 manual 调用未被审批拦截，被直接执行")  # 越权
+
+    order_repo.set_order_repo(_FakeRepo())  # 注入
+    before_blocked = approval_stats()["blocked"]  # 计数前
+    try:  # 跑
+        tc_safe = {"name": "current_time", "args": {"as_timestamp": False}, "id": "t1", "type": "tool_call"}  # 安全工具
+        tc_manual = {"name": "query_order", "args": {"order_id": "12345"}, "id": "t2", "type": "tool_call"}  # manual 工具
+        model = _Model([  # 三轮：安全→manual→终答
+            AIMessage(content="", tool_calls=[tc_safe]),  # 第 1 轮：安全工具
+            AIMessage(content="", tool_calls=[tc_manual]),  # 第 2 轮：manual 工具（过去会被隔轮短路直通）
+            AIMessage(content="该查询需要人工审批。"),  # 第 3 轮：终答
+        ])  # 结束
+        graph = build_react(model, [lib.current_time, lib.query_order], "sys")  # 建图
+        result = asyncio.run(graph.ainvoke({  # 跑
+            "messages": [HumanMessage(content="先查时间，再查订单 12345")],  # 输入
+            "status": "running",  # 状态
+            "pending_request_ids": [],  # 无待审
+            "approval_checked": False,  # 初始未审
+            "thread_id": "t",  # 线程
+            "tenant_id": "default",  # 租户
+            "requester_id": "u",  # 发起
+        }))  # 结束
+    finally:  # 复位
+        order_repo.set_order_repo(None)  # 清
+    assert calls == []  # manual 工具没被直接执行
+    assert any(isinstance(m, ToolMessage) and "需要您确认" in str(m.content) for m in result["messages"])  # 有拦截/确认消息
+    assert str(result["messages"][-1].content or "") == "该查询需要人工审批。"  # 回到模型给终答
+    assert approval_stats()["blocked"] > before_blocked  # 第二轮的拦截计入统计
     from app.agent.approval import service as approval_service  # 审批服务
     from app.core.db import schema_v1  # 建表
     from app.core.db.connection import get_connection  # 连接

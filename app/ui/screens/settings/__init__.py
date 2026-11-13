@@ -44,7 +44,7 @@ SECTIONS: tuple[tuple[str, str, str], ...] = (
     ("terms", "领域词", "sell"),
     ("tasks", "任务", "pending_actions"),
     ("traces", "检索追踪", "query_stats"),
-    ("approvals", "审批", "verified_user"),
+    ("approvals", "确认记录", "verified_user"),
     ("datasource", "数据源", "storage"),
     ("models", "模型配置", "smart_toy"),
     ("data", "数据与存储", "folder_open"),

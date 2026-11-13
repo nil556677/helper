@@ -62,6 +62,20 @@ async def test_insert_user_writes_running_message(_db) -> None:  # 发送即落�
     assert row["status"] == "running"  # 进行中
 
 
+async def test_delete_removes_ghost_message(_db) -> None:  # 创建失败补偿
+    """delete 能删掉预写的 user 消息（创建失败时路由用它清"幽灵消息"）。"""
+    from app.http.repositories.messages import MessageRepository  # 仓储
+
+    async with _DB() as db:  # 连接
+        repo = MessageRepository(db)  # 仓储
+        message_id = await repo.insert_user("c1", "问题", "run-1")  # 预写 user
+        await repo.delete("c1", message_id)  # 删掉
+        data = await repo.list("c1")  # 查历史
+        assert data["items"] == []  # 已清空
+    row = get_connection().execute("SELECT COUNT(*) AS n FROM messages", ()).fetchone()  # 统计
+    assert row["n"] == 0  # 库里没残留
+
+
 async def test_persist_turn_dedups_user(_db) -> None:  # persist 去重
     """已预写 user → finalize 只补 assistant，不重复插 user，且把 user 标完成。"""
     from app.agent.context import RunContext  # 上下文

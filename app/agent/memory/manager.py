@@ -312,7 +312,7 @@ def distill_conversation(conversation_id: str) -> int:  # 蒸馏写回
             facts.append(MemoryFact(key=fact.key, value=fact.value, source=fact.source, time=fact.time))  # 候选
     # —— ② LLM 画像通道（默认模型；best-effort，失败不阻断）——
     try:  # 模型抽取失败不影响规则通道
-        from app.memory.extract import extract_profile  # LLM 画像抽取
+        from app.agent.memory.llm_profile import extract_profile  # LLM 画像抽取（agent 层）
 
         for cand in extract_profile("\n".join(fragment_lines), slot="llm"):  # 调默认模型
             facts.append(  # 画像候选 → 统一写（走 record_facts 白名单分流到画像层）

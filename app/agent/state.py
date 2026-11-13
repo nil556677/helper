@@ -57,9 +57,22 @@ class ChatState(TypedDict, total=False):  # 图状态（字段都可缺省）
     fallback_used: bool  # 本次请求最多进兜底子图一次
     final_response: str  # 兜底子图返回的最终回答（并入 answer 用）
 
+    # 计划+执行（复杂/多步；见《执行分层方案》§11/§16）
+    plan_type: str  # 执行模式（none/react/plan_execute）
+    plan_status: dict  # 计划状态块（status/step_index/total_steps/reason）
+    completion: dict  # 完成块（all_done/finalized/status/reason/done_steps/total_steps）
+    last_plan: list[dict]  # 计划步骤展示（每步 step/agent/status）
+
     # 检索
     hits: list[dict[str, Any]]  # 召回命中
     evidence: list[dict[str, Any]]  # 证据片段
+
+    # 焦点管理（多轮指代；见 docs/指代消解与焦点管理-补充方案.md，随 State 跨轮持久化）
+    focus_stack: dict  # 焦点栈 FocusStack JSON（checkpointer 持久化）
+    resolved_query: str  # 指代消解后的 query（路由/执行用）
+    anchor_entities: dict  # 锚定实体 {type: id}（下游 task_goal/key_facts）
+    reference_ambiguous: bool  # 指代歧义需澄清
+    inherited_intent: str  # 序数指代继承的意图
 
     # 答复
     answer: str  # 回答正文

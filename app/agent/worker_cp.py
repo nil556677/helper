@@ -48,6 +48,10 @@ async def setup_loop(  # 在服务 loop 里一次性初始化
     task.add_done_callback(_MAINTENANCE_TASKS.discard)  # 完成即移除
     with contextlib.suppress(Exception):  # 对账失败不能阻止服务
         reconcile.reconcile_once(stale_s=_STALE_S)  # 启动对账：崩溃残留标 interrupted
+    with contextlib.suppress(Exception):  # 补跑失败不能阻止服务
+        from app.agent.approval import service as approval_service  # 确认服务
+
+        await approval_service.catchup_approved()  # 补齐"已确认但未执行"的查询记录（崩溃残留）
 
 
 async def _maintenance(  # 后台维护

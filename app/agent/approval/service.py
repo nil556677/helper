@@ -6,7 +6,7 @@ from typing import Any  # 任意值
 
 from app.agent.approval import repository  # 仓储
 
-__all__ = ["decide", "execute_approved", "expire_all", "ledger", "pending"]  # 导出
+__all__ = ["catchup_approved", "decide", "execute_approved", "expire_all", "ledger", "pending"]  # 导出
 
 
 def pending(tenant_id: str, *, limit: int = 50) -> list[dict[str, Any]]:  # 待审列表
@@ -29,6 +29,26 @@ def decide(request_id: str, action: str, *, decided_by: str, note: str = "") -> 
 def expire_all() -> list[str]:  # 超时扫描
     """把过期 pending 标 expired，返回需唤醒的 request_id。"""
     return repository.expire_pending()  # 委托
+
+
+async def catchup_approved(*, limit: int = 50) -> list[str]:  # 恢复补跑（崩溃残留）
+    """把"已确认但没执行完"的记录补齐执行（幂等，`execute_approved` 不重复跑）。
+
+    场景：用户点了确认、但进程在执行查询前退出 → 记录停在 approved、无 executed。
+    启动恢复时把这个补掉，避免这类查询永远卡在 approved。返回实际补跑的 request_id。
+    """
+    done: list[str] = []  # 实际补跑的 id
+    for row in repository.list_approved_unexecuted(limit=limit):  # 逐条残留
+        rid = str(row.get("request_id") or "")  # id
+        if not rid:  # 无 id
+            continue  # 跳过
+        try:  # 补执行（幂等）
+            out = await execute_approved(rid)  # 执行
+            if out.get("executed"):  # 真正跑了
+                done.append(rid)  # 记
+        except Exception:  # 单条失败不影响其它（best-effort）
+            continue  # 下一个
+    return done  # 返回
 
 
 async def execute_approved(request_id: str, *, registry: dict[str, Any] | None = None) -> dict[str, Any]:  # 批准后执行
@@ -78,7 +98,7 @@ async def execute_approved(request_id: str, *, registry: dict[str, Any] | None =
         return {"executed": False, "reason": str(exc)}  # 返回
 
 
-def _precheck_args(tool: Any, args: dict[str, Any], request_id: str) -> None:  # 执行前参数复核
+def _precheck_args(tool: Any, args: dict[str, Any], request_id: str) -> None:  # noqa: ARG001 — 执行前参数复核
     """用工具描述符的 args_schema 校验参数（best-effort）。
 
     拿不到 schema（如测试的假工具/未声明契约）就直接放行，不阻断执行；拿到就严格校验，

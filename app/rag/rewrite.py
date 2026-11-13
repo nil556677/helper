@@ -15,11 +15,11 @@ import re  # 正则
 from dataclasses import dataclass, field  # 结果容器
 from typing import Any  # 任意值
 
+from app.agent.contexts.prompts import REWRITE_SYSTEM_UID, get  # 统一改写提示模板
+from app.agent.contracts import ErrorCode  # 错误码单源
 from app.agent.llm import DEFAULT_PARAMS  # 共用默认参数
 from app.agent.llm.gateway import ModelGateway  # 统一模型网关
 from app.agent.llm.types import ModelRequest, ModelUnavailable  # 请求 / 槽位不可用
-from app.agent.contexts.prompts import REWRITE_SYSTEM_UID, get  # 统一改写提示模板
-from app.agent.contracts import ErrorCode  # 错误码单源
 from app.agent.tools.cache import TtlCache  # 共享 TTL 缓存（按条 ttl）
 from app.core.retry import RetryPolicy, classify_error  # 重试策略 / 错误分类
 from app.rag import hard  # 硬要素（校验"有没有改丢"）
@@ -45,9 +45,6 @@ FAIL_TTL = 60  # 60 秒
 
 #: 指代词：出现就说明"缺主语"。
 _PRONOUNS = ("它", "这个", "那个", "该", "此", "上面", "刚才", "这份", "上述", "其")  # 指代
-
-#: 无实体的疑问说法。
-_VAGUE = ("怎么办", "怎么弄", "如何", "什么要求", "有哪些", "需要什么")  # 含糊
 
 #: 实体线索：数字、引号、书名号。
 _ENTITY = re.compile(r"\d|「|」|“|”|\"|《|》")  # 实体线索

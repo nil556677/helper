@@ -217,16 +217,25 @@ def _flatten_header(
 def iter_units(path: Path) -> Iterator[Unit]:
     """按"空行切出的表格段"逐段产出（结构化、保留空列/合并/表头/行列号）。
 
-    优先走可选后端 ExStruct（装了且开开关）；任何异常都回退到 openpyxl 主路径。
+    优先走可选后端 ExStruct（装了且开开关）；**失败回退到 openpyxl 主路径**。
     """
     from app.core.parse import xlsx_exstruct
 
     if xlsx_exstruct.available():
-        try:
-            return xlsx_exstruct.iter_units(path)
-        except Exception:
-            pass
-    return _iter_openpyxl(path)
+        # 可选后端是**惰性生成器**：旧代码在 ``return`` 处包 try 根本包不住迭代
+        # （生成器函数体要到首次 next 才执行），解析异常会穿透、回退从不生效。
+        # 这里用"先取首块"守卫：首个 next 抛错（打不开/结构坏/空）就整体回退 openpyxl；
+        # 一旦成功出过一块，就承诺 ExStruct 路径——半路回退会丢掉已产出的数据、更糟。
+        iterator = xlsx_exstruct.iter_units(path)  # 惰性（尚未执行）
+        try:  # 试探首块：能出才有资格走这条路
+            first = next(iterator)  # 真正触发解析
+        except Exception:  # 首块失败（含空）→ 回退
+            yield from _iter_openpyxl(path)  # 用稳定后端重新解析
+            return  # 结束
+        yield first  # 首块放行
+        yield from iterator  # 其余沿用 ExStruct（不再回退）
+        return  # 结束
+    yield from _iter_openpyxl(path)  # 未启用可选后端 → 主路径
 
 
 def _iter_openpyxl(path: Path) -> Iterator[Unit]:

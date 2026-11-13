@@ -232,8 +232,8 @@ def _render_steps(view: dict[str, Any]) -> None:  # 画时间线（实时）
     view["details"].update()  # 刷新
 
 
-def _render_approval(view: dict[str, Any], data: dict[str, Any]) -> None:  # 审批卡
-    """写文件/改文件/跑命令前确认；始终展开。"""
+def _render_approval(view: dict[str, Any], data: dict[str, Any]) -> None:  # 确认卡
+    """查敏感/改数据前请用户确认；始终展开。"""
     box = view.get("approval_box")  # 容器
     if box is None or not _alive(view):  # 没 UI
         return  # 跳过
@@ -241,7 +241,7 @@ def _render_approval(view: dict[str, Any], data: dict[str, Any]) -> None:  # 审
     box.clear()  # 清旧
     with box, ui.card().classes("w-full hp-card gap-2"):  # 画
         ui.label("需要你确认").classes("hp-card-title")  # 标题
-        ui.label(f"{data.get('name') or '操作'}：{data.get('detail') or ''}").classes("hp-field-help")  # 明细
+        ui.label(f"{data.get('name') or '操作'}：{data.get('detail') or ''}").classes("hp-field-help")  # 告知明细
         if data.get("risk"):  # 风险
             ui.label(str(data["risk"])).classes("hp-note-error")  # 提示
         if data.get("diff"):  # 改动
@@ -249,7 +249,7 @@ def _render_approval(view: dict[str, Any], data: dict[str, Any]) -> None:  # 审
                 ui.code(str(data["diff"])).classes("w-full")  # diff
         with ui.row().classes("w-full justify-end gap-2"):  # 按钮
             ui.button("拒绝", on_click=lambda: _decide(view, request_id, False)).props("flat")  # 拒绝
-            ui.button("允许一次", on_click=lambda: _decide(view, request_id, True)).props("unelevated")  # 允许
+            ui.button("确认执行", on_click=lambda: _decide(view, request_id, True)).props("unelevated")  # 确认
 
 
 def _render_clarify(view: dict[str, Any], data: dict[str, Any]) -> None:  # 澄清卡

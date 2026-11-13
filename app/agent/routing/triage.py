@@ -20,14 +20,6 @@ AGENTIC_MARKERS: tuple[str, ...] = (  # 因果/诊断
 MULTI_MARKERS: tuple[str, ...] = ("对比", "区别", "清单", "并列", "分别", "有哪些", "各自")  # 标记
 
 
-#: 时间类词（缺 range 时记为缺参）。
-TIME_WORDS: tuple[str, ...] = ("今天", "昨天", "前天", "本周", "上周", "本月", "上月", "本季度", "上季度", "今年", "去年")  # 时间词
-
-
-def _has(text: str, markers: tuple[str, ...]) -> bool:  # 命中任一
-    return any(word in text for word in markers)  # 判断
-
-
 def agent_for_domain(domain: str) -> str:  # domain → 专家（EXPERTS 查表，零 LLM）
     """`domain` 映射到已注册专家；查不到兜底 knowledge_agent，再兜底第一个。"""
     from app.agent.agents.experts import EXPERTS  # 单一注册表（延迟导入避免环）
@@ -43,18 +35,8 @@ def agent_for_domain(domain: str) -> str:  # domain → 专家（EXPERTS 查表�
     return next(iter(EXPERTS))  # 再兜底第一个
 
 
-def _missing(query: str, intent: IntentDecision, entities: dict[str, Any], time_range: Any) -> list[str]:  # 缺参
-    """操作类缺订单号；有时间词但没解析出范围 → 记缺 time_range。"""
-    missing: list[str] = []  # 结果
-    if intent.intent == "action" and not (entities or {}).get("order_id"):  # 操作缺单号
-        missing.append("order_id")  # 缺
-    if _has(str(query or ""), TIME_WORDS) and time_range is None:  # 有时间词却没范围
-        missing.append("time_range")  # 缺
-    return missing  # 返回
-
-
 def decide_triage(  # 纯函数：极简统一执行计划
-    query: str,  # 规范化问题
+    query: str,  # 规范化问题（兼容签名保留，极简后暂未读取）
     intent: IntentDecision,  # L2 意图
     flags: dict[str, Any],  # 硬约束
     *,
@@ -65,10 +47,10 @@ def decide_triage(  # 纯函数：极简统一执行计划
     has_route: bool = True,  # 兼容旧签名
     dependency_agentic: bool = False,  # 兼容旧签名
 ) -> TriageDecision:  # 决策
-    """极简：能接住的功能由 pretriage/规则直连；**到这里=没被接住 → 一律 ReAct**。
+    """两级：能接住的功能由 pretriage/规则直连；**到这里=没被接住 → ReAct 或 plan+execute**。
 
     不再判别 fast_single / fast_multi / dependency / unsupported——动作/澄清/复杂
-    全交给 ReAct 统一处理（ReAct 未来承载更多能力）。仅 flags.no_tools 走 general。
+    全交给 ReAct（simple）或 Plan+Execute（complex）统一处理。仅 flags.no_tools 走 general。
     """
     domain = intent.domain or ""  # 域
     kind = intent.intent  # 意图
@@ -76,5 +58,23 @@ def decide_triage(  # 纯函数：极简统一执行计划
     del escalated, entities, time_range, has_route, dependency_agentic  # 忽略不用的旧参数
     if flags.get("no_tools"):  # 禁工具（硬约束）
         return TriageDecision(intent=kind, domain=domain, path_type="agentic", agent="general_agent", escalate_reason="flag_no_tools", **extras)  # 通用兜底
-    # 其余全部 → ReAct（唯一出口）
-    return TriageDecision(intent=kind, domain=domain, path_type="agentic", agent=agent_for_domain(domain), escalate_reason="react_unified", **extras)  # ReAct
+    # 复杂度判定：从"一律 ReAct"里把复杂/多步拆去 Plan+Execute（见 routing/complexity）
+    from app.agent.routing.complexity import judge  # 判定（延迟导入避免环）
+
+    complexity = judge(  # 判定
+        query,  # 问题
+        flags=flags,  # 硬约束
+        intent_complexity=intent.complexity,  # 模型档（中性）
+        intent_confidence=float(intent.confidence),  # 置信
+    )  # 结束
+    reason = "complex_plan" if complexity == "complex" else "react_unified"  # 归因
+    # 其余 → ReAct（simple）或 Plan+Execute（complex）
+    return TriageDecision(  # 决策
+        intent=kind,  # 意图
+        domain=domain,  # 域
+        path_type="agentic",  # 承载路径
+        agent=agent_for_domain(domain),  # 专家
+        complexity=complexity,  # 执行复杂度
+        escalate_reason=reason,  # 归因
+        **extras,  # 公共字段
+    )  # 结束

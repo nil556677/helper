@@ -12,8 +12,8 @@ def _desc(approval="none", mutation=Mutation.READ_ONLY):  # 假描述符
     return SimpleNamespace(approval=approval, mutation=mutation)  # 描述符
 
 
-def test_manual_requires() -> None:  # manual 必经审批
-    assert should_require_approval(_desc(approval="manual")) == (True, "策略要求人工审批")  # 审
+def test_manual_requires() -> None:  # manual 必经用户确认
+    assert should_require_approval(_desc(approval="manual")) == (True, "需用户确认后执行")  # 需确认
 
 
 def test_none_readonly_free() -> None:  # 无审批且只读 → 放行

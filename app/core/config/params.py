@@ -430,6 +430,7 @@ AGENT: tuple[Param, ...] = (
         Aspect.QUERY,
         help_text="订单库连接密码。",
         cast=str,
+        secret=True,  # 与 vector.api_key 一致：凭证落库前 DPAPI 加密，读侧自动解密
     ),
     _p(
         "agent.mysql.database",

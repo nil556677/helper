@@ -139,22 +139,3 @@ def ensure_default() -> Path:
     save(BootstrapConfig())
     logger.info("已写入默认引导配置（日志级别 INFO / 调试关闭 / 监听 127.0.0.1）")
     return path
-
-
-def isolate_bad_file(path: Path, reason: str) -> str | None:
-    """把坏的老配置文件挪到一边（保留排查线索），返回新文件名。"""
-    if not path.exists():
-        return None
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    target = path.with_name(f"config.bad-{stamp}.json")
-    counter = 2
-    while target.exists():
-        target = path.with_name(f"config.bad-{stamp}-{counter}.json")
-        counter += 1
-    try:
-        path.replace(target)
-    except OSError as exc:
-        logger.error("坏配置隔离失败（{}）：{}", reason, exc)
-        return None
-    logger.error("配置不可用（{}），已隔离为 {}，本次用默认配置启动", reason, target.name)
-    return target.name

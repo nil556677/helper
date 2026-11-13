@@ -107,3 +107,18 @@ class MessageRepository:  # 消息仓储
                 await conn.rollback()  # 回滚
                 raise  # 重抛
         return message_id  # 返回消息 id
+
+    async def delete(self, conversation_id: str, message_id: int) -> None:  # 删一条消息
+        """删除指定消息（**创建失败补偿用**：user 已先落库但本轮没起来时删掉成交补）。"""
+        async with self._db.write_lock:  # 写锁（SQLite 单写者）
+            conn = self._db.conn  # 连接
+            try:  # 事务
+                await conn.execute("BEGIN IMMEDIATE")  # 拿写锁
+                await conn.execute(  # 按消息+会话删（限定会话，防误删）
+                    "DELETE FROM messages WHERE id = ? AND conversation_id = ?",  # 条件
+                    (int(message_id), conversation_id),  # 参数
+                )  # 删除
+                await conn.commit()  # 提交
+            except BaseException:  # 失败
+                await conn.rollback()  # 回滚
+                raise  # 重抛

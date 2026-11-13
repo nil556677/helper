@@ -43,7 +43,18 @@ async def create_run(  # 建 run
         attachments=list(payload.attachments),  # 附件
         run_id=run_id,  # 复用同一 run id
     )  # 结束
-    started = await backend.create(run_input)  # 再启动（复用同一 run_id）
+    try:  # 启动 agent
+        started = await backend.create(run_input)  # 再启动（复用同一 run_id）
+    except Exception:  # 创建失败
+        # user 消息已先落库（status=running），但本轮从没启动、不会有人收尾补 assistant——
+        # 消息列表里就会永久挂一条无回复的"幽灵"消息。这里做补偿：删掉它再向上抛原错误。
+        try:  # 清理尽力而为
+            await messages.delete(payload.conversation_id, message_id)  # 删幽灵 user 消息
+        except Exception as cleanup_exc:  # 清理失败不掩盖原错误
+            from loguru import logger  # 日志
+
+            logger.warning("删除创建失败的 user 消息失败：{}", cleanup_exc)  # 告警
+        raise  # 原样重抛给调用方
     return ok(  # 成功体
         {"run_id": started, "message_id": message_id},  # 数据
         request_id=request_id_of(request),  # 追踪

@@ -87,38 +87,6 @@ def _configure(conn: sqlite3.Connection, *, readonly: bool = False) -> sqlite3.C
     return conn
 
 
-def log_db_diagnostics(where: str) -> None:
-    """打不开库时记录现场（路径 / 文件属性 / 线程 / 环境），便于定位。"""
-    import os
-    import tempfile
-    import threading
-
-    target = paths.db_file()
-    wal = target.with_name(target.name + "-wal")
-    shm = target.with_name(target.name + "-shm")
-
-    def size(path: Path) -> str:
-        try:
-            return str(path.stat().st_size)
-        except OSError:
-            return "无"
-
-    logger.error(
-        "数据库诊断（{}）：path={} 存在={} 目录可写={} wal={} shm={} "
-        "线程={} TEMP={} tempfile={} 临时区可写={}",
-        where,
-        target,
-        target.exists(),
-        os.access(str(target.parent), os.W_OK),
-        size(wal),
-        size(shm),
-        threading.current_thread().name,
-        os.environ.get("TEMP"),
-        tempfile.gettempdir(),
-        os.access(tempfile.gettempdir(), os.W_OK),
-    )
-
-
 def connect(db_path: Path | None = None) -> sqlite3.Connection:
     """新建一条连接（调用方负责关闭；需要复用就用 :func:`get_connection`）。
 
@@ -144,21 +112,6 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
         )
         raise
     return _configure(conn)
-
-
-def connect_readonly(db_path: Path | None = None) -> sqlite3.Connection:
-    """新建一条**只读**连接（E0）：UI 进程用它读库，物理写不了。
-
-    参数：
-        db_path: 库文件路径；默认 ``{数据目录}/helper.db``。
-    说明：
-        通过 URI ``file:...?mode=ro`` 打开，配合 WAL 供「多读 + 单写（worker）」。
-        只读连接由调用方负责关闭；不要用 ``transaction()``（它需要写）。
-    """
-    target = db_path or paths.db_file()
-    # as_uri() 给出 file:///C:/... 形式，SQLite URI 接受并正确转义非 ASCII/空格。
-    conn = sqlite3.connect(target.as_uri() + "?mode=ro", uri=True, isolation_level=None)
-    return _configure(conn, readonly=True)
 
 
 def _usable(conn: sqlite3.Connection) -> bool:

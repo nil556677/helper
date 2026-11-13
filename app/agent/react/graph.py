@@ -1,7 +1,7 @@
-"""自定义 ReAct 图：agent → approval_gate → tools → agent（含审批门/Limits）。
+"""自定义 ReAct 图：agent → approval_gate → tools → agent（含确认门/Limits）。
 
-替换 `create_agent` 当选器——支持在 "模型决定用工具" 与 "真正执行工具" 之间插审批门。
-审批 gate 只用 `should_require_approval`；无审批(tool approval=none/只读) → 直通 tools。
+替换 `create_agent` 当选器——支持在 "模型决定用工具" 与 "真正执行工具" 之间插**用户确认门**。
+确认 gate 只用 `should_require_approval`；不需确认(tool approval=none/只读) → 直通 tools。
 """
 
 from __future__ import annotations  # 延迟值注解
@@ -13,7 +13,6 @@ from langchain_core.messages import AIMessage, SystemMessage, ToolMessage  # 消
 from langgraph.graph import END, START, StateGraph  # 图原语
 from langgraph.graph.message import add_messages  # 消息累加
 from langgraph.prebuilt import ToolNode  # 工具执行
-
 from langgraph.types import interrupt  # 审批暂停（恢复模式）
 
 from app.agent.context import current_run  # 当前 run（发 RETRY 事件）
@@ -57,15 +56,15 @@ def approval_stats() -> dict[str, int]:  # 审批统计
 CONFIDENTIAL_NOTICE = "（订单属保密数据，请勿截图或传播；本次已留痕审计）"  # 提示
 
 
-def _approval_summary(name: str, args: dict[str, Any]) -> str:  # 待确认内容摘要
-    """把将展示给用户的"被审核内容"翻成中文摘要，供用户判断批不批。"""
+def _approval_summary(name: str, args: dict[str, Any]) -> str:  # 待确认内容摘要（告知用户要查什么）
+    """把将展示给用户的"被请求内容"翻成中文摘要，供用户判断确认不确认。"""
     if name == "query_order":  # 订单
         key = str(args.get("order_id") or args.get("phone") or "?")  # 单号/手机号
-        return f"查看订单 {key} 的『订单状态 / 金额 / 支付方式 / 下单时间』"  # 摘要
+        return f"将查询订单 {key} 的『订单状态 / 金额 / 支付方式 / 下单时间』"  # 摘要（告知）
     if name == "query_logistics":  # 物流
         key = str(args.get("order_id") or args.get("tracking_no") or "?")  # 单号/运单号
-        return f"查看订单 {key} 的『物流轨迹 / 快递公司 / 配送状态』"  # 摘要
-    return f"调用 {name}：{args}"  # 通用
+        return f"将查询订单 {key} 的『物流轨迹 / 快递公司 / 配送状态』"  # 摘要（告知）
+    return f"将执行 {name}：{args}"  # 通用
 
 
 class ReactState(TypedDict):  # ReAct 状态
@@ -220,8 +219,11 @@ def build_react(  # 构造自定义 ReAct 图
 
     # —— approval_gate：该不该审；审则拦截该调用 + 落表(best-effort) ——
     def approval_gate(state: ReactState) -> dict[str, Any]:  # 审批门
-        if state.get("approval_checked"):  # 本轮已判过
-            return {"approval_checked": False}  # 复位，下一轮再判
+        # ⚠ 不再做"本轮已判过就直接放行"的短路：每次进入都必对**最新一轮**的工具调用
+        # 重新做审批/熔断判定。此前用 approval_checked 布尔翻转做隔轮检查——放行/拦截后
+        # 下一轮 model 新产生的调用会因 approval_checked 已被置真而被短路直通 tools，
+        # 乘"隔一轮才能审到"的漏洞：哪怕上轮刚拦截过的 manual 工具，模型改口再调也会
+        # 不经审批就执行（越权执行点）。去掉短路后，每一轮的每个新调用都过一遍门。
         call = (state.get("messages") or [])[-1]  # 末尾模型（带 tool_calls）
         need: list[Any] = []  # 需审批的调用
         fused: list[Any] = []  # 已熔断、本次拦截不执行的调用
@@ -265,10 +267,10 @@ def build_react(  # 构造自定义 ReAct 图
                     # args_redacted 存执行所需的真实参数（批准后 execute_approved 用它真跑）；
                     # 对外的展示/审计需脱敏时由 app.agent.gateway.redact 在读侧处理。
                     args_redacted=dict(tc.get("args") or {}),  # 参数
-                    resource_summary=f"需要审批：{tc.get('name')}",  # 摘要
+                    resource_summary=str(_approval_summary(str(tc.get("name") or ""), tc.get("args") or {})),  # 告知内容
                     mutation="read_only",  # 变更画像
                     risk="medium",  # 风险
-                    approval_reason="工具策略要求人工审批",  # 原因
+                    approval_reason="需用户确认后执行（查询/操作，留痕）",  # 原因
                     expires_at=_time.time() + 3600,  # 1 小时
                 ))  # 结束
                 _approval_stats["created"] += 1  # 计登记
@@ -278,7 +280,7 @@ def build_react(  # 构造自定义 ReAct 图
         if not (checkpointer is not None and interrupt_on_approval):  # 非恢复模式：拦截不执行，但把待审上抛
             _approval_stats["blocked"] += len(need)  # 计拦截
             pending_meta: list[Any] = []  # 上抛元信息
-            for rid, tc in zip(ids, need):  # 逐调用
+            for rid, tc in zip(ids, need, strict=True):  # 逐调用（同名创建 → 必然等长）
                 pending_meta.append({  # 元信息
                     "request_id": str(rid),  # 请求 id
                     "tool_name": str(tc.get("name") or ""),  # 工具
@@ -288,7 +290,7 @@ def build_react(  # 构造自定义 ReAct 图
             for tc in need:  # 逐调用
                 blocked.append(  # 生成 ToolMessage（不执行该工具）
                     ToolMessage(
-                        content=f"工具 {tc.get('name')} 需要人工审批，已登记待审，本次不执行。",
+                        content=f"工具 {tc.get('name')} 需要您确认后才能执行。已暂停，等待确认；当前未执行、未查询。",
                         tool_call_id=str(tc.get("id") or ""),
                         name=str(tc.get("name") or ""),
                     )

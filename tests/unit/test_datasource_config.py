@@ -25,12 +25,21 @@ def test_logistics_unconfigured(fake_root) -> None:  # 未配置百度快递 →
         asyncio.run(logistics_client.get_provider().trace("SF123"))  # 查
 
 
-def test_env_fallback_config(monkeypatch) -> None:  # 后台配置缺时走环境变量
+def test_env_fallback_config(fake_root, monkeypatch) -> None:  # 后台配置缺时走环境变量
+    """测环境兜底需要一块"没配 mysql host"的隔离库——直接读真实 DB 会被实配的 host 干扰。"""
+    from app.core.db import schema_v1  # 建表
+    from app.core.db.connection import connect  # 连接
+
+    conn = connect()  # 连接
+    try:  # 建空 settings 表（隔离库，不读真实 DB）
+        schema_v1.initialize(conn)  # 初始化
+    finally:  # 关闭
+        conn.close()  # 关
     monkeypatch.delenv("AGENT_MYSQL_HOST", raising=False)  # 清
     monkeypatch.setenv("AGENT_MYSQL_HOST", "db.local")  # 设
     monkeypatch.setenv("AGENT_LOGISTICS_ENDPOINT", "https://baidu.example")  # 设
-    from app.services.order.repo import _mysql_config  # 配置
     from app.services.logistics.client import _logistics_config  # 配置
+    from app.services.order.repo import _mysql_config  # 配置
 
     m = _mysql_config()  # mysql
     assert m["host"] == "db.local"  # 环境兜底生效

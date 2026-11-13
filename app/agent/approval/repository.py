@@ -10,7 +10,7 @@ from typing import Any  # 任意值
 
 from app.core.db.connection import get_connection, transaction  # DB
 
-__all__ = ["ApprovalConflict", "create_request", "decide", "expire_pending", "insert_audit", "list_pending"]  # 导出
+__all__ = ["ApprovalConflict", "create_request", "decide", "expire_pending", "insert_audit", "list_approved_unexecuted", "list_pending"]  # 导出
 
 
 class ApprovalConflict(Exception):  # 并发/已处理
@@ -105,6 +105,18 @@ def list_pending(tenant_id: str, *, limit: int = 50) -> list[dict[str, Any]]:  #
         " FROM approval_requests WHERE tenant_id=? AND status='pending' ORDER BY created_at DESC LIMIT ?",
         (tenant_id, int(limit)),
     ).fetchall()  # 全部
+    return [dict(row) for row in rows]  # 列表
+
+
+def list_approved_unexecuted(*, limit: int = 50) -> list[dict[str, Any]]:  # 已批准但未执行的（崩溃残留补跑）
+    """approved 且审计里没有 executed 的记录（确认后崩在执行前）→ 供恢复补执行。"""
+    rows = get_connection().execute(  # 查询
+        "SELECT r.request_id, r.tool_name, r.resource_summary FROM approval_requests r"
+        " WHERE r.status='approved' AND NOT EXISTS ("
+        "   SELECT 1 FROM approval_audit a WHERE a.request_id = r.request_id AND a.event='executed')"
+        " ORDER BY r.updated_at LIMIT ?",  # 条件
+        (int(limit),),  # 参数
+    ).fetchall()  # 行
     return [dict(row) for row in rows]  # 列表
 
 

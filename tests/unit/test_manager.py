@@ -80,7 +80,7 @@ def test_forget_expired_archives(fake_root) -> None:  # 过期归档（非物理
 def test_distill_conversation_writes(fake_root, monkeypatch) -> None:  # 蒸馏写回（经统一入口）
     _store()  # 建表
     # 禁掉 LLM 画像通道（测试不发真实网络请求），只验证规则通道
-    monkeypatch.setattr("app.memory.extract.extract_profile", lambda *a, **k: [])  # 顶掉模型抽取
+    monkeypatch.setattr("app.agent.memory.llm_profile.extract_profile", lambda *a, **k: [])  # 顶掉模型抽取
     from app.services import conversations  # 会话服务（用其建表辅助，保证外键/必需列完整）
 
     conversations.append_message("c1", role="user", content="帮我看订单 37979", turn_json={"answer": ""})  # 建会话+带订单实体的消息
