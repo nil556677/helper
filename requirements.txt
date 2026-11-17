@@ -80,3 +80,12 @@ langgraph==1.2.16
 langchain-openai==1.7.2
 langchain-qdrant==1.1.0
 langgraph-checkpoint-sqlite==3.1.2
+
+# ---------- MCP：外部工具通道（P1；消费外部 MCP server） ----------
+# 框架现成：langchain-mcp-adapters 负责协议 + 装载（load_mcp_tools）；本仓库只加治理层
+# （元数据翻译/审批/门控/审计），不自己写协议。
+# 版本约束来自 adapter 的 METADATA：mcp<2.0.0,>=1.24.0（2.x API 不兼容，装错会 import 失败）。
+# fastmcp 只用于测试里的本地 stub server，不进运行时依赖——需要时单装：
+#   .venv\Scripts\python.exe scripts\install_wheels.py fastmcp
+langchain-mcp-adapters>=0.3,<1
+mcp>=1.24,<2

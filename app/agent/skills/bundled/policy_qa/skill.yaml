@@ -1,0 +1,33 @@
+id: policy_qa
+namespace: knowledge
+version: 1
+enabled: false
+description: "本地政策/条款问答：地毯式召回政策块，严格依据原文作答并给引用"
+tools:
+  - name: search_knowledge_base
+    role: primary
+    approval: none
+  - name: current_time
+    role: support
+    approval: none
+side_effect: none
+max_tools: 4
+prompt: PROMPT.md
+requires:
+  - kb_index
+trigger:
+  - 政策
+  - 条款
+  - 规则
+  - 售后
+avoid:
+  - 别把通用常识当成政策依据，必须从本地资料检索
+example_queries:
+  - 退款政策是什么
+  - 物流赔付条款有哪些
+cost_budget:
+  max_tokens: 1200
+  max_ms: 6000
+meta:
+  changelog: "v1: 首版"
+  author: system

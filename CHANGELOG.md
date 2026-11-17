@@ -5,6 +5,40 @@
 
 ## 未发布
 
+- **MCP 生命周期 + 配置/密钥 + 指标（P3/P4）**：
+  - `skills/mcp_config.py`：server 配置持久化到 `settings`（非密 JSON），**密钥经 DPAPI 加密**（`enc:` 前缀，
+    格式对齐 `config.store`）；`set_enabled` 启用/禁用并写 `skill_events` 审计；`mcp.gated` 现在同时认
+    环境白名单与持久化启用位。
+  - `skills/mcp_manager.py`：连接泵 `McpManager`——复用连接、工具缓存、`evict_idle` 空闲回收、`close_all`
+    优雅关闭（无孤儿子进程）；`_make_client` 可打桩。
+  - `skills/mcp_server.counts()`：按工具聚合调用指标（total/ok/failed/by_tool）。
+  - 单测 `test_mcp_config.py`（保存/解密/启用审计）、`test_mcp_manager.py`（复用/回收/关闭）、
+    `test_mcp_server.py::test_counts_metrics` 绿；全量回归绿。
+
+- **MCP Provider（P2）**：新增 `app/agent/skills/mcp_server.py`——把内置 `tool_catalog` 工具导出成
+  MCP server（`exported_tools`/`handle_call`/`build_fastmcp` 薄接线）。服务端四道闸：
+  **allowlist**（`HELPER_MCP_SERVER_ENABLED`）→ **写/需确认工具默认拒绝**（`HELPER_MCP_ALLOW_MUTATION` 显式开，
+  无 UI 不静默执行）→ **输出按字段 PII 脱敏**（`redact_args`）→ **`mcp_calls` 只追加审计**。单测 `test_mcp_server.py` 绿。
+
+- **Skill 沉淀流水线**：新增 `app/agent/skills/candidates.py`（`skill_candidates` 候选表、`record/list/get/decide`、
+  `evaluate` 校验 Gate、`materialize` 入库）+ `condenser.py`（从**成功且完整**的 `plan_execute` 运行
+  `last_plan/completion` 提炼候选草案，含触发词/示例/playbook/反例）。铁律：**自动只产候选，校验通过+人工确认后才入库**。
+  单测 `test_skill_candidates.py`（提炼/候选/校验 Gate/决策/入库可发现/只 pending 可决）绿。
+
+- **MCP 扩展层（P1，Consumer）**：新增 `app/agent/skills/mcp.py`——用框架现成的
+  `langchain-mcp-adapters` 装载外部 MCP server 的工具（不自己写协议）；`adopt()` 把远端工具翻译成
+  带 `dsh` 元数据的 `StructuredTool`（只读默认/审批/风险/超时），经 `register()` 注入
+  `skills.registry.EXTRA_TOOLS` 供 skill 引用；`available()` 缺依赖优雅降级、`gated()` 默认关。
+  `McpAvailable`/`McpUnavailable` 语义清晰，单测 `test_mcp.py`（可用性/元数据/注册/门控/假适配器装载）绿。
+  依赖声明进 `requirements.txt`（`mcp>=1.24,<2` + `langchain-mcp-adapters`；`fastmcp` 仅测试 stub）。
+  注：该沙箱 `mcp` 被装成不兼容的 2.3.0 且补装 `<2` 下载卡住，故可用性探测跳过；真机按 requirements 装即可。
+
+- **Skill 扩展层（P0）**：新增能力包子系统 `app/agent/skills/`——`SkillManifest` 声明式清单
+  （id/namespace/版本/默认关门控/工具角色/副作用/前置/触发/反例/成本预算）、`registry`（扫描 skill.yaml、
+  与 `tool_catalog` 交叉校验、fail-fast、`assemble` 用 `build_react` 组 ReAct 图）、`store`（`skill_events`
+  审计，同步 SQLite 只追加）。调用仍走工具；`EXTRA_TOOLS` 为 MCP(P1) 预留注入缝；内置示例
+  `policy_qa`（政策问答）。方案文档补"反思与再优化"§7。单测 `test_skills.py` 绿。
+
 - **多轮指代消解 / 焦点管理**：实现《指代消解与焦点管理补充方案》——在 `preprocess_node` 内合入
   "实体抽取 → 话题切换(五信号) → 指代消解(实体/序数/链回溯) → 焦点栈维护"，跨轮随 State(checkpointer)
   持久化，产出 `resolved_query` + `anchor_entities` 供路由/执行；模型复用默认大模型、只在 ambiguous
