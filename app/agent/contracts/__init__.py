@@ -54,7 +54,7 @@ from app.agent.contracts.triage import (  # L0–L3/L5 契约
     TriageDecision,  # 分诊决策
     VerifyResult,  # 校验结果
 )
-from app.agent.contracts.serialize import from_dict, make, to_dict, validate_sequence  # 序列化
+from app.agent.contracts.serialize import from_dict, make, to_dict, validate_sequence, LAST_EVENT_ID_HEADER  # 序列化
 from app.agent.contracts.state import (  # 共享状态契约
     WRITE_TABLE,  # 写契约表
     ResultLike,  # 结果形状协议（只依赖形状，不 import core）
@@ -115,6 +115,7 @@ __all__ = [  # 对外导出
     "candidate_id",  # 候选 id 生成
     "from_dict",  # 反序列化
     "is_final",  # 任务终态判断
+    "LAST_EVENT_ID_HEADER",  # SSE 续传头名
     "make",  # 构造
     "merge_by_id",  # 按 id 合并
     "merge_turns",  # 轮次合并

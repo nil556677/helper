@@ -10,8 +10,9 @@ from typing import Any  # 任意值
 
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent  # SSE
 
-#: 断线续传的读 header / query 用的名字。
-LAST_EVENT_ID_HEADER = "Last-Event-ID"
+from app.agent.contracts import LAST_EVENT_ID_HEADER  # 再导出，供 router 导入
+
+#: 断线续传的读 header / query 用的名字（单点定义在契约层）。
 
 
 def to_sse(seq: int, event: Any) -> ServerSentEvent:  # 事件转帧
@@ -37,5 +38,5 @@ def sse_response(generator: AsyncIterator[ServerSentEvent]) -> EventSourceRespon
     )  # 结束
 
 
-#: 心跳间隔，与 feeds._HEARTBEAT_S 对齐（sse-starlette 使用）。
+#: 心跳间隔（秒）：防代理/空闲断开；sse-starlette 用 ping 发送注释心跳。
 _HEARTBEAT_S = 15.0

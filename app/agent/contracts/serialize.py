@@ -9,6 +9,9 @@ from typing import Any  # 任意类型
 from app.agent.contracts.events import PAYLOAD_BY_TYPE, EventEnvelope  # 信封与载荷映射
 from app.agent.contracts.kinds import TERMINAL_TYPES, EventType  # 终态集合与类型
 
+#: SSE 断线续传的读头/Query 名：UI 与 Worker 两端共用，严禁任一端硬编码字符串。
+LAST_EVENT_ID_HEADER = "Last-Event-ID"
+
 
 def make(  # 便捷构造
     event_type: EventType,  # 事件类型

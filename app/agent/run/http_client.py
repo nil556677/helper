@@ -13,6 +13,7 @@ from typing import Any  # 任意值
 
 import httpx  # HTTP
 
+from app.agent.contracts import LAST_EVENT_ID_HEADER  # 续传头名（与后端共享，不硬编码）
 from app.agent.events import EventEnvelope  # 事件模型
 from app.agent.run.types import RunInput  # 入参
 
@@ -67,7 +68,7 @@ class HttpClient:  # 远端客户端
         """产出 ``(seq, event)``；服务端流结束后自然停止。"""
         headers = {}  # 请求头
         if last_event_id:  # 有续传点
-            headers["Last-Event-ID"] = str(last_event_id)  # 带上
+            headers[LAST_EVENT_ID_HEADER] = str(last_event_id)  # 带上（共享常量）
         async with self._client.stream(  # 流式 GET
             "GET",  # 方法
             f"{self.base_url}{API_PREFIX}/runs/{run_id}/events",  # 路径
